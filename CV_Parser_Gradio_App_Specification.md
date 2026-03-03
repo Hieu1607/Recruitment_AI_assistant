@@ -65,19 +65,7 @@ The CV Parser Gradio Application is an intelligent resume processing system that
 
 ### 3.2 Python Dependencies
 ```
-gradio>=4.0.0
-pymupdf>=1.23.0
-groq>=0.4.0
-langchain>=0.1.0
-langchain-community>=0.0.20
-psycopg2-binary>=2.9.0
-faiss-cpu>=1.7.4
-transformers>=4.30.0
-python-dotenv>=1.0.0
-pandas>=2.0.0
-numpy>=1.24.0
-sqlalchemy>=2.0.0
-requests>=2.31.0
+Up to you
 ```
 
 ## 4. Core Components
@@ -561,25 +549,128 @@ class ErrorHandler:
         """Handle database errors"""
 ```
 
-## 12. Testing Strategy
+## 12. Chunking Strategy for Embedding Generation
 
-### 12.1 Unit Tests
-- PDF text extraction validation
-- CV classification accuracy
-- Database operations
-- Embedding generation
-- Vector similarity search
+### 12.1 Batch Chunking Strategy
 
-### 12.2 Integration Tests
-- End-to-end resume processing
-- RAG query workflows
-- Gradio interface functionality
+Thay vì gọi API embedding riêng lẻ cho từng section của CV, hệ thống áp dụng chiến lược **batch theo CV**: toàn bộ các section nội dung của một CV được gộp thành một batch duy nhất và gửi đi trong **một lần gọi API**.
 
-### 12.3 Performance Tests
-- Large PDF processing
-- Concurrent user handling
-- Database query optimization
-- Vector search latency
+**Nguyên tắc cốt lõi**:
+- **1 lần gọi = 1 CV** (không gọi theo từng section riêng lẻ)
+- Các **thông tin cá nhân định danh** (tên, email, số điện thoại, địa chỉ) được **loại trừ** khỏi batch embedding vì chúng đã được lưu riêng vào cột có cấu trúc trong PostgreSQL
+- Chỉ embed các **section nội dung ngữ nghĩa**: `education`, `experience`, `skills`, `projects`, `summary`, `achievements`, `languages`, `publications`, `certifications`, `other`
+
+### 12.2 Các Section Được Embed vs Bỏ Qua
+
+| Section | Embed? | Lý do |
+|---|---|---|
+| `summary` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `experience` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `education` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `skills` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `projects` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `achievements` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `languages` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `publications` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `certifications` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `other` | ✅ | Nội dung ngữ nghĩa quan trọng |
+| `contact` (tên, email, phone, địa chỉ) | ❌ | Đã lưu vào cột riêng trong DB, không cần embed |
+
+### 12.3 Implementation
+
+```python
+# embedding_service.py
+
+SECTIONS_TO_EMBED = {
+    "summary", "experience", "education", "skills",
+    "projects", "achievements", "languages",
+    "publications", "certifications", "other"
+}
+
+SECTIONS_TO_SKIP = {"contact"}  # name, email, phone, address → lưu vào DB có cấu trúc
+
+class EmbeddingService:
+    def create_cv_embeddings(self, cv_id: int, cv_data: dict) -> List[dict]:
+        """
+        Tạo embeddings cho một CV theo chiến lược batch:
+        - Tất cả section nội dung được gộp vào MỘT lần gọi API duy nhất
+        - Các thông tin cá nhân (contact) bị loại trừ
+        - Trả về list các chunk kèm metadata để lưu vào FAISS + DB
+        """
+        chunks = []
+        texts_to_embed = []
+
+        # Bước 1: Thu thập tất cả section cần embed của CV này
+        for section_type, content in cv_data.items():
+            if section_type not in SECTIONS_TO_EMBED:
+                continue
+            if not content or not content.strip():
+                continue
+
+            text = f"[{section_type.upper()}]\n{content.strip()}"
+            texts_to_embed.append(text)
+            chunks.append({
+                "cv_id": cv_id,
+                "section_type": section_type,
+                "text_content": text,
+            })
+
+        if not texts_to_embed:
+            return []
+
+        # Bước 2: Gọi API embedding MỘT LẦN cho toàn bộ section của CV này
+        embeddings = self.generate_embeddings(texts_to_embed)  # shape: (n_sections, dim)
+
+        # Bước 3: Gắn vector vào từng chunk
+        for i, chunk in enumerate(chunks):
+            chunk["embedding_vector"] = embeddings[i]
+
+        return chunks
+```
+
+### 12.4 Luồng Xử Lý Theo Batch
+
+```
+CV Text (raw)
+     │
+     ▼
+LLM Classification
+     │
+     ▼
+cv_data = {
+  "summary":       "...",   ✅ → embed
+  "experience":    "...",   ✅ → embed
+  "education":     "...",   ✅ → embed
+  "skills":        "...",   ✅ → embed
+  "projects":      "...",   ✅ → embed
+  "contact": {              ❌ → bỏ qua (lưu vào cột DB)
+    "name":  "Nguyen Van A",
+    "email": "a@email.com",
+    "phone": "0912345678"
+  }
+}
+     │
+     ▼ (gộp tất cả section ✅ thành 1 batch)
+HuggingFace Embedding API  ◄── 1 lần gọi duy nhất / 1 CV
+     │
+     ▼
+[vector_section_1, vector_section_2, ..., vector_section_n]
+     │
+     ▼
+FAISS Index + PostgreSQL embeddings table
+```
+
+### 12.5 Lợi Ích
+
+| Tiêu chí | Gọi riêng lẻ từng section | **Batch theo CV (chiến lược này)** |
+|---|---|---|
+| Số lần gọi API / CV | N (bằng số section) | **1** |
+| Latency | Cao (N round-trips) | **Thấp (1 round-trip)** |
+| Chi phí API | Cao | **Thấp** |
+| Độ phức tạp code | Trung bình | **Đơn giản, dễ kiểm soát** |
+| Khả năng retry | Phức tạp | **Đơn giản (retry cả CV)** |
+
+---
 
 ## 13. Monitoring and Maintenance
 
