@@ -1,0 +1,749 @@
+openapi: 3.0.3
+info:
+  title: Recruitment AI Assistant API
+  version: 0.1.0
+  description: |
+    API contract for resume ingestion, matching, conversational filtering,
+    shortlist persistence, outreach, and interview question generation.
+    This document includes request and response examples aligned with the
+    currently implemented backend routes.
+servers:
+  - url: https://api.example.com
+  - url: http://localhost:8000
+
+tags:
+  - name: health
+  - name: resumes
+  - name: candidates
+  - name: matching
+  - name: query
+  - name: shortlists
+  - name: outreach
+  - name: interview-questions
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /v1/resumes/upload:
+    post:
+      tags: [resumes]
+      summary: Upload resume PDFs for extraction
+      security:
+        - RoleHeader: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '202':
+          description: Upload accepted and processing queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAccepted'
+              examples:
+                accepted:
+                  value:
+                    jobId: 50468583-c59a-40b0-90db-cf57a8ee9ac0
+                    acceptedCount: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/candidates/{candidateId}:
+    patch:
+      tags: [candidates]
+      summary: Review and update extracted candidate profile fields
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: path
+          name: candidateId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CandidateUpdateRequest'
+            examples:
+              updateBasic:
+                value:
+                  fullName: Jane Candidate
+                  currentJobTitle: Senior Backend Engineer
+                  educated: true
+                  everStudiedAbroad: false
+      responses:
+        '200':
+          description: Candidate profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CandidateProfile'
+              examples:
+                updated:
+                  value:
+                    id: 0922fd51-e0a8-46cf-9f95-4c0402642cb0
+                    fullName: Jane Candidate
+                    phone: "+62 812 0000 0001"
+                    email: jane@example.com
+                    locationNormalized: Jakarta, Indonesia
+                    educated: true
+                    everStudiedAbroad: false
+                    profileStatus: reviewed
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/candidates:
+    get:
+      tags: [candidates]
+      summary: List candidate profiles
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: query
+          name: q
+          required: false
+          schema:
+            type: string
+          description: Optional fuzzy query over searchable candidate fields.
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Candidate list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CandidateProfile'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/candidates/{candidateId}/traces:
+    get:
+      tags: [candidates]
+      summary: Retrieve source trace blocks for a candidate profile
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: path
+          name: candidateId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Extraction trace list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExtractionTrace'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/match-runs:
+    post:
+      tags: [matching]
+      summary: Run batch candidate matching by sending one JD, one shared prompt, and many CVs to LLM
+      security:
+        - RoleHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchRunRequest'
+            examples:
+              matchRun:
+                value:
+                  jobDescriptionText: We are looking for a backend engineer with Python and FastAPI expertise.
+                  candidateIds:
+                    - 11111111-1111-1111-1111-111111111111
+                    - 22222222-2222-2222-2222-222222222222
+                  scoringPromptTemplate: Score each candidate with weighted criteria for skills, experience, and education.
+                  scoreThreshold: 75
+      responses:
+        '200':
+          description: Batch scoring completed and score list returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchScoresList'
+              examples:
+                completed:
+                  value:
+                    matchRunId: d91c57f5-ce4d-46f4-ba61-a95b4dfab66f
+                    scoreThreshold: 75
+                    scores:
+                      - candidateId: 11111111-1111-1111-1111-111111111111
+                        totalScore: 84
+                        passedThreshold: true
+                        rationale: Strong backend and API design track record.
+                        componentScores:
+                          - criterionKey: skills
+                            weight: 0.4
+                            score: 90
+                            weightedScore: 36
+                            evidenceSummary: Strong Python/FastAPI skills
+                          - criterionKey: experience
+                            weight: 0.4
+                            score: 80
+                            weightedScore: 32
+                            evidenceSummary: 6+ years backend delivery
+                          - criterionKey: education
+                            weight: 0.2
+                            score: 80
+                            weightedScore: 16
+                            evidenceSummary: Relevant bachelor degree
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/query-sessions:
+    post:
+      tags: [query]
+      summary: Create or reopen a query session for conversational filtering
+      security:
+        - RoleHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuerySessionCreateRequest'
+            examples:
+              titled:
+                value:
+                  title: Jakarta data engineer shortlist
+      responses:
+        '200':
+          description: Query session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuerySessionResponse'
+    get:
+      tags: [query]
+      summary: List query sessions for current user
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Query sessions listed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QuerySessionResponse'
+
+  /v1/query-sessions/{sessionId}/ask:
+    post:
+      tags: [query]
+      summary: Ask a natural-language question over candidate data
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+            examples:
+              ask:
+                value:
+                  question: Show candidates with 5+ years Python experience in Jakarta.
+      responses:
+        '200':
+          description: Answer generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskResponse'
+              examples:
+                answer:
+                  value:
+                    answer: I found 4 candidates matching 5+ years Python experience in Jakarta.
+                    matchedCount: 4
+                    matchedCandidateIds:
+                      - 11111111-1111-1111-1111-111111111111
+                      - 22222222-2222-2222-2222-222222222222
+                    routingStrategy: hybrid
+                    queryTurnId: 99637a6a-055c-44d4-b2e4-4ef4ecb33abb
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /v1/shortlists:
+    post:
+      tags: [shortlists]
+      summary: Save filtered candidates as a shortlist collection
+      security:
+        - RoleHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShortlistCreateRequest'
+            examples:
+              shortlist:
+                value:
+                  name: Backend shortlist March
+                  candidateIds:
+                    - 11111111-1111-1111-1111-111111111111
+                    - 22222222-2222-2222-2222-222222222222
+                  sourceQueryTurnId: 99637a6a-055c-44d4-b2e4-4ef4ecb33abb
+      responses:
+        '201':
+          description: Shortlist created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShortlistCollection'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    get:
+      tags: [shortlists]
+      summary: List shortlist collections for current user
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Shortlists listed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShortlistCollection'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/outreach/drafts:
+    post:
+      tags: [outreach]
+      summary: Create outreach draft from AI or template
+      security:
+        - RoleHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutreachDraftRequest'
+            examples:
+              draft:
+                value:
+                  candidateId: 11111111-1111-1111-1111-111111111111
+                  sourceType: ai_draft
+                  intent: Invite candidate for technical interview
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutreachMessage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/outreach/{messageId}/approve-and-send:
+    post:
+      tags: [outreach]
+      summary: Approve and send outreach email
+      security:
+        - RoleHeader: []
+      parameters:
+        - in: path
+          name: messageId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Email sent after approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutreachMessage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/interview-questions:
+    post:
+      tags: [interview-questions]
+      summary: Generate interview questions from candidate profile and JD
+      security:
+        - RoleHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InterviewQuestionRequest'
+            examples:
+              generate:
+                value:
+                  candidateId: 11111111-1111-1111-1111-111111111111
+                  jobDescriptionId: 33333333-3333-3333-3333-333333333333
+                  questionCount: 8
+      responses:
+        '201':
+          description: Interview question set generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewQuestionSet'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    RoleHeader:
+      type: apiKey
+      in: header
+      name: X-Role
+      description: |
+        Development RBAC header used by backend guards. Allowed values are
+        admin, recruiter, and viewer. Invalid values are treated as viewer.
+  responses:
+    BadRequest:
+      description: Request validation failed or request could not be processed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            badRequest:
+              value:
+                error: bad_request
+                message: At least one PDF must be uploaded
+    Forbidden:
+      description: Caller role does not have sufficient permission.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            forbidden:
+              value:
+                error: forbidden
+                message: You do not have permission to perform this action
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            notFound:
+              value:
+                error: not_found
+                message: Candidate not found
+    UnprocessableEntity:
+      description: Semantic validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalidSession:
+              value:
+                error: invalid_session
+                message: sessionId must be a UUID
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+    UploadAccepted:
+      type: object
+      required: [jobId, acceptedCount]
+      properties:
+        jobId: { type: string, format: uuid }
+        acceptedCount: { type: integer, minimum: 1 }
+
+    CandidateUpdateRequest:
+      type: object
+      properties:
+        fullName: { type: string }
+        phone: { type: string, nullable: true }
+        email: { type: string, format: email, nullable: true }
+        locationNormalized: { type: string, nullable: true }
+        educated: { type: boolean }
+        everStudiedAbroad: { type: boolean }
+        currentJobTitle: { type: string, nullable: true }
+
+    CandidateProfile:
+      type: object
+      required: [id, fullName, educated, everStudiedAbroad]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        phone: { type: string, nullable: true }
+        email: { type: string, format: email, nullable: true }
+        locationNormalized: { type: string, nullable: true }
+        educated: { type: boolean }
+        everStudiedAbroad: { type: boolean }
+        profileStatus:
+          type: string
+          enum: [draft, reviewed, approved, archived]
+
+    ExtractionTrace:
+      type: object
+      required: [id, sourcePage, sourceBBox, sourceTextSnippet, mappedFieldName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourcePage:
+          type: integer
+          minimum: 1
+        sourceBBox:
+          type: object
+          additionalProperties: true
+        sourceTextSnippet:
+          type: string
+        mappedFieldName:
+          type: string
+        confidenceScore:
+          type: number
+          nullable: true
+
+    MatchRunRequest:
+      type: object
+      required: [jobDescriptionText, candidateIds, scoringPromptTemplate, scoreThreshold]
+      properties:
+        jobDescriptionText: { type: string, minLength: 20 }
+        candidateIds:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+        scoringPromptTemplate: { type: string, minLength: 20 }
+        scoreThreshold: { type: number, minimum: 0, maximum: 100 }
+
+    MatchScoresList:
+      type: object
+      required: [matchRunId, scoreThreshold, scores]
+      properties:
+        matchRunId: { type: string, format: uuid }
+        scoreThreshold: { type: number, minimum: 0, maximum: 100 }
+        scores:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchScoreItem'
+
+    MatchScoreItem:
+      type: object
+      required: [candidateId, totalScore, componentScores, passedThreshold, rationale]
+      properties:
+        candidateId: { type: string, format: uuid }
+        totalScore: { type: number, minimum: 0, maximum: 100 }
+        componentScores:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/WeightedComponentScore'
+        passedThreshold: { type: boolean }
+        rationale: { type: string }
+
+    WeightedComponentScore:
+      type: object
+      required: [criterionKey, weight, score, weightedScore]
+      properties:
+        criterionKey:
+          type: string
+          description: Score category key such as skills, education, or experience
+        weight: { type: number, minimum: 0, maximum: 1 }
+        score: { type: number, minimum: 0, maximum: 100 }
+        weightedScore: { type: number, minimum: 0, maximum: 100 }
+        evidenceSummary: { type: string }
+
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question: { type: string, minLength: 3 }
+
+    QuerySessionCreateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    QuerySessionResponse:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          nullable: true
+
+    AskResponse:
+      type: object
+      required: [answer, matchedCount]
+      properties:
+        answer: { type: string }
+        matchedCount: { type: integer, minimum: 0 }
+        matchedCandidateIds:
+          type: array
+          items: { type: string, format: uuid }
+        routingStrategy:
+          type: string
+          enum: [sql_only, llm_only, hybrid]
+
+    ShortlistCreateRequest:
+      type: object
+      required: [name, candidateIds]
+      properties:
+        name: { type: string, minLength: 1 }
+        candidateIds:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+        sourceQueryTurnId: { type: string, format: uuid, nullable: true }
+
+    ShortlistCollection:
+      type: object
+      required: [id, name, candidateIds]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        candidateIds:
+          type: array
+          items: { type: string, format: uuid }
+
+    OutreachDraftRequest:
+      type: object
+      required: [candidateId, sourceType]
+      properties:
+        candidateId: { type: string, format: uuid }
+        sourceType:
+          type: string
+          enum: [ai_draft, template]
+        templateId: { type: string, nullable: true }
+        intent: { type: string, nullable: true }
+
+    OutreachMessage:
+      type: object
+      required: [id, approvalStatus, sentStatus]
+      properties:
+        id: { type: string, format: uuid }
+        subject: { type: string }
+        body: { type: string }
+        approvalStatus:
+          type: string
+          enum: [draft, approved, rejected]
+        sentStatus:
+          type: string
+          enum: [not_sent, sent, failed]
+
+    InterviewQuestionRequest:
+      type: object
+      required: [candidateId, jobDescriptionId]
+      properties:
+        candidateId: { type: string, format: uuid }
+        jobDescriptionId: { type: string, format: uuid }
+        questionCount: { type: integer, minimum: 3, maximum: 25, default: 10 }
+
+    InterviewQuestionSet:
+      type: object
+      required: [id, candidateId, jobDescriptionId, questions]
+      properties:
+        id: { type: string, format: uuid }
+        candidateId: { type: string, format: uuid }
+        jobDescriptionId: { type: string, format: uuid }
+        questions:
+          type: array
+          items:
+            type: object
+            required: [prompt]
+            properties:
+              prompt: { type: string }
+              category: { type: string, nullable: true }
+              difficulty: { type: string, nullable: true }

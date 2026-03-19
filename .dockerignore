@@ -1,0 +1,25 @@
+# VCS and metadata
+.git/
+.gitignore
+
+# Dependencies and build outputs
+node_modules/
+frontend/node_modules/
+dist/
+build/
+coverage/
+
+# Python caches and virtualenvs
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local env and logs
+.env
+.env.*
+*.log
+
+# Docker files
+Dockerfile*
+.dockerignore
