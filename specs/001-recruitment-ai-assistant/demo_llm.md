@@ -243,3 +243,123 @@ Sau khi ban da test prompt voi model, doi chieu voi API response:
 - Query flow: answer, matchedCount, matchedCandidateIds, routingStrategy.
 - Matching flow: scores[].rationale va componentScores.
 - Neu thay rationale fallback, xem lai output JSON cua model theo dung schema o tren.
+
+## 6) Hai vi du test rieng cho DSL Search Tool
+
+Muc tieu: test luong moi `dsl_search_tool` (LLM tra ve `queryIntent` JSON, backend parse va filter).
+
+### 6.1 Vi du hop le (mong doi backend filter thanh cong)
+
+System message (copy):
+
+```text
+You convert recruiter questions to strict JSON DSL intents.
+Return JSON only. No markdown. No explanation. No SQL.
+Use only these operators:
+- eq
+- gte
+- lte
+- between
+- contains
+- contains_any
+- contains_all
+- exists
+If an operator like =, >=, <= appears in user language, map them to eq, gte, lte.
+```
+
+User message (copy):
+
+```text
+Convert the recruiter question into a structured JSON query intent for candidate filtering.
+
+Recruiter question:
+Tim ung vien o Ha Noi, co tu 3 nam kinh nghiem va biet Python hoac FastAPI.
+
+candidate_profiles columns (supported by DSL):
+- educated: boolean
+- ever_studied_abroad: boolean
+- experience_years: number
+- location_normalized: text
+- current_job_title: text
+- skills_text: text
+- major: text
+- cpa: text
+- certifications_text: text
+- languages_text: text
+
+Output requirements:
+- Return valid JSON only, no markdown, no explanation.
+- Use top-level key queryIntent.
+- queryIntent must contain: logic, filters, limit.
+- logic must be either and/or.
+- filters must be an array of objects: {field, op, value}.
+- Use only supported fields and operators listed above.
+- Never use symbolic operators like =, >=, <=.
+- limit must be <= 100.
+
+Expected format:
+{
+	"queryIntent": {
+		"logic": "and",
+		"filters": [
+			{"field": "location_normalized", "op": "contains", "value": "Ha Noi"},
+			{"field": "experience_years", "op": "gte", "value": 3},
+			{"field": "skills_text", "op": "contains_any", "value": ["Python", "FastAPI"]}
+		],
+		"limit": 100
+	}
+}
+```
+
+Expected response hop le (example):
+
+```json
+{
+	"queryIntent": {
+		"logic": "and",
+		"filters": [
+			{"field": "location_normalized", "op": "contains", "value": "Ha Noi"},
+			{"field": "experience_years", "op": "gte", "value": 3},
+			{"field": "skills_text", "op": "contains_any", "value": ["Python", "FastAPI"]}
+		],
+		"limit": 50
+	}
+}
+```
+
+Checklist pass:
+- JSON hop le.
+- Co key `queryIntent`.
+- Tat ca `field` va `op` nam trong danh sach ho tro.
+- `limit` la so va khong vuot nguong backend.
+
+### 6.2 Vi du khong hop le (mong doi backend fallback)
+
+Tra loi nhu sau (co tinh sai):
+
+```text
+Ban nen lay nhung ung vien gioi Python truoc, sau do loc tiep theo khu vuc.
+```
+
+Ky vong tren he thong:
+- Khong parse duoc JSON hoac khong co filter hop le.
+- `dsl_search_tool` fallback sang heuristic intent.
+- Trong trace co `fallback_reason` bat dau bang `llm_failed:` hoac bang `llm_intent_empty_filters`.
+
+Expected response sai schema (co tinh sai de test):
+
+```json
+{
+	"queryIntent": {
+		"logic": "xor",
+		"filters": [
+			{"field": "random_col", "op": "regex", "value": ".*python.*"}
+		],
+		"limit": 99999
+	}
+}
+```
+
+Ky vong tren he thong voi schema sai:
+- Filter bi loai bo vi field/op khong hop le.
+- Neu khong con filter hop le, backend se dung fallback intent.

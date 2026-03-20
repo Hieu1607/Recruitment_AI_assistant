@@ -41,11 +41,14 @@ class GroqLLMClient(BaseLLMClient):
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
 
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=request.temperature,
-        )
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=request.temperature,
+            )
+        except Exception as exc:
+            raise LLMClientError("Groq request failed") from exc
         return response.choices[0].message.content or ""
 
 
@@ -59,14 +62,17 @@ class OllamaLLMClient(BaseLLMClient):
         if request.system_prompt:
             full_prompt = f"System: {request.system_prompt}\n\nUser: {request.prompt}"
 
-        with httpx.Client(timeout=120) as client:
-            response = client.post(
-                f"{self.base_url}/api/generate",
-                json={"model": self.model, "prompt": full_prompt, "stream": False},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload.get("response", "")
+        try:
+            with httpx.Client(timeout=120) as client:
+                response = client.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": self.model, "prompt": full_prompt, "stream": False},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload.get("response", "")
+        except Exception as exc:
+            raise LLMClientError("Ollama request failed") from exc
 
 
 class LLMClientFactory:

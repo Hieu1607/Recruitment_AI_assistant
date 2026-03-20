@@ -4,7 +4,12 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from src.models.candidate import CandidateProfile, ParseStatus, ResumeDocument, UploadStatus
+from src.models.candidate import (
+    CandidateProfile,
+    ParseStatus,
+    ResumeDocument,
+    UploadStatus,
+)
 from src.services.observability.audit_logger import audit_log
 from src.services.parsing.extraction_trace_service import extraction_trace_service
 from src.services.parsing.profile_normalizer import normalize_profile
@@ -34,10 +39,20 @@ def ingest_resume_payload(
         current_job_title=normalized.current_job_title,
         educated=normalized.educated,
         ever_studied_abroad=normalized.ever_studied_abroad,
+        major=normalized.major,
+        cpa=normalized.cpa,
         education_text=normalized.education_text,
         experience_text=normalized.experience_text,
+        experience_years=normalized.experience_years,
         skills_text=normalized.skills_text,
+        languages_text=normalized.languages_text,
+        projects_text=normalized.projects_text,
         summary_text=normalized.summary_text,
+        achievements_text=normalized.achievements_text,
+        publications_text=normalized.publications_text,
+        certifications_text=normalized.certifications_text,
+        references_text=normalized.references_text,
+        other_text=normalized.other_text,
     )
     session.add(candidate)
     session.flush()
@@ -60,6 +75,9 @@ def ingest_resume_payload(
             "resume_document_id": str(resume_document.id),
             "candidate_profile_id": str(candidate.id),
             "used_ocr_fallback": extraction.used_ocr_fallback,
+            "parse_method": normalized.parse_method,
+            "llm_invoked": normalized.llm_invoked,
+            "llm_succeeded": normalized.llm_succeeded,
         },
     )
     return candidate
