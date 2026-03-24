@@ -74,14 +74,12 @@
 - Fields:
   - id (UUID)
   - job_description_id (UUID, required)
+  - score_threshold (UUID, required, 0..100)
   - initiated_by_user_id (UUID, required)
-  - scoring_prompt_template (text, required)
-  - score_threshold (numeric, required, 0..100)
-  - run_status (enum: queued, running, completed, failed)
+  - run_status (enum: running, completed, failed)
   - created_at (timestamp)
   - completed_at (timestamp, nullable)
 - Validation Rules:
-  - scoring_prompt_template must be present for every batch match run.
   - one MatchRun evaluates one JD against many candidates in a single batch call.
 
 ## 6. MatchResult
@@ -94,7 +92,6 @@
   - total_score (numeric, required, 0..100)
   - passed_threshold (boolean, required)
   - rationale_summary (text, required)
-  - confidence_level (numeric, nullable)
   - component_scores (json array, required) with items:
     - criterion_key (string, required; e.g., skills, education, experience)
     - weight (numeric, required, 0..1)
@@ -118,7 +115,6 @@
   - id (UUID)
   - query_session_id (UUID, required)
   - user_question (text, required)
-  - routing_strategy (enum: sql_only, llm_only, hybrid)
   - answer_text (text, required)
   - matched_candidate_ids (json, nullable)
   - matched_count (integer, nullable)
@@ -150,13 +146,9 @@
   - content_source (enum: ai_draft, template)
   - subject (string, required)
   - body (text, required)
-  - approval_status (enum: draft, approved, rejected)
-  - approved_by_user_id (UUID, nullable)
   - sent_status (enum: not_sent, sent, failed)
   - sent_at (timestamp, nullable)
   - created_at (timestamp)
-- Validation Rules:
-  - sent_status may transition to sent only when approval_status = approved.
 
 ## 10. InterviewQuestionSet
 - Purpose: Generated interview questions for candidate + JD pair.
@@ -182,9 +174,3 @@
   - role_name (enum: admin, recruiter, viewer)
   - assigned_at (timestamp)
 
-## State Transitions
-- ResumeDocument.upload_status: uploaded -> processing -> processed|failed
-- CandidateProfile.profile_status: draft -> reviewed -> approved -> archived
-- MatchRun.run_status: queued -> running -> completed|failed
-- OutreachMessage.approval_status: draft -> approved|rejected
-- OutreachMessage.sent_status: not_sent -> sent|failed
