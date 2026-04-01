@@ -1,6 +1,8 @@
 from fastapi import APIRouter
-from src.api.v1.endpoints import upload, chat
+from src.api.v1.endpoints import chat, resume, jobDescription, score
 
 api_router = APIRouter()
-api_router.include_router(upload.router, prefix="/upload", tags=["upload"])
+api_router.include_router(resume.router, prefix="/upload", tags=["upload"])
+api_router.include_router(jobDescription.router, prefix="/job-descriptions", tags=["job-descriptions"])
+api_router.include_router(score.router, prefix="/score", tags=["score"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])

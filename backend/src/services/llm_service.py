@@ -1,12 +1,13 @@
 import asyncio
 import json
-import os
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from src.core.config import settings
 
 
 class LLMProviderError(Exception):
@@ -185,24 +186,8 @@ class _OllamaAdapter(_BaseAdapter):
 class LLMProvider:
     """Unified LLM provider wrapper for Groq and Ollama.
 
-    Configuration is loaded from environment variables by default:
-    - LLM_PROVIDER=groq|ollama
-    - LLM_TEMPERATURE
-    - LLM_MAX_TOKENS
-    - LLM_TIMEOUT_SECONDS
-    - LLM_MAX_RETRIES
-    - GROQ_API_KEY, GROQ_MODEL_NAME
-    - OLLAMA_BASE_URL, OLLAMA_MODEL_NAME, OLLAMA_KEEP_ALIVE
+    Configuration is loaded from src.core.config.settings.
     """
-
-    _CV_ANALYSIS_SYSTEM_PROMPT = (
-        "You are an expert technical recruiter and CV analyst. "
-        "Analyze CV content accurately and return concise, evidence-based output. "
-        "Avoid hallucinations and only use information present in the CV text. "
-        "If job description is provided, assess candidate-job fit with clear rationale. "
-        "Always return valid JSON with keys: summary, core_skills, experience_years_estimate, "
-        "education, strengths, gaps, recommendations, fit_score_0_100, confidence_0_100."
-    )
 
     def __init__(
         self,
@@ -212,22 +197,22 @@ class LLMProvider:
         timeout_seconds: Optional[int] = None,
         max_retries: Optional[int] = None,
     ):
-        selected_provider = (provider or os.getenv("LLM_PROVIDER", ProviderType.GROQ.value)).lower()
+        selected_provider = (provider or settings.LLM_PROVIDER or ProviderType.GROQ.value).lower()
         self.provider = ProviderType(selected_provider)
 
-        temperature = float(os.getenv("LLM_TEMPERATURE", "0.2")) if temperature is None else temperature
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS", "1024")) if max_tokens is None else max_tokens
+        temperature = settings.LLM_TEMPERATURE if temperature is None else temperature
+        max_tokens = settings.LLM_MAX_TOKENS if max_tokens is None else max_tokens
         timeout_seconds = (
-            int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+            settings.LLM_TIMEOUT_SECONDS
             if timeout_seconds is None
             else timeout_seconds
         )
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2")) if max_retries is None else max_retries
+        max_retries = settings.LLM_MAX_RETRIES if max_retries is None else max_retries
 
         if self.provider == ProviderType.GROQ:
             self._adapter = _GroqAdapter(
-                api_key=os.getenv("GROQ_API_KEY", ""),
-                model=os.getenv("GROQ_MODEL_NAME", "openai/gpt-oss-20b"),
+                api_key=settings.GROQ_API_KEY,
+                model=settings.GROQ_MODEL_NAME,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,
@@ -235,13 +220,13 @@ class LLMProvider:
             )
         else:
             self._adapter = _OllamaAdapter(
-                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                model=os.getenv("OLLAMA_MODEL_NAME", "llama3.1:8b"),
+                base_url=settings.OLLAMA_BASE_URL,
+                model=settings.OLLAMA_MODEL_NAME,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,
                 max_retries=max_retries,
-                keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "5m"),
+                keep_alive=settings.OLLAMA_KEEP_ALIVE,
             )
 
     def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
@@ -273,76 +258,3 @@ class LLMProvider:
             messages.append({"role": "system", "content": system_prompt.strip()})
         messages.append({"role": "user", "content": prompt.strip()})
         return await self.achat(messages)
-
-    # def _truncate_cv_text(self, text: str, max_chars: int = 24000) -> str:
-    #     cleaned = (text or "").strip()
-    #     if len(cleaned) <= max_chars:
-    #         return cleaned
-
-    #     head = cleaned[: int(max_chars * 0.7)]
-    #     tail = cleaned[-int(max_chars * 0.3):]
-    #     return f"{head}\n\n...[TRUNCATED FOR LENGTH]...\n\n{tail}"
-
-    # def _build_cv_analysis_prompt(
-    #     self,
-    #     cv_text: str,
-    #     job_description: Optional[str] = None,
-    #     focus_areas: Optional[List[str]] = None,
-    # ) -> str:
-    #     cv_text = self._truncate_cv_text(cv_text)
-    #     focus = ", ".join(focus_areas) if focus_areas else "technical skills, achievements, role relevance"
-
-    #     prompt_parts = [
-    #         "Task: Analyze the candidate CV and provide structured JSON output.",
-    #         f"Focus areas: {focus}",
-    #         "Output requirements:",
-    #         "- summary: concise overview",
-    #         "- core_skills: list of strongest skills",
-    #         "- experience_years_estimate: numeric estimate",
-    #         "- education: highest/most relevant education",
-    #         "- strengths: list",
-    #         "- gaps: list",
-    #         "- recommendations: list",
-    #         "- fit_score_0_100: integer",
-    #         "- confidence_0_100: integer",
-    #         "CV:",
-    #         cv_text,
-    #     ]
-
-    #     if job_description and job_description.strip():
-    #         prompt_parts.extend(["Job description:", job_description.strip()])
-
-    #     prompt_parts.append("Return JSON only. No markdown, no extra text.")
-    #     return "\n".join(prompt_parts)
-
-    # def analyze_cv(
-    #     self,
-    #     cv_text: str,
-    #     job_description: Optional[str] = None,
-    #     focus_areas: Optional[List[str]] = None,
-    # ) -> LLMResponse:
-    #     if not cv_text or not cv_text.strip():
-    #         raise ValueError("cv_text must not be empty")
-
-    #     prompt = self._build_cv_analysis_prompt(
-    #         cv_text=cv_text,
-    #         job_description=job_description,
-    #         focus_areas=focus_areas,
-    #     )
-    #     return self.generate(prompt=prompt, system_prompt=self._CV_ANALYSIS_SYSTEM_PROMPT)
-
-    # async def aanalyze_cv(
-    #     self,
-    #     cv_text: str,
-    #     job_description: Optional[str] = None,
-    #     focus_areas: Optional[List[str]] = None,
-    # ) -> LLMResponse:
-    #     if not cv_text or not cv_text.strip():
-    #         raise ValueError("cv_text must not be empty")
-
-    #     prompt = self._build_cv_analysis_prompt(
-    #         cv_text=cv_text,
-    #         job_description=job_description,
-    #         focus_areas=focus_areas,
-    #     )
-    #     return await self.agenerate(prompt=prompt, system_prompt=self._CV_ANALYSIS_SYSTEM_PROMPT)
