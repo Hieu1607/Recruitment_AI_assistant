@@ -15,7 +15,8 @@ Graph topology
 START → trim → router ─┬─► dsl ─┬─► llm ─► answer → END
                         │        └─────────► answer → END
                         ├─────────────────► llm ──── answer → END
-                        └─────────────────────────── answer → END
+                        ├─────────────────────────── answer → END
+                        └── (off-topic) ──────────────────── END
 """
 
 from typing import Annotated, Any, Dict, List, Optional
@@ -62,6 +63,9 @@ def trim_node(state: GraphState) -> Dict[str, Any]:
 
 def _route_after_router(state: GraphState) -> str:
     router_output = state.get("router_output") or {}
+    # Off-topic: answer already populated by router_node, skip all processing
+    if not router_output.get("is_recruitment_related", True):
+        return END
     has_dsl = bool(router_output.get("dsl_question_query"))
     has_llm = bool(router_output.get("llm_question_query"))
     if has_dsl:
@@ -95,7 +99,7 @@ def build_graph() -> StateGraph:
     g.add_conditional_edges(
         "router",
         _route_after_router,
-        {"dsl": "dsl", "llm": "llm", "answer": "answer"},
+        {"dsl": "dsl", "llm": "llm", "answer": "answer", END: END},
     )
     g.add_conditional_edges(
         "dsl",

@@ -207,7 +207,7 @@ class BuildPrompts:
 
 		return f"{instructions}\n\n{json.dumps(payload, ensure_ascii=True)}"
 
-	def build_dsl_query_prompt(self, question: str, current_candidate_list: list) -> str:
+	def build_dsl_query_prompt(self, question: str) -> str:
 		_template = """You are a recruitment data query assistant. Translate the user's question into a JSON object that can be used to query the candidate database with the following schema:
 		    full_name: String, name of the candidate
 			phone: String, phone number of the candidate
@@ -286,11 +286,8 @@ Return a JSON object with the following structure:
 		Question: """
 		return _template + question + "\n"
 	
-	def build_llm_query_prompt(self, question: str, current_candidate_list: list, relevant_fields: list) -> str:
+	def build_llm_query_prompt(self, question: str, candidate_data: list) -> str:
 
-		candidate_data = [] # Placeholder for candidate data formatting logic
-
-		candidate_count = len(current_candidate_list)
 		return f"""You are a recruitment assistant. Answer the user's question based on the candidate data.
 		Return a Json list object with the following schema:
 		{{
@@ -304,19 +301,62 @@ Return a JSON object with the following structure:
 		
 """
 	
-	def build_router_prompt(self, question: str, candidate_list: list) -> str:
-		return f"""You are a recruitment assistant. Return a JSON object indicating whether the user's question can be answered using structured data querying or if it requires unstructured LLM analysis. The JSON should have the following format:
+	def build_answer_prompt(self, question: str, candidates: list) -> str:
+		"""Build a RAG prompt to generate a natural-language answer from candidate data."""
+		candidate_json = json.dumps(candidates, ensure_ascii=False, indent=2)
+		return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below with simple explaination. Answer nicely by Vietnamese.
+
+Rules:
+- Be concise and specific. Reference candidates by name when relevant.
+- Do not invent or assume information not present in the data.
+- If the data is empty or no candidates match, clearly state that no matching candidates were found.
+
+Candidate data:
+{candidate_json}
+
+Question: {question}
+
+Answer:"""
+
+	def build_router_prompt(self, question: str) -> str:
+		return f"""You are a recruitment assistant router. Given the user's question, do two things in one response:
+
+1. Decide if the question is related to recruitment, candidates, resumes, hiring, or HR topics.
+2. If it is related, decide how to route it (structured DSL query, LLM analysis, or both).
+
+Return ONLY a valid JSON object with this shape:
 {{
-	"relevant_fields": [string], // list of relevant structured data fields that can be used to answer the question, e.g. ["skills_text", "experience_years"]
-	"dsl_question_query": string, // question rephrased to be answered by structured data querying, if applicable . Set None if not applicable
-	"llm_question_query": string, // question rephrased to be answered by LLM analysis, if applicable. Set None if not applicable
-	"dsl_relevant_fields": [string], // list of structured data fields that are relevant to the question and can be used in the DSL query
-	"llm_relevant_fields": [string] // list of structured data fields that are relevant to the question and can be used in the LLM analysis
-	"reasoning": string // a brief explanation of the reasoning behind the routing decision
+  "is_recruitment_related": true | false,
+  "refusal_message": string | null,
+  "relevant_fields": [string],
+  "dsl_question_query": string | null,
+  "llm_question_query": string | null,
+  "dsl_relevant_fields": [string],
+  "llm_relevant_fields": [string],
+  "reasoning": string
 }}
 
-If the question relevant to full_name, phone, email, location_normalized, contact, current_job_title, educated, ever_studied_abroad, major, cpa, then the question is relevant to structured data querying. Otherwise, the question is relevant to LLM analysis.
-Question: {question}
-"""
+Rules for is_recruitment_related:
+- true: question is about candidates, CVs, resumes, job titles, skills, experience, education, hiring, HR, interviews, shortlisting.
+- false: question is about unrelated topics (weather, cooking, math, general coding, etc.).
+- If false: set refusal_message to a short, friendly reply in the SAME language as the question explaining you only assist with recruitment topics. Set all other fields to null or [].
+- If true: set refusal_message to null and fill in the routing fields below.
+
+Routing rules (only when is_recruitment_related is true):
+- dsl_question_query: rephrase the question for structured DB filtering. Set null if not applicable.
+- llm_question_query: rephrase the question for semantic LLM analysis. Set null if not applicable.
+- dsl_relevant_fields / llm_relevant_fields: fields from the schema below relevant to each path.
+- Use DSL for: full_name, phone, email, location_normalized, contact, current_job_title, educated, ever_studied_abroad, major, cpa, experience_years.
+- Use LLM for: education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, other_text.
+- Both paths can apply to the same question.
+
+Database schema:
+  full_name, phone, email, location_normalized, contact, current_job_title,
+  educated (Boolean), ever_studied_abroad (Boolean), major, cpa,
+  education_text, experience_text, experience_years (Number), skills_text,
+  languages_text, projects_text, summary_text, achievements_text,
+  publications_text, certifications_text, references_text, other_text
+
+Question: {question}"""
 
 build_prompts = BuildPrompts()
