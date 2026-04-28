@@ -1,6 +1,7 @@
 import React from "react";
-import { createBrowserRouter, Outlet } from "react-router";
+import { createBrowserRouter } from "react-router";
 import { routePatterns } from "@/routes";
+import { AppShell } from "@/components/layout/AppShell";
 
 // Route-level lazy: each route is its own chunk
 function lazy<T extends () => Promise<{ default: React.ComponentType }>>(loader: T) {
@@ -8,6 +9,7 @@ function lazy<T extends () => Promise<{ default: React.ComponentType }>>(loader:
 }
 
 export const router = createBrowserRouter([
+  // Public routes (no shell)
   {
     path: routePatterns.landing,
     ...lazy(() => import("@/routes/landing")),
@@ -16,9 +18,9 @@ export const router = createBrowserRouter([
     path: routePatterns.login,
     ...lazy(() => import("@/routes/login")),
   },
+  // Authenticated routes (wrapped in AppShell)
   {
-    // Authenticated shell will be added in plan 01-04 — for now, child routes render bare
-    element: <Outlet />,
+    Component: AppShell,
     children: [
       { path: routePatterns.dashboard, ...lazy(() => import("@/routes/dashboard")) },
       { path: routePatterns.candidates, ...lazy(() => import("@/routes/candidates/list")) },
