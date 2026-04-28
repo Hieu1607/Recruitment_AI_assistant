@@ -37,7 +37,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User toggles dark mode from the user menu, every shell pixel switches palette, and the choice survives a page refresh
   4. User triggers a backend call (e.g. ping `GET /api/v1/upload/?limit=1`) through the typed Axios + TanStack Query client and receives data; a forced 500 surfaces a toast with the normalized error message
   5. Inspecting the rendered page confirms Fraunces is loaded as `font-display`, Geist as `font-sans`, Geist Mono as `font-mono`, the off-white `#FAFAF7` background with subtle grain is applied, and the active sidebar item shows the forest-green `#1F3A2E` left bar
-**Plans**: TBD
+**Plans**:
+- [x] 01-01: Vite + React + TS scaffold, design tokens, Tailwind v4 theme (complete 2026-04-28, commits 1d353ba/0513acd/5b3068c)
+- [ ] 01-02: API client (Axios + TanStack Query)
+- [ ] 01-03: React Router v7 routing skeleton
+- [ ] 01-04: App shell (TopBar + Sidebar layout)
 
 ### Phase 2: Primitives Library
 **Goal**: A reusable, restyleable component library (built on shadcn/ui + Radix) covering every primitive used across the 15 screens, documented in a Storybook-style demo route.
@@ -189,7 +193,7 @@ Phases execute in numeric order. Phases 1-2 are strictly sequential (foundation 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Design System | 0/TBD | Not started | - |
+| 1. Foundation & Design System | 1/4 | In progress | - |
 | 2. Primitives Library | 0/TBD | Not started | - |
 | 3. Candidates List & Upload Flow | 0/TBD | Not started | - |
 | 4. Job Descriptions | 0/TBD | Not started | - |

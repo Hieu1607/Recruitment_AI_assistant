@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-04-27)
 ## Current Position
 
 Phase: 1 of 12 (Foundation & Design System)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-04-27 — ROADMAP.md and STATE.md initialized
+Plan: 1 of 4 (01-01 complete, ready for 01-02)
+Status: Executing — Wave 1 complete
+Last activity: 2026-04-28 — Executed 01-01 (Vite + React + TS scaffold + design tokens)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 2%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 5 minutes
+- Total execution time: 0.08 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| — | — | — | — |
+| 01 (Foundation & Design System) | 1/4 | 5 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: —
-- Trend: — (no data yet)
+- Last 5 plans: 01-01 (5m)
+- Trend: Establishing baseline
 
 *Updated after each plan completion*
 
@@ -45,6 +45,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent foundational pick
 - Phase 0 (init): Forest-green `#1F3A2E` accent on off-white `#FAFAF7` confirmed from PNGs; Fraunces + Geist + Geist Mono as the type stack
 - Phase 0 (init): Skip real auth enforcement — backend doesn't enforce yet; ship Login UI as visual surface only
 - Phase 0 (init): Granularity "fine" — 12 phases, roughly one screen / tight bundle per phase, with parallelization enabled after Phases 1-2
+- Phase 1 (01-01): Use `tsc -b` (composite build mode) instead of `tsc --noEmit -b` — invalid flag combo in TS 5.9; `noEmit: true` in tsconfig achieves the same effect
+- Phase 1 (01-01): No postcss.config.js — @tailwindcss/vite plugin handles Tailwind v4 processing alone; dual pipeline breaks @theme resolution
 
 ### Pending Todos
 
@@ -56,6 +58,23 @@ None yet.
 - Backend chat sessions are in-memory and disappear on restart — Phase 6 must handle 404 on `session_id` by silently starting a new session and toasting the user (already encoded as CHAT-10)
 - Scoring response uses camelCase `componentScores` while the rest of the API is snake_case — Phase 5 client types must accommodate the wart
 
+### Phase 1 Plan Revisions (2026-04-28)
+
+Plan-checker ran post-hoc (originally skipped due to subagent rate-limit). Revisions applied to the 4 plans before execution:
+
+- **01-01**: dropped `postcss.config.js` + `@tailwindcss/postcss` + `autoprefixer` (Tailwind v4 Vite plugin handles processing alone — B-5); added `tsconfig.app.json` + `favicon.svg` to manifest (B-6, W-9); fixed `grain.svg` path to `public/` (W-1); added pre-hydration FOUC-prevention script to `index.html` keyed to `recruitai.theme` storage key (W-3).
+- **01-02**: wired `QueryCache` + `MutationCache` `onError` → `toast.error` for non-validation `ApiError`s in `queryClient.ts` (B-4 — fulfills FOUND-07 / Phase 1 SC#4); added CORS allowlist verification step + toast smoke test to verification block (W-8).
+- **01-03**: added `01-02` to `depends_on`, bumped to **wave 3** (B-2 — `main.tsx` imports `queryClient` from `@/api`, can't run parallel to 01-02).
+- **01-04**: bumped to **wave 4** (B-2 cascade); moved Upload CTA to the BOTTOM of Sidebar per FOUND-10 / SC#2 (B-1 — planner's "PNG wins" override removed); added wordmark + route-derived breadcrumb to TopBar to satisfy SC#2 (B-3); replaced hardcoded `rgba(0,0,0,0.04)` hover/active backgrounds with `var(--hairline)` token in Sidebar + UserMenu + TopBar (W-4 — dark-mode parity); wrapped AppShell content in `mx-auto` so wide displays center (W-5).
+
+Resulting wave map:
+- Wave 1: 01-01
+- Wave 2: 01-02
+- Wave 3: 01-03
+- Wave 4: 01-04
+
+Deferred (not blockers): W-2 Geist family-name verification (smoke-test during execution), W-6 alpha-modifier theming pattern, W-7 utility class layer cleanup, W-10 ESLint flat-config react-refresh check, W-11 noUnusedParameters discipline for downstream phases, I-1..I-4 polish notes.
+
 ## Deferred Items
 
 | Category | Item | Status | Deferred At |
@@ -64,6 +83,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-27
-Stopped at: ROADMAP.md and STATE.md created; REQUIREMENTS.md traceability updated; ready to plan Phase 1
+Last session: 2026-04-28
+Stopped at: Phase 1, Plan 01-01 complete (Vite + React + TS scaffold + design tokens). Next: execute 01-02 (API client + TanStack Query setup)
 Resume file: None
