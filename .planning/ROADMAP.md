@@ -39,7 +39,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Inspecting the rendered page confirms Fraunces is loaded as `font-display`, Geist as `font-sans`, Geist Mono as `font-mono`, the off-white `#FAFAF7` background with subtle grain is applied, and the active sidebar item shows the forest-green `#1F3A2E` left bar
 **Plans**:
 - [x] 01-01: Vite + React + TS scaffold, design tokens, Tailwind v4 theme (complete 2026-04-28, commits 1d353ba/0513acd/5b3068c)
-- [ ] 01-02: API client (Axios + TanStack Query)
+- [x] 01-02: API client (Axios + TanStack Query) (complete 2026-04-28, commits f615020/6d2448e/54c284a)
 - [ ] 01-03: React Router v7 routing skeleton
 - [ ] 01-04: App shell (TopBar + Sidebar layout)
 

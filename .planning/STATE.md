@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-04-27)
 ## Current Position
 
 Phase: 1 of 12 (Foundation & Design System)
-Plan: 1 of 4 (01-01 complete, ready for 01-02)
-Status: Executing — Wave 1 complete
-Last activity: 2026-04-28 — Executed 01-01 (Vite + React + TS scaffold + design tokens)
+Plan: 2 of 4 (01-01 + 01-02 complete, ready for 01-03)
+Status: Executing — Wave 2 complete
+Last activity: 2026-04-28 — Executed 01-02 (API client: Axios + TanStack Query + endpoint modules)
 
-Progress: [█░░░░░░░░░] 2%
+Progress: [██░░░░░░░░] 4%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 5 minutes
-- Total execution time: 0.08 hours
+- Total plans completed: 2
+- Average duration: 4-5 minutes
+- Total execution time: 0.15 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 (Foundation & Design System) | 1/4 | 5 min | 5 min |
+| 01 (Foundation & Design System) | 2/4 | 9 min | 4.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5m)
-- Trend: Establishing baseline
+- Last 5 plans: 01-01 (5m), 01-02 (4m)
+- Trend: Stable
 
 *Updated after each plan completion*
 
@@ -47,6 +47,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent foundational pick
 - Phase 0 (init): Granularity "fine" — 12 phases, roughly one screen / tight bundle per phase, with parallelization enabled after Phases 1-2
 - Phase 1 (01-01): Use `tsc -b` (composite build mode) instead of `tsc --noEmit -b` — invalid flag combo in TS 5.9; `noEmit: true` in tsconfig achieves the same effect
 - Phase 1 (01-01): No postcss.config.js — @tailwindcss/vite plugin handles Tailwind v4 processing alone; dual pipeline breaks @theme resolution
+- Phase 1 (01-02): 204 No Content DELETE endpoints (shortlist, outreach, interview-questions) return Promise<void>; 200 DELETE endpoints (upload, job-descriptions) return typed body
+- Phase 1 (01-02): shortlistApi structured as sessions/turns/collections/items namespaces — maps 1:1 to backend sub-resource structure
+- Phase 1 (01-02): Scoring timeout extended to 10min, batchParse to 5min — synchronous LLM operations per BACKEND.md
 
 ### Pending Todos
 
@@ -84,5 +87,5 @@ Deferred (not blockers): W-2 Geist family-name verification (smoke-test during e
 ## Session Continuity
 
 Last session: 2026-04-28
-Stopped at: Phase 1, Plan 01-01 complete (Vite + React + TS scaffold + design tokens). Next: execute 01-02 (API client + TanStack Query setup)
+Stopped at: Phase 1, Plan 01-02 complete (API client + TanStack Query + endpoint modules). Next: execute 01-03 (React Router v7 routing skeleton)
 Resume file: None
