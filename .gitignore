@@ -46,5 +46,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pdfs/
-CLAUDE.md 
-.claude/
+
+# Allow frontend/src/lib (root lib/ ignore would otherwise swallow it)
+!frontend/src/lib/
+!frontend/src/lib/**
+
