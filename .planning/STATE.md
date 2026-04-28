@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-04-27)
 ## Current Position
 
 Phase: 1 of 12 (Foundation & Design System)
-Plan: 2 of 4 (01-01 + 01-02 complete, ready for 01-03)
-Status: Executing — Wave 2 complete
-Last activity: 2026-04-28 — Executed 01-02 (API client: Axios + TanStack Query + endpoint modules)
+Plan: 3 of 4 (01-01 + 01-02 + 01-03 complete, ready for 01-04)
+Status: Executing — Wave 3 complete
+Last activity: 2026-04-28 — Executed 01-03 (React Router v7 routing skeleton: 18 routes, lazy chunks, RouterProvider)
 
-Progress: [██░░░░░░░░] 4%
+Progress: [███░░░░░░░] 6%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
+- Total plans completed: 3
 - Average duration: 4-5 minutes
-- Total execution time: 0.15 hours
+- Total execution time: 0.19 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 (Foundation & Design System) | 2/4 | 9 min | 4.5 min |
+| 01 (Foundation & Design System) | 3/4 | 13 min | 4.3 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5m), 01-02 (4m)
+- Last 5 plans: 01-01 (5m), 01-02 (4m), 01-03 (4m)
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -50,6 +50,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent foundational pick
 - Phase 1 (01-02): 204 No Content DELETE endpoints (shortlist, outreach, interview-questions) return Promise<void>; 200 DELETE endpoints (upload, job-descriptions) return typed body
 - Phase 1 (01-02): shortlistApi structured as sessions/turns/collections/items namespaces — maps 1:1 to backend sub-resource structure
 - Phase 1 (01-02): Scoring timeout extended to 10min, batchParse to 5min — synchronous LLM operations per BACKEND.md
+- Phase 1 (01-03): Router lazy() helper wraps React Router's built-in lazy() to unify { Component } shape — no external library needed
+- Phase 1 (01-03): Authenticated shell (Outlet wrapper) stubbed in router.tsx — plan 01-04 replaces it with real AppShell
+- Phase 1 (01-03): chat.tsx shared by /chat and /chat/:sessionId — single file handles both empty and loaded session states
 
 ### Pending Todos
 
@@ -87,5 +90,5 @@ Deferred (not blockers): W-2 Geist family-name verification (smoke-test during e
 ## Session Continuity
 
 Last session: 2026-04-28
-Stopped at: Phase 1, Plan 01-02 complete (API client + TanStack Query + endpoint modules). Next: execute 01-03 (React Router v7 routing skeleton)
+Stopped at: Phase 1, Plan 01-03 complete (React Router v7 routing skeleton — 18 routes, lazy chunks, RouterProvider). Next: execute 01-04 (AppShell layout: Sidebar + TopBar)
 Resume file: None

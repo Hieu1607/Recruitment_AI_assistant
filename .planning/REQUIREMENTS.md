@@ -14,7 +14,7 @@
 - [ ] **FOUND-05**: Light mode and dark mode both render correctly across all screens, toggleable from the user menu, with persisted preference
 - [ ] **FOUND-06**: API client (Axios + TanStack Query) is wired to `http://localhost:8000/api/v1` with TypeScript interfaces matching every response shape in BACKEND.md
 - [ ] **FOUND-07**: API errors are normalized into a single shape and surfaced via toast for non-form errors and inline for form errors
-- [ ] **FOUND-08**: React Router v7 routes are registered for all 15 screens with lazy loading
+- [x] **FOUND-08**: React Router v7 routes are registered for all 15 screens with lazy loading
 - [ ] **FOUND-09**: Authenticated layout shell renders TopBar (logo + breadcrumb + search + ⌘K + bell + avatar) + Sidebar (240px nav) + Content area on every authenticated route
 - [ ] **FOUND-10**: Sidebar shows the 8 primary nav items in workflow order with Lucide icons, accent left bar on active item, and an "Upload resume" primary CTA pinned at the bottom
 
@@ -217,7 +217,7 @@ Populated by `gsd-roadmapper` during ROADMAP.md creation (2026-04-27).
 | FOUND-05 | Phase 1 | Pending |
 | FOUND-06 | Phase 1 | Pending |
 | FOUND-07 | Phase 1 | Pending |
-| FOUND-08 | Phase 1 | Pending |
+| FOUND-08 | Phase 1 | Complete (01-03) |
 | FOUND-09 | Phase 1 | Pending |
 | FOUND-10 | Phase 1 | Pending |
 | PRIM-01 | Phase 2 | Pending |

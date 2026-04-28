@@ -40,7 +40,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**:
 - [x] 01-01: Vite + React + TS scaffold, design tokens, Tailwind v4 theme (complete 2026-04-28, commits 1d353ba/0513acd/5b3068c)
 - [x] 01-02: API client (Axios + TanStack Query) (complete 2026-04-28, commits f615020/6d2448e/54c284a)
-- [ ] 01-03: React Router v7 routing skeleton
+- [x] 01-03: React Router v7 routing skeleton (complete 2026-04-28, commits ecdb3b3/c173af9/4659245)
 - [ ] 01-04: App shell (TopBar + Sidebar layout)
 
 ### Phase 2: Primitives Library
