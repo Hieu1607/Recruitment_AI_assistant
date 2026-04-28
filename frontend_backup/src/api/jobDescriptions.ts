@@ -36,7 +36,7 @@ export async function getJobDescription(
 
 export async function updateJobDescription(
   id: string,
-  payload: Partial<JobDescriptionResponse>,
+  payload: { title?: string | null; jd_text?: string; is_active?: boolean },
 ): Promise<JobDescriptionResponse> {
   const { data } = await apiClient.patch<JobDescriptionResponse>(
     `/job-descriptions/${id}`,

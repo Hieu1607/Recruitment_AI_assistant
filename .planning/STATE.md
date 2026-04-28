@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-04-27)
 
 **Core value:** Recruiters can run their full hiring loop (upload → score → chat → shortlist → outreach → interview prep) through a polished editorial UI talking to the existing FastAPI backend.
-**Current focus:** Phase 1 — Foundation & Design System
+**Current focus:** Phase 3 — Candidates List & Upload Flow
 
 ## Current Position
 
-Phase: 1 of 12 (Foundation & Design System)
-Plan: 4 of 4 (01-01 + 01-02 + 01-03 + 01-04 complete — Phase 1 DONE)
-Status: Phase 1 complete — ready for Phase 2
-Last activity: 2026-04-28 — Executed 01-04 (AppShell layout shell: Sidebar + TopBar + theme store + dark mode)
+Phase: 2 of 12 (Primitives Library) — COMPLETE
+Plan: 5 of 5 (02-01 Button/Badge/Avatar/FilterChip + 02-02 DataTable/Pagination + 02-03 Modal/Tooltip + 02-04 EmptyState/Skeleton/ScoreVisualization + 02-05 /dev/primitives showcase — Phase 2 DONE)
+Status: Phase 2 complete — ready for Phase 3
+Last activity: 2026-04-28 — Executed 02-01 through 02-05 (full Primitives Library: 12 components + /dev/primitives showcase)
 
-Progress: [████░░░░░░] 8%
+Progress: [████████░░] 17%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: 4 minutes
-- Total execution time: 0.27 hours
+- Total plans completed: 9 (4 from Phase 1 + 5 from Phase 2)
+- Average duration: ~5 minutes
+- Total execution time: ~0.75 hours
 
 **By Phase:**
 
@@ -94,5 +94,5 @@ Deferred (not blockers): W-2 Geist family-name verification (smoke-test during e
 ## Session Continuity
 
 Last session: 2026-04-28
-Stopped at: Phase 1 complete — all 4 plans executed (01-01 scaffold, 01-02 API client, 01-03 router, 01-04 AppShell layout + theme). Next: Phase 2 (Shared Component Library)
+Stopped at: Phase 2 complete — all 5 plans executed (02-01 Button/Badge/Avatar/FilterChip, 02-02 DataTable/Pagination, 02-03 Modal/Tooltip, 02-04 EmptyState/Skeleton/ScoreVisualization, 02-05 /dev/primitives showcase). Next: Phase 3 (Candidates List & Upload Flow)
 Resume file: None

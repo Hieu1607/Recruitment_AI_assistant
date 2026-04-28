@@ -1,8 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useResumes } from '../hooks/useResumes';
+import { useToast } from '../components/Toast';
 import { Upload, FileText, Trash2, AlertCircle, CheckCircle2, Clock, X } from 'lucide-react';
 
 export default function ResumesPage() {
+  const { toast } = useToast();
   const {
     resumes,
     isLoading,
@@ -20,6 +22,10 @@ export default function ResumesPage() {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (error) toast(error, 'error');
+  }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -39,14 +45,18 @@ export default function ResumesPage() {
 
     if (nonPdfs.length > 0) {
       setError('Only PDF files are allowed.');
+      toast('Only PDF files are allowed.', 'error');
       return;
     }
 
-    // Harcoded user for now, as auth is planned later
+    // Hardcoded user for now, as auth is planned later
     const MOCK_USER_ID = '123e4567-e89b-12d3-a456-426614174000';
-    await uploadBatch(fileArray, MOCK_USER_ID);
+    const result = await uploadBatch(fileArray, MOCK_USER_ID);
     if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      fileInputRef.current.value = '';
+    }
+    if (result) {
+      toast(`Processed ${result.processed_files} of ${result.total_files} resume(s).`, 'success');
     }
   };
 

@@ -13,7 +13,7 @@ Build the production frontend for the Recruitment AI Assistant in 12 phases, seq
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Design System** - Vite scaffold, design tokens, theme, layout shell, API client, routing (complete 2026-04-28)
-- [ ] **Phase 2: Primitives Library** - Shared components (Button, Badge, DataTable, Modal, Toast, Avatar, Tooltip, EmptyState, Skeleton, Pagination, FilterChip, ScoreVisualization)
+- [x] **Phase 2: Primitives Library** - Shared components (Button, Badge, DataTable, Modal, Toast, Avatar, Tooltip, EmptyState, Skeleton, Pagination, FilterChip, ScoreVisualization) (complete 2026-04-28)
 - [ ] **Phase 3: Candidates List & Upload Flow** - Screens 04 + 05; the most-used surface and PDF batch upload sync-job UX
 - [ ] **Phase 4: Job Descriptions** - Screens 07 + 08; JD grid plus Notion-style editor
 - [ ] **Phase 5: Scoring Flagship (3-step flow)** - Screen 09; Setup with weights donut, Processing animation, Results with expand
@@ -53,7 +53,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User opens a Modal that traps focus, closes on `Esc` and backdrop click, and dispatches a Toast that appears top-right and auto-dismisses after 4 seconds
   4. User loads a list page in degraded network and sees Skeleton shimmer rows (no spinners) plus a Pagination footer reading "Showing 1-50 of 234" with Prev/Next and a 50/100/200 page-size selector
   5. User views a ScoreVisualization in three sizes (mini bar inline, donut at 200px, radar at 400px) and a Tooltip renders on hover with hairline-bordered editorial styling
-**Plans**: TBD
+**Plans**:
+- [x] 02-01: Button, Badge, Avatar, FilterChip (complete 2026-04-28)
+- [x] 02-02: DataTable + Pagination (complete 2026-04-28)
+- [x] 02-03: Modal/Dialog + Tooltip (complete 2026-04-28)
+- [x] 02-04: EmptyState, Skeleton, ScoreVisualization (complete 2026-04-28)
+- [x] 02-05: /dev/primitives showcase route (complete 2026-04-28)
 **UI hint**: yes
 
 ### Phase 3: Candidates List & Upload Flow
@@ -193,8 +198,8 @@ Phases execute in numeric order. Phases 1-2 are strictly sequential (foundation 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Design System | 1/4 | In progress | - |
-| 2. Primitives Library | 0/TBD | Not started | - |
+| 1. Foundation & Design System | 4/4 | Complete | 2026-04-28 |
+| 2. Primitives Library | 5/5 | Complete | 2026-04-28 |
 | 3. Candidates List & Upload Flow | 0/TBD | Not started | - |
 | 4. Job Descriptions | 0/TBD | Not started | - |
 | 5. Scoring Flagship (3-step flow) | 0/TBD | Not started | - |

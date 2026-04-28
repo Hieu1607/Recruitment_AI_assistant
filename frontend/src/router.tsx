@@ -1,7 +1,7 @@
+import { AppShell } from "@/components/layout/AppShell";
+import { routePatterns } from "@/routes";
 import React from "react";
 import { createBrowserRouter } from "react-router";
-import { routePatterns } from "@/routes";
-import { AppShell } from "@/components/layout/AppShell";
 
 // Route-level lazy: each route is its own chunk
 function lazy<T extends () => Promise<{ default: React.ComponentType }>>(loader: T) {
@@ -38,6 +38,7 @@ export const router = createBrowserRouter([
       { path: routePatterns.interviewQuestions, ...lazy(() => import("@/routes/interview-questions/list")) },
       { path: routePatterns.interviewQuestionDetail, ...lazy(() => import("@/routes/interview-questions/detail")) },
       { path: routePatterns.settings, ...lazy(() => import("@/routes/settings")) },
+      { path: "/dev/primitives", ...lazy(() => import("@/routes/dev/primitives")) },
     ],
   },
   {
