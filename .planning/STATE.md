@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-04-27)
 ## Current Position
 
 Phase: 1 of 12 (Foundation & Design System)
-Plan: 3 of 4 (01-01 + 01-02 + 01-03 complete, ready for 01-04)
-Status: Executing — Wave 3 complete
-Last activity: 2026-04-28 — Executed 01-03 (React Router v7 routing skeleton: 18 routes, lazy chunks, RouterProvider)
+Plan: 4 of 4 (01-01 + 01-02 + 01-03 + 01-04 complete — Phase 1 DONE)
+Status: Phase 1 complete — ready for Phase 2
+Last activity: 2026-04-28 — Executed 01-04 (AppShell layout shell: Sidebar + TopBar + theme store + dark mode)
 
-Progress: [███░░░░░░░] 6%
+Progress: [████░░░░░░] 8%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: 4-5 minutes
-- Total execution time: 0.19 hours
+- Total plans completed: 4
+- Average duration: 4 minutes
+- Total execution time: 0.27 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 (Foundation & Design System) | 3/4 | 13 min | 4.3 min |
+| 01 (Foundation & Design System) | 4/4 | 16 min | 4.0 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5m), 01-02 (4m), 01-03 (4m)
+- Last 5 plans: 01-01 (5m), 01-02 (4m), 01-03 (4m), 01-04 (3m)
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -53,6 +53,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent foundational pick
 - Phase 1 (01-03): Router lazy() helper wraps React Router's built-in lazy() to unify { Component } shape — no external library needed
 - Phase 1 (01-03): Authenticated shell (Outlet wrapper) stubbed in router.tsx — plan 01-04 replaces it with real AppShell
 - Phase 1 (01-03): chat.tsx shared by /chat and /chat/:sessionId — single file handles both empty and loaded session states
+- Phase 1 (01-04): var(--hairline) token used for active/hover nav backgrounds instead of hardcoded rgba(0,0,0,0.04) — dark-mode parity (W-4)
+- Phase 1 (01-04): Upload CTA pinned below primary nav per FOUND-10 / SC#2
+- Phase 1 (01-04): Route-derived breadcrumb uses prefix-match array with longer paths first
+- Phase 1 (01-04): App.tsx deleted — replaced by router-driven AppShell layout
 
 ### Pending Todos
 
@@ -90,5 +94,5 @@ Deferred (not blockers): W-2 Geist family-name verification (smoke-test during e
 ## Session Continuity
 
 Last session: 2026-04-28
-Stopped at: Phase 1, Plan 01-03 complete (React Router v7 routing skeleton — 18 routes, lazy chunks, RouterProvider). Next: execute 01-04 (AppShell layout: Sidebar + TopBar)
+Stopped at: Phase 1 complete — all 4 plans executed (01-01 scaffold, 01-02 API client, 01-03 router, 01-04 AppShell layout + theme). Next: Phase 2 (Shared Component Library)
 Resume file: None

@@ -12,7 +12,7 @@ Build the production frontend for the Recruitment AI Assistant in 12 phases, seq
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation & Design System** - Vite scaffold, design tokens, theme, layout shell, API client, routing
+- [x] **Phase 1: Foundation & Design System** - Vite scaffold, design tokens, theme, layout shell, API client, routing (complete 2026-04-28)
 - [ ] **Phase 2: Primitives Library** - Shared components (Button, Badge, DataTable, Modal, Toast, Avatar, Tooltip, EmptyState, Skeleton, Pagination, FilterChip, ScoreVisualization)
 - [ ] **Phase 3: Candidates List & Upload Flow** - Screens 04 + 05; the most-used surface and PDF batch upload sync-job UX
 - [ ] **Phase 4: Job Descriptions** - Screens 07 + 08; JD grid plus Notion-style editor
@@ -41,7 +41,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 01-01: Vite + React + TS scaffold, design tokens, Tailwind v4 theme (complete 2026-04-28, commits 1d353ba/0513acd/5b3068c)
 - [x] 01-02: API client (Axios + TanStack Query) (complete 2026-04-28, commits f615020/6d2448e/54c284a)
 - [x] 01-03: React Router v7 routing skeleton (complete 2026-04-28, commits ecdb3b3/c173af9/4659245)
-- [ ] 01-04: App shell (TopBar + Sidebar layout)
+- [x] 01-04: App shell (TopBar + Sidebar layout + theme store) (complete 2026-04-28, commits 3cfa0cc/6b6deb2/4fd7536/a35d834)
 
 ### Phase 2: Primitives Library
 **Goal**: A reusable, restyleable component library (built on shadcn/ui + Radix) covering every primitive used across the 15 screens, documented in a Storybook-style demo route.
