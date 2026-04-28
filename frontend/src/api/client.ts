@@ -1,22 +1,25 @@
-import axios from 'axios';
+import axios, { type AxiosInstance } from "axios";
+import { ApiError, parseAxiosError } from "./errors";
 
-const apiClient = axios.create({
-  baseURL: 'http://localhost:8000/api/v1',
-  headers: {
-    'Content-Type': 'application/json',
-    // JWT placeholder — will be replaced when auth is implemented
-    'X-User-Id': '00000000-0000-0000-0000-000000000000',
-  },
+const baseURL =
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+
+export const client: AxiosInstance = axios.create({
+  baseURL,
+  timeout: 60_000,
+  withCredentials: false,
+  headers: { "Content-Type": "application/json" },
 });
 
-apiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    const detail =
-      error.response?.data?.detail ?? error.message ?? 'Unknown error';
-    console.error('[API Error]', detail);
-    return Promise.reject(error);
+client.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    // SECURITY: Do NOT log request/response bodies (PII — resume PDFs,
+    // candidate data, auth tokens). Log only the normalized ApiError shape.
+    throw parseAxiosError(err);
   },
 );
 
-export default apiClient;
+export function isApiError(err: unknown): err is ApiError {
+  return err instanceof ApiError;
+}
