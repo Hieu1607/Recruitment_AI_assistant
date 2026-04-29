@@ -14,13 +14,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Design System** - Vite scaffold, design tokens, theme, layout shell, API client, routing (complete 2026-04-28)
 - [x] **Phase 2: Primitives Library** - Shared components (Button, Badge, DataTable, Modal, Toast, Avatar, Tooltip, EmptyState, Skeleton, Pagination, FilterChip, ScoreVisualization) (complete 2026-04-28)
-- [ ] **Phase 3: Candidates List & Upload Flow** - Screens 04 + 05; the most-used surface and PDF batch upload sync-job UX
-- [ ] **Phase 4: Job Descriptions** - Screens 07 + 08; JD grid plus Notion-style editor
-- [ ] **Phase 5: Scoring Flagship (3-step flow)** - Screen 09; Setup with weights donut, Processing animation, Results with expand
-- [ ] **Phase 6: AI Recruiter Chat** - Screen 10; sessions sidebar, prose chat panel, inline candidate cards
-- [ ] **Phase 7: Candidate Detail Hub** - Screen 06; tabbed profile linking into scoring, outreach, interview
-- [ ] **Phase 8: Dashboard** - Screen 03; greeting, metric cards, activity feed, quick actions, editorial insight
-- [ ] **Phase 9: Shortlists & Collection Detail** - Screens 11 + 12; collections, query history, items management
+- [x] **Phase 3: Candidates List & Upload Flow** - Screens 04 + 05; the most-used surface and PDF batch upload sync-job UX (complete 2026-04-29)
+- [x] **Phase 4: Job Descriptions** - Screens 07 + 08; JD grid plus Notion-style editor (complete 2026-04-28)
+- [x] **Phase 5: Scoring Flagship (3-step flow)** - Screen 09; Setup with weights donut, Processing animation, Results with expand (complete 2026-04-28)
+- [x] **Phase 6: AI Recruiter Chat** - Screen 10; sessions sidebar, prose chat panel, inline candidate cards (complete 2026-04-28)
+- [x] **Phase 7: Candidate Detail Hub** - Screen 06; tabbed profile linking into scoring, outreach, interview (complete 2026-04-28)
+- [x] **Phase 8: Dashboard** - Screen 03; greeting, metric cards, activity feed, quick actions, editorial insight (complete 2026-04-28)
+- [x] **Phase 9: Shortlists & Collection Detail** - Screens 11 + 12; collections, query history, items management (complete 2026-04-28)
 - [ ] **Phase 10: Outreach Messages** - Screen 13; 3-column email-client layout, compose modal
 - [ ] **Phase 11: Interview Questions** - Screen 14; generate, grouped detail with drag-reorder, export
 - [ ] **Phase 12: Marketing, Auth & Platform Polish** - Screens 01 + 02 + 15, command palette, dark-mode QA, error mapping
@@ -71,7 +71,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User bulk-selects three rows, the sticky action bar appears with a count, and clicking Delete fires `DELETE /upload/{id}` per row with a confirmation modal
   4. User opens the Upload modal, drag-drops two PDFs plus one `.docx` (which is rejected inline with a danger-colored error), submits the remaining PDFs, and watches an indeterminate progress bar with rotating editorial messages ("Reading resumes...", "Extracting skills...", "Building profiles...") while the close button is disabled and a "don't close" warning is visible
   5. After `POST /upload/batch-parse` completes, the modal shows a per-file success/failure summary with green checks and red error reasons, and the "View candidates" CTA returns the recruiter to the table with the new rows visible
-**Plans**: TBD
+**Plans**:
+- [x] 03-01: Candidates List page (Screen 04) — table/grid views, URL-persisted filters/sort/search/pagination, bulk-delete, row edit/delete (complete 2026-04-29)
+- [x] 03-02: Upload Resumes modal (Screen 05) — dropzone, PDF-only validation, indeterminate progress + rotating messages, per-file result summary (complete 2026-04-29)
 **UI hint**: yes
 
 ### Phase 4: Job Descriptions
@@ -84,7 +86,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User clicks "Create JD", lands on the full-page editor with a large serif title input ("Untitled position" placeholder) and a Notion-style body editor supporting bold/italic/bullet/H2 toolbar
   4. User types a body, blurs the editor, and sees an autosave indicator ("Saved 2s ago"); clicking explicit Save fires `POST /job-descriptions/` and routes back to the grid with the new JD visible
   5. User edits an existing JD, toggles `is_active` off in the right-side settings panel (which fires `PATCH`), and deletes another JD via a confirmation modal that calls `DELETE /job-descriptions/{id}`
-**Plans**: TBD
+**Plans**:
+- [x] 04-01: Job Descriptions list (Screen 07) — grid cards, is_active filter chips, hover-reveal View/Score CTAs, delete modal (complete 2026-04-28)
+- [x] 04-02: JD editor (Screen 08) — serif title input, contentEditable body with Bold/Italic/H2/Bullet toolbar, autosave on blur, is_active toggle in right-side settings panel, explicit Save, delete modal (complete 2026-04-28)
 **UI hint**: yes
 
 ### Phase 5: Scoring Flagship (3-step flow)
@@ -97,7 +101,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User adjusts the threshold slider to 60 and batch size to 20, sees the estimated time update ("~2 min for 50 candidates"), clicks "Start scoring" and Step 2 takes over with an editorial SVG animation, rotating status messages, ETA, progress bar, and a disabled close button
   4. After `POST /score/` completes, Step 3 renders the summary strip (Total/Passed/Average/Highest in serif numerals), the truncated `match_run_id` `#A7F2…3B91` with a copy button, and a sortable table with rank, candidate avatar+name, gradient-colored total score (tabular-nums), passed badge, mini bar chart of `componentScores`, and a 1-line rationale preview
   5. User expands a row to see full rationale prose, the component score table (criterion / weight / score / weighted score / italic evidence quote), and a radar chart; bulk-selects 5 rows and the sticky bar offers "Add 5 to shortlist", "Export", "Draft outreach for 5"
-**Plans**: TBD
+**Plans**:
+- [x] 05-01: Step 1 Setup — JD dropdown with body preview, All/Specific candidate selector with search, weight sliders + live donut chart, threshold + batch size sliders, estimated time, Start button (complete 2026-04-28)
+- [x] 05-02: Step 2 Processing — editorial pulsing animation, rotating status messages, indeterminate progress bar, elapsed timer, disabled Cancel (complete 2026-04-28)
+- [x] 05-03: Step 3 Results — 4-card summary strip, match_run_id copy, sortable table with expand rows (full rationale + component score table + radar chart), bulk action sticky bar (complete 2026-04-28)
 **UI hint**: yes
 
 ### Phase 6: AI Recruiter Chat
@@ -110,7 +117,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. When the response includes matched candidates, inline candidate cards render below the message in a horizontal scroll/grid (avatar + name + top 3 skills + "View" link) with a "Found N candidates" caption
   4. User reopens a past session from the sidebar, message history loads via `GET /chat/{session_id}`, and renaming the session inline persists; deleting the session removes it from the sidebar
   5. After a backend restart triggers a 404 on `session_id`, the frontend silently starts a fresh session, shows a toast "Session expired, started new conversation", and the user's next message succeeds
-**Plans**: TBD
+**Plans**:
+- [x] 06-01: Chat route — sessions sidebar (localStorage persistence), prose chat panel, inline candidate cards, session expiry recovery (complete 2026-04-28)
 **UI hint**: yes
 
 ### Phase 7: Candidate Detail Hub
@@ -136,7 +144,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User clicks any of the four Quick Action buttons in the 1/3 right card (Upload resumes / Create JD / Start scoring / Open chat) and the appropriate modal opens or route loads
   4. The Top shortlist collections row shows 3-4 most recent collections as cards with item counts, and the Editorial Insight side card surfaces an LLM-style headline observation about the pool
   5. With no data present (empty backend), the Dashboard switches to an onboarding checklist of 4 steps with progress checkmarks instead of empty metric cards
-**Plans**: TBD
+**Plans**:
+- [x] 08-01: Dashboard route — greeting, 4 metric cards with sparklines + % change, activity feed, quick actions, editorial insight, onboarding checklist, top collections (complete 2026-04-28)
 **UI hint**: yes
 
 ### Phase 9: Shortlists & Collection Detail
@@ -162,7 +171,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User clicks "+ New message", picks a candidate, toggles content source AI-draft vs Template, types subject + body, clicks Save and `POST /outreach/` succeeds with the new message appearing in the Not sent folder
   4. User opens an existing message in detail, edits the body, clicks "Mark as sent" and `PATCH /outreach/{id}` sets `sent_status=sent` with the server filling `sent_at`; the badge flips to green and the message moves to the Sent folder
   5. User deletes a message via the detail panel action; `DELETE /outreach/{id}` returns 204 (handled), the message disappears from the list, and a toast confirms the action
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 10-01-PLAN.md — 3-column shell, folder sidebar, message list, URL persistence (OUT-01, OUT-02)
+- [ ] 10-02-PLAN.md — detail panel, compose modal, edit/mark-sent/delete mutations (OUT-03, OUT-04, OUT-05, OUT-06)
 **UI hint**: yes
 
 ### Phase 11: Interview Questions
@@ -201,12 +212,12 @@ Phases execute in numeric order. Phases 1-2 are strictly sequential (foundation 
 | 1. Foundation & Design System | 4/4 | Complete | 2026-04-28 |
 | 2. Primitives Library | 5/5 | Complete | 2026-04-28 |
 | 3. Candidates List & Upload Flow | 0/TBD | Not started | - |
-| 4. Job Descriptions | 0/TBD | Not started | - |
-| 5. Scoring Flagship (3-step flow) | 0/TBD | Not started | - |
-| 6. AI Recruiter Chat | 0/TBD | Not started | - |
-| 7. Candidate Detail Hub | 0/TBD | Not started | - |
-| 8. Dashboard | 0/TBD | Not started | - |
-| 9. Shortlists & Collection Detail | 0/TBD | Not started | - |
-| 10. Outreach Messages | 0/TBD | Not started | - |
+| 4. Job Descriptions | 2/2 | Complete | 2026-04-28 |
+| 5. Scoring Flagship (3-step flow) | 3/3 | Complete | 2026-04-28 |
+| 6. AI Recruiter Chat | 1/1 | Complete | 2026-04-28 |
+| 7. Candidate Detail Hub | 1/1 | Complete | 2026-04-28 |
+| 8. Dashboard | 1/1 | Complete | 2026-04-28 |
+| 9. Shortlists & Collection Detail | 2/2 | Complete | 2026-04-28 |
+| 10. Outreach Messages | 0/2 | Planned | - |
 | 11. Interview Questions | 0/TBD | Not started | - |
 | 12. Marketing, Auth & Platform Polish | 0/TBD | Not started | - |
