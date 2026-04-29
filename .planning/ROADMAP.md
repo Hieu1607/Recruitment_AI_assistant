@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: Shortlists & Collection Detail** - Screens 11 + 12; collections, query history, items management (complete 2026-04-28)
 - [x] **Phase 10: Outreach Messages** - Screen 13; 3-column email-client layout, compose modal (complete 2026-04-29)
 - [x] **Phase 11: Interview Questions** - Screen 14; generate, grouped detail with drag-reorder, export (complete 2026-04-29)
-- [ ] **Phase 12: Marketing, Auth & Platform Polish** - Screens 01 + 02 + 15, command palette, dark-mode QA, error mapping
+- [x] **Phase 12: Marketing, Auth & Platform Polish** - Screens 01 + 02 + 15, command palette, dark-mode QA, error mapping (complete 2026-04-29)
 
 ## Phase Details
 
@@ -220,4 +220,4 @@ Phases execute in numeric order. Phases 1-2 are strictly sequential (foundation 
 | 9. Shortlists & Collection Detail | 2/2 | Complete | 2026-04-28 |
 | 10. Outreach Messages | 2/2 | Complete | 2026-04-29 |
 | 11. Interview Questions | 2/2 | Complete | 2026-04-29 |
-| 12. Marketing, Auth & Platform Polish | 0/TBD | Not started | - |
+| 12. Marketing, Auth & Platform Polish | 2/2 | Complete | 2026-04-29 |
