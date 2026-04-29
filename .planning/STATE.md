@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-27)
 
 **Core value:** Recruiters can run their full hiring loop (upload → score → chat → shortlist → outreach → interview prep) through a polished editorial UI talking to the existing FastAPI backend.
-**Current focus:** Phase 3 — Candidates List & Upload Flow
+**Current focus:** Phase 4 — Job Descriptions
 
 ## Current Position
 
-Phase: 2 of 12 (Primitives Library) — COMPLETE
-Plan: 5 of 5 (02-01 Button/Badge/Avatar/FilterChip + 02-02 DataTable/Pagination + 02-03 Modal/Tooltip + 02-04 EmptyState/Skeleton/ScoreVisualization + 02-05 /dev/primitives showcase — Phase 2 DONE)
-Status: Phase 2 complete — ready for Phase 3
-Last activity: 2026-04-28 — Executed 02-01 through 02-05 (full Primitives Library: 12 components + /dev/primitives showcase)
+Phase: 10 of 12 (Outreach Messages) — PLANNED
+Plan: 0 of 2 (ready to execute)
+Status: Phase 10 planned — ready to execute
+Last activity: 2026-04-29 — Phase 10 planned: 10-01-PLAN.md (3-column shell + folder sidebar + message list + URL persistence) + 10-02-PLAN.md (detail panel + compose modal + mutations). Checker found 3 blockers + 2 warnings; all fixed in revision. Plans ready.
 
-Progress: [████████░░] 17%
+Progress: [████████████░░] 25%
 
 ## Performance Metrics
 
@@ -93,6 +93,6 @@ Deferred (not blockers): W-2 Geist family-name verification (smoke-test during e
 
 ## Session Continuity
 
-Last session: 2026-04-28
-Stopped at: Phase 2 complete — all 5 plans executed (02-01 Button/Badge/Avatar/FilterChip, 02-02 DataTable/Pagination, 02-03 Modal/Tooltip, 02-04 EmptyState/Skeleton/ScoreVisualization, 02-05 /dev/primitives showcase). Next: Phase 3 (Candidates List & Upload Flow)
-Resume file: None
+Last session: 2026-04-29
+Stopped at: Phase 10 planned — 2 PLAN.md files written and checker-verified. Next: /gsd-execute-phase 10
+Resume file: .planning/phases/10-outreach-messages/10-01-PLAN.md
