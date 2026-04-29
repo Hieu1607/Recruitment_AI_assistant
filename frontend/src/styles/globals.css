@@ -109,3 +109,14 @@
     font-family: var(--font-mono);
   }
 }
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(400%); }
+}

@@ -1,12 +1,793 @@
-import { RoutePlaceholder } from "@/components/RoutePlaceholder";
+import { api, type CollectionResponse, type ResumeResponse } from "@/api";
+import { UploadModal } from "@/components/candidates/UploadModal";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cn";
+import { useQuery } from "@tanstack/react-query";
+import {
+    ArrowRight,
+    BarChart3,
+    CheckCircle2,
+    Circle,
+    FileText,
+    FileUp,
+    Layers,
+    Mail,
+    MessageSquare,
+    Sparkles,
+    TrendingDown,
+    TrendingUp,
+    Upload,
+    Users,
+} from "lucide-react";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router";
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+function timeGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function todayLabel(): string {
+  return new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return "—";
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function dayKey(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function buildSparkline(dates: (string | null)[], days = 7): number[] {
+  const counts: Record<string, number> = {};
+  const today = new Date();
+  const keys: string[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const k = d.toISOString().slice(0, 10);
+    keys.push(k);
+    counts[k] = 0;
+  }
+  for (const iso of dates) {
+    if (!iso) continue;
+    const k = dayKey(iso);
+    if (k in counts) counts[k]++;
+  }
+  return keys.map((k) => counts[k]);
+}
+
+function pctChange(current: number, previous: number): number | null {
+  if (previous === 0) return current > 0 ? 100 : null;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+function fileToName(f: string): string {
+  return (
+    f
+      .replace(/\.pdf$/i, "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .trim() || f
+  );
+}
+
+// ── Sparkline SVG ─────────────────────────────────────────────────────────────
+
+function Sparkline({ values, color = "var(--accent)" }: { values: number[]; color?: string }) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+  const W = 64;
+  const H = 24;
+  const pts = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * W;
+    const y = H - (v / max) * (H - 2) - 1;
+    return `${x},${y}`;
+  });
+  const d = `M${pts.join(" L")}`;
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} fill="none" aria-hidden="true">
+      <path d={d} stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ── MetricCard ─────────────────────────────────────────────────────────────────
+
+function MetricCard({
+  label,
+  value,
+  change,
+  sparkValues,
+  icon: Icon,
+  loading,
+}: {
+  label: string;
+  value: number;
+  change: number | null;
+  sparkValues: number[];
+  icon: React.ElementType;
+  loading: boolean;
+}) {
+  const positive = change !== null && change >= 0;
+  return (
+    <div
+      className={cn(
+        "rounded-[var(--radius-lg)] border border-[color:var(--hairline)]",
+        "bg-bg-elevated p-5 flex flex-col gap-3",
+      )}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-sans font-medium text-fg-muted uppercase tracking-widest">
+          {label}
+        </span>
+        <span className="h-8 w-8 rounded-[var(--radius-md)] bg-[color:var(--hairline)] flex items-center justify-center">
+          <Icon size={15} strokeWidth={1.75} className="text-fg-muted" />
+        </span>
+      </div>
+      {loading ? (
+        <>
+          <Skeleton className="h-8 w-24" />
+          <Skeleton className="h-4 w-16" />
+        </>
+      ) : (
+        <>
+          <p className="font-display text-3xl font-medium text-fg tabular-nums leading-none">
+            {value.toLocaleString()}
+          </p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              {change !== null ? (
+                <>
+                  {positive ? (
+                    <TrendingUp size={12} strokeWidth={2} className="text-success" />
+                  ) : (
+                    <TrendingDown size={12} strokeWidth={2} className="text-danger" />
+                  )}
+                  <span
+                    className={cn(
+                      "text-xs font-sans font-medium tabular-nums",
+                      positive ? "text-success" : "text-danger",
+                    )}
+                  >
+                    {positive ? "+" : ""}
+                    {change}% vs last week
+                  </span>
+                </>
+              ) : (
+                <span className="text-xs font-sans text-fg-subtle">No prior data</span>
+              )}
+            </div>
+            <Sparkline values={sparkValues} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── ActivityItem ──────────────────────────────────────────────────────────────
+
+type ActivityKind = "upload" | "outreach" | "chat" | "scoring";
+
+interface ActivityEntry {
+  id: string;
+  kind: ActivityKind;
+  label: string;
+  sub?: string;
+  timestamp: string | null;
+}
+
+const ACTIVITY_ICONS: Record<ActivityKind, React.ElementType> = {
+  upload: Upload,
+  outreach: Mail,
+  chat: MessageSquare,
+  scoring: BarChart3,
+};
+
+const ACTIVITY_COLORS: Record<ActivityKind, string> = {
+  upload: "text-accent",
+  outreach: "text-warning",
+  chat: "text-success",
+  scoring: "text-fg-muted",
+};
+
+function ActivityItem({ entry }: { entry: ActivityEntry }) {
+  const Icon = ACTIVITY_ICONS[entry.kind];
+  return (
+    <div className="flex items-start gap-3 py-3 hairline-b last:border-b-0">
+      <div
+        className={cn(
+          "h-7 w-7 shrink-0 rounded-full bg-[color:var(--hairline)] flex items-center justify-center mt-0.5",
+        )}
+      >
+        <Icon size={13} strokeWidth={1.75} className={ACTIVITY_COLORS[entry.kind]} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-sans text-fg leading-snug truncate">{entry.label}</p>
+        {entry.sub && (
+          <p className="text-xs font-sans text-fg-subtle mt-0.5 truncate">{entry.sub}</p>
+        )}
+      </div>
+      <span
+        className="text-xs font-sans text-fg-subtle whitespace-nowrap ml-2 mt-0.5 tabular-nums"
+        title={entry.timestamp ? new Date(entry.timestamp).toUTCString() : ""}
+      >
+        {relativeTime(entry.timestamp)}
+      </span>
+    </div>
+  );
+}
+
+// ── QuickActionButton ─────────────────────────────────────────────────────────
+
+function QuickActionButton({
+  icon: Icon,
+  label,
+  description,
+  onClick,
+}: {
+  icon: React.ElementType;
+  label: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-3 px-4 py-3 rounded-[var(--radius-md)] text-left",
+        "border border-[color:var(--hairline)] bg-bg",
+        "hover:border-[color:var(--hairline-strong)] hover:shadow-[var(--shadow-sm)] hover:bg-bg-elevated",
+        "transition-all duration-[var(--duration-fast)] group",
+      )}
+    >
+      <div className="h-8 w-8 shrink-0 rounded-[var(--radius-md)] bg-accent/10 flex items-center justify-center">
+        <Icon size={15} strokeWidth={1.75} className="text-accent" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-sans font-medium text-fg leading-none mb-0.5">{label}</p>
+        <p className="text-xs font-sans text-fg-subtle">{description}</p>
+      </div>
+      <ArrowRight
+        size={14}
+        strokeWidth={1.75}
+        className="text-fg-subtle opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+      />
+    </button>
+  );
+}
+
+// ── CollectionCard ────────────────────────────────────────────────────────────
+
+function CollectionCard({ col }: { col: CollectionResponse }) {
+  return (
+    <Link
+      to="/shortlists"
+      className={cn(
+        "flex items-center justify-between px-4 py-3 rounded-[var(--radius-md)]",
+        "border border-[color:var(--hairline)] bg-bg",
+        "hover:border-[color:var(--hairline-strong)] hover:shadow-[var(--shadow-sm)]",
+        "transition-all duration-[var(--duration-fast)]",
+      )}
+    >
+      <div className="flex items-center gap-2.5 min-w-0">
+        <Layers size={13} strokeWidth={1.75} className="text-fg-muted shrink-0" />
+        <span className="text-sm font-sans text-fg truncate">{col.name}</span>
+      </div>
+      <span
+        className={cn(
+          "shrink-0 ml-3 text-xs font-sans font-medium tabular-nums px-2 py-0.5",
+          "rounded-full bg-[color:var(--hairline)] text-fg-muted",
+        )}
+      >
+        {col.item_count}
+      </span>
+    </Link>
+  );
+}
+
+// ── EditorialInsight ──────────────────────────────────────────────────────────
+
+function EditorialInsight({
+  totalCandidates,
+  processedToday,
+  activeJDs,
+  pendingOutreach,
+}: {
+  totalCandidates: number;
+  processedToday: number;
+  activeJDs: number;
+  pendingOutreach: number;
+}) {
+  let headline = "Your talent pool is growing steadily.";
+  let body = "Keep uploading resumes and scoring candidates to surface top matches.";
+
+  if (totalCandidates === 0) {
+    headline = "Start by uploading your first resumes.";
+    body = "Parse PDFs to build candidate profiles and unlock AI scoring.";
+  } else if (pendingOutreach > 5) {
+    headline = `${pendingOutreach} outreach messages are waiting to be sent.`;
+    body = "Review and send your drafted messages to keep candidates engaged.";
+  } else if (processedToday > 0) {
+    headline = `${processedToday} resume${processedToday > 1 ? "s" : ""} processed today.`;
+    body =
+      activeJDs > 0
+        ? `Score them against your ${activeJDs} active job description${activeJDs > 1 ? "s" : ""} to rank candidates.`
+        : "Create a job description to start scoring your new candidates.";
+  } else if (activeJDs === 0 && totalCandidates > 0) {
+    headline = "No active job descriptions yet.";
+    body = "Create a JD to start the AI scoring workflow and surface your best-fit candidates.";
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded-[var(--radius-lg)] border border-[color:var(--hairline)]",
+        "bg-bg-elevated p-4",
+      )}
+    >
+      <div className="flex items-center gap-2 mb-2.5">
+        <Sparkles size={13} strokeWidth={1.75} className="text-accent shrink-0" />
+        <span className="text-[10px] font-sans font-semibold uppercase tracking-widest text-fg-subtle">
+          AI Insight
+        </span>
+      </div>
+      <p className="font-display text-sm font-medium text-fg leading-snug mb-1.5">{headline}</p>
+      <p className="text-xs font-sans text-fg-muted leading-relaxed">{body}</p>
+    </div>
+  );
+}
+
+// ── OnboardingChecklist ───────────────────────────────────────────────────────
+
+const ONBOARDING_STEPS = [
+  {
+    id: "upload",
+    label: "Upload your first resumes",
+    sub: "Parse PDF CVs into structured candidate profiles",
+    href: "/candidates",
+  },
+  {
+    id: "jd",
+    label: "Create a job description",
+    sub: "Define the role you're hiring for",
+    href: "/job-descriptions",
+  },
+  {
+    id: "score",
+    label: "Run AI scoring",
+    sub: "Rank candidates against the JD with weighted criteria",
+    href: "/scoring",
+  },
+  {
+    id: "chat",
+    label: "Ask the AI Recruiter",
+    sub: "Query your candidate pool in natural language",
+    href: "/chat",
+  },
+];
+
+function OnboardingChecklist({
+  hasCandidates,
+  hasJDs,
+}: {
+  hasCandidates: boolean;
+  hasJDs: boolean;
+}) {
+  const statuses = {
+    upload: hasCandidates,
+    jd: hasJDs,
+    score: false,
+    chat: false,
+  };
+  const done = Object.values(statuses).filter(Boolean).length;
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="mb-6">
+        <h2 className="font-display text-xl font-medium text-fg mb-1">Get started</h2>
+        <p className="text-sm font-sans text-fg-muted">
+          Complete these steps to set up your recruitment workflow.
+        </p>
+        <div className="mt-3 h-1.5 rounded-full bg-[color:var(--hairline)] overflow-hidden">
+          <div
+            className="h-full bg-accent rounded-full transition-all duration-500"
+            style={{ width: `${(done / ONBOARDING_STEPS.length) * 100}%` }}
+          />
+        </div>
+        <p className="text-xs font-sans text-fg-subtle mt-1.5 tabular-nums">
+          {done} of {ONBOARDING_STEPS.length} complete
+        </p>
+      </div>
+      <div className="space-y-2">
+        {ONBOARDING_STEPS.map((step) => {
+          const completed = statuses[step.id as keyof typeof statuses];
+          return (
+            <Link
+              key={step.id}
+              to={step.href}
+              className={cn(
+                "flex items-center gap-4 px-5 py-4 rounded-[var(--radius-lg)]",
+                "border border-[color:var(--hairline)] transition-all duration-[var(--duration-fast)]",
+                completed
+                  ? "bg-success/5 border-success/20"
+                  : "bg-bg-elevated hover:border-[color:var(--hairline-strong)] hover:shadow-[var(--shadow-sm)]",
+              )}
+            >
+              {completed ? (
+                <CheckCircle2 size={20} strokeWidth={1.75} className="text-success shrink-0" />
+              ) : (
+                <Circle size={20} strokeWidth={1.75} className="text-fg-subtle shrink-0" />
+              )}
+              <div className="flex-1 min-w-0">
+                <p
+                  className={cn(
+                    "text-sm font-sans font-medium",
+                    completed ? "text-fg-muted line-through" : "text-fg",
+                  )}
+                >
+                  {step.label}
+                </p>
+                <p className="text-xs font-sans text-fg-subtle mt-0.5">{step.sub}</p>
+              </div>
+              {!completed && (
+                <ArrowRight size={14} strokeWidth={1.75} className="text-fg-subtle shrink-0" />
+              )}
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── main component ─────────────────────────────────────────────────────────────
+
+const DEMO_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 export default function DashboardRoute() {
+  const navigate = useNavigate();
+  const [uploadOpen, setUploadOpen] = useState(false);
+
+  // ── data queries ──────────────────────────────────────────────────────────
+
+  const { data: uploadsData, isLoading: uploadsLoading } = useQuery({
+    queryKey: ["dashboard-uploads"],
+    queryFn: () => api.upload.list({ limit: 500 }),
+    staleTime: 60_000,
+  });
+
+  const { data: jdsData, isLoading: jdsLoading } = useQuery({
+    queryKey: ["dashboard-jds"],
+    queryFn: () => api.jobDescriptions.list({ limit: 500 }),
+    staleTime: 60_000,
+  });
+
+  const { data: pendingOutreachData, isLoading: outreachLoading } = useQuery({
+    queryKey: ["dashboard-outreach-pending"],
+    queryFn: () => api.outreach.list({ sent_status: "not_sent", limit: 1 }),
+    staleTime: 60_000,
+  });
+
+  const { data: recentOutreachData } = useQuery({
+    queryKey: ["dashboard-outreach-recent"],
+    queryFn: () => api.outreach.list({ limit: 10 }),
+    staleTime: 60_000,
+  });
+
+  const { data: collectionsData } = useQuery({
+    queryKey: ["dashboard-collections"],
+    queryFn: () =>
+      api.shortlist.collections.list({ user_id: DEMO_USER_ID, limit: 4 }).catch(() => ({
+        items: [] as CollectionResponse[],
+        total: 0,
+      })),
+    staleTime: 60_000,
+  });
+
+  // ── derived values ────────────────────────────────────────────────────────
+
+  const allUploads: ResumeResponse[] = uploadsData?.items ?? [];
+  const totalCandidates = uploadsData?.total ?? allUploads.length;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const processedToday = allUploads.filter(
+    (r) => r.uploaded_at && dayKey(r.uploaded_at) === todayStr,
+  ).length;
+
+  const activeJDs = (jdsData?.items ?? []).filter((j) => j.is_active).length;
+  const pendingOutreach = pendingOutreachData?.total ?? 0;
+
+  const isMetricLoading = uploadsLoading || jdsLoading || outreachLoading;
+
+  // ── sparklines ────────────────────────────────────────────────────────────
+
+  const uploadDates = allUploads.map((r) => r.uploaded_at);
+  const candidateSparkline = buildSparkline(uploadDates, 7);
+
+  const jdDates = (jdsData?.items ?? []).filter((j) => j.is_active).map((j) => j.created_at);
+  const jdSparkline = buildSparkline(jdDates, 7);
+
+  const outreachDates = (recentOutreachData?.items ?? []).map((o) => o.created_at);
+  const outreachSparkline = buildSparkline(outreachDates, 7);
+
+  const todayUploads = buildSparkline(uploadDates, 7)[6] ?? 0;
+  const prevUploads = buildSparkline(uploadDates, 14).slice(0, 7).reduce((a, b) => a + b, 0);
+  const thisWeekUploads = buildSparkline(uploadDates, 7).reduce((a, b) => a + b, 0);
+
+  // ── % change for metric cards ─────────────────────────────────────────────
+
+  const candidateChange = pctChange(thisWeekUploads, prevUploads);
+  const todayChange = (() => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    const yesterdayCount = allUploads.filter(
+      (r) => r.uploaded_at && dayKey(r.uploaded_at) === yesterdayStr,
+    ).length;
+    return pctChange(processedToday, yesterdayCount);
+  })();
+  const jdChange = pctChange(
+    (jdsData?.items ?? []).filter((j) => j.is_active).length,
+    Math.max((jdsData?.items ?? []).length - activeJDs, 0),
+  );
+  const outreachChange = pctChange(pendingOutreach, 0);
+
+  // ── activity feed ─────────────────────────────────────────────────────────
+
+  const activityEntries: ActivityEntry[] = [];
+
+  for (const r of allUploads.slice(0, 8)) {
+    activityEntries.push({
+      id: `upload-${r.id}`,
+      kind: "upload",
+      label: `Resume uploaded: ${fileToName(r.original_file_name)}`,
+      sub:
+        r.upload_status === "processed"
+          ? "Profile parsed successfully"
+          : `Status: ${r.upload_status}`,
+      timestamp: r.uploaded_at,
+    });
+  }
+
+  for (const o of (recentOutreachData?.items ?? []).slice(0, 5)) {
+    activityEntries.push({
+      id: `outreach-${o.id}`,
+      kind: "outreach",
+      label: `Outreach drafted: ${o.subject}`,
+      sub: o.candidate_full_name ?? undefined,
+      timestamp: o.created_at,
+    });
+  }
+
+  activityEntries.sort((a, b) => {
+    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return tb - ta;
+  });
+
+  const recentActivity = activityEntries.slice(0, 12);
+
+  // ── empty state detection ─────────────────────────────────────────────────
+
+  const isEmpty =
+    !isMetricLoading && totalCandidates === 0 && (jdsData?.items ?? []).length === 0;
+
+  const collections = collectionsData?.items ?? [];
+
+  // ── render ────────────────────────────────────────────────────────────────
+
   return (
-    <RoutePlaceholder
-      screen="Dashboard"
-      description="Recruiter overview — metric cards, recent activity, quick actions, editorial insight."
-      phase="Phase 8"
-      requirements={["DASH-01", "DASH-02", "DASH-03", "DASH-04", "DASH-05", "DASH-06", "DASH-07"]}
-    />
+    <div className="px-8 py-8 min-h-full">
+      {/* ── Greeting ── */}
+      <div className="mb-8">
+        <h1 className="font-display text-[2.25rem] font-medium text-fg leading-tight">
+          {timeGreeting()}, Hieu.
+        </h1>
+        <p className="text-sm font-sans text-fg-muted mt-1">{todayLabel()}</p>
+      </div>
+
+      {isEmpty ? (
+        /* ── Onboarding empty state ── */
+        <OnboardingChecklist hasCandidates={false} hasJDs={false} />
+      ) : (
+        <>
+          {/* ── Metric cards ── */}
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
+            <MetricCard
+              label="Total Candidates"
+              value={totalCandidates}
+              change={candidateChange}
+              sparkValues={candidateSparkline}
+              icon={Users}
+              loading={uploadsLoading}
+            />
+            <MetricCard
+              label="Processed Today"
+              value={processedToday}
+              change={todayChange}
+              sparkValues={candidateSparkline.map((v, i) =>
+                i === candidateSparkline.length - 1 ? todayUploads : v,
+              )}
+              icon={FileUp}
+              loading={uploadsLoading}
+            />
+            <MetricCard
+              label="Active JDs"
+              value={activeJDs}
+              change={jdChange}
+              sparkValues={jdSparkline}
+              icon={FileText}
+              loading={jdsLoading}
+            />
+            <MetricCard
+              label="Pending Outreach"
+              value={pendingOutreach}
+              change={outreachChange}
+              sparkValues={outreachSparkline}
+              icon={Mail}
+              loading={outreachLoading}
+            />
+          </div>
+
+          {/* ── Content columns ── */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* ── Left: Activity feed (2/3) ── */}
+            <div className="xl:col-span-2">
+              <div
+                className={cn(
+                  "rounded-[var(--radius-lg)] border border-[color:var(--hairline)]",
+                  "bg-bg-elevated h-full",
+                )}
+              >
+                <div className="px-5 py-4 hairline-b flex items-center justify-between">
+                  <h2 className="font-display text-base font-medium text-fg">Recent Activity</h2>
+                  <Link
+                    to="/candidates"
+                    className="text-xs font-sans text-fg-muted hover:text-accent transition-colors"
+                  >
+                    View all →
+                  </Link>
+                </div>
+                <div className="px-5">
+                  {isMetricLoading ? (
+                    <div className="py-4 space-y-4">
+                      {Array.from({ length: 6 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-3">
+                          <Skeleton width={28} height={28} rounded />
+                          <div className="flex-1 space-y-1.5">
+                            <Skeleton className="h-3.5 w-3/4" />
+                            <Skeleton className="h-3 w-1/2" />
+                          </div>
+                          <Skeleton className="h-3 w-12" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : recentActivity.length === 0 ? (
+                    <div className="py-12 text-center">
+                      <p className="text-sm font-sans text-fg-muted">No activity yet.</p>
+                      <p className="text-xs font-sans text-fg-subtle mt-1">
+                        Upload resumes or create outreach messages to see activity here.
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      {recentActivity.map((entry) => (
+                        <ActivityItem key={entry.id} entry={entry} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Right column (1/3) ── */}
+            <div className="flex flex-col gap-5">
+              {/* Quick Actions */}
+              <div
+                className={cn(
+                  "rounded-[var(--radius-lg)] border border-[color:var(--hairline)]",
+                  "bg-bg-elevated",
+                )}
+              >
+                <div className="px-4 py-3.5 hairline-b">
+                  <h2 className="font-display text-base font-medium text-fg">Quick Actions</h2>
+                </div>
+                <div className="p-3 space-y-2">
+                  <QuickActionButton
+                    icon={FileUp}
+                    label="Upload resumes"
+                    description="Parse new PDF CVs"
+                    onClick={() => setUploadOpen(true)}
+                  />
+                  <QuickActionButton
+                    icon={FileText}
+                    label="Create JD"
+                    description="Write a new job description"
+                    onClick={() => navigate("/job-descriptions/new")}
+                  />
+                  <QuickActionButton
+                    icon={BarChart3}
+                    label="Start scoring"
+                    description="Rank candidates by fit"
+                    onClick={() => navigate("/scoring")}
+                  />
+                  <QuickActionButton
+                    icon={MessageSquare}
+                    label="Open AI Chat"
+                    description="Query your candidate pool"
+                    onClick={() => navigate("/chat")}
+                  />
+                </div>
+              </div>
+
+              {/* Editorial Insight */}
+              <EditorialInsight
+                totalCandidates={totalCandidates}
+                processedToday={processedToday}
+                activeJDs={activeJDs}
+                pendingOutreach={pendingOutreach}
+              />
+
+              {/* Top Collections */}
+              {collections.length > 0 && (
+                <div
+                  className={cn(
+                    "rounded-[var(--radius-lg)] border border-[color:var(--hairline)]",
+                    "bg-bg-elevated",
+                  )}
+                >
+                  <div className="px-4 py-3.5 hairline-b flex items-center justify-between">
+                    <h2 className="font-display text-base font-medium text-fg">
+                      Top Collections
+                    </h2>
+                    <Link
+                      to="/shortlists"
+                      className="text-xs font-sans text-fg-muted hover:text-accent transition-colors"
+                    >
+                      All →
+                    </Link>
+                  </div>
+                  <div className="p-3 space-y-2">
+                    {collections.map((col) => (
+                      <CollectionCard key={col.id} col={col} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Upload modal triggered from Quick Actions */}
+      <UploadModal
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        onComplete={() => {}}
+      />
+    </div>
   );
 }
