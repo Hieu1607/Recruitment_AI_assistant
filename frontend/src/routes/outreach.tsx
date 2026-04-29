@@ -1,11 +1,14 @@
-import type { OutreachResponse, SentStatus, ResumeResponse } from "@/api";
+import type { OutreachResponse, SentStatus, ResumeResponse, ContentSource } from "@/api";
 import { api } from "@/api";
-import { Badge, Button, EmptyState, Skeleton } from "@/components/ui";
+import { Badge, Button, EmptyState, Skeleton, Modal, ModalContent, ModalHeader, ModalTitle, ModalDescription, ModalFooter } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Inbox, Mail } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
+import { toast } from "sonner";
+
+const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 type FolderKey = "all" | "not_sent" | "sent" | "failed";
 
@@ -233,22 +236,447 @@ function MessageList({
   );
 }
 
-function DetailPanelPlaceholder() {
-  return (
-    <div className="flex-1 flex flex-col min-w-0 bg-bg">
-      <div className="flex-1 flex items-center justify-center">
+function MessageDetailPanel({
+  messageId,
+  onClose,
+}: {
+  messageId: string | undefined;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+
+  // Fetch the selected message
+  const { data: message, isLoading, isError } = useQuery({
+    queryKey: ["outreach-message", messageId],
+    queryFn: () => api.outreach.get(messageId!),
+    enabled: !!messageId,
+    staleTime: 30_000,
+  });
+
+  // Local edit state
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  // Sync local state when message loads or messageId changes
+  useEffect(() => {
+    if (message) {
+      setSubject(message.subject);
+      setBody(message.body);
+      setDeleteConfirm(false);
+    }
+  }, [message?.id, message?.subject, message?.body]);
+
+  const isDirty = message ? (subject !== message.subject || body !== message.body) : false;
+
+  // Edit save mutation
+  const editMutation = useMutation({
+    mutationFn: () => api.outreach.update(messageId!, { subject: subject.trim(), body: body.trim() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["outreach-message", messageId] });
+      toast.success("Message saved");
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onError: (err: any) => {
+      if (err?.response?.status === 404) {
+        toast.error("Message no longer exists");
+        onClose();
+      } else {
+        toast.error("Something went wrong. Please try again.");
+      }
+    },
+  });
+
+  // Mark as sent mutation
+  const markSentMutation = useMutation({
+    mutationFn: () => api.outreach.update(messageId!, { sent_status: "sent" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["outreach-count"] });
+      qc.invalidateQueries({ queryKey: ["outreach-message", messageId] });
+      toast.success("Message marked as sent");
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onError: (err: any) => {
+      if (err?.response?.status === 404) {
+        toast.error("Message no longer exists");
+        onClose();
+      } else {
+        toast.error("Something went wrong. Please try again.");
+      }
+    },
+  });
+
+  // Delete mutation — optimistic remove
+  const deleteMutation = useMutation({
+    mutationFn: () => api.outreach.remove(messageId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["outreach-count"] });
+      onClose();
+      toast.success("Message deleted");
+    },
+    onError: () => {
+      toast.error("Something went wrong. Please try again.");
+    },
+  });
+
+  // GET 404: message was deleted elsewhere; show empty state + toast once
+  useEffect(() => {
+    if (isError) {
+      toast.error("This message no longer exists");
+      onClose();
+    }
+  }, [isError, onClose]);
+
+  // Empty state when nothing is selected
+  if (!messageId) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 bg-bg items-center justify-center">
         <EmptyState
           icon={<Mail size={28} strokeWidth={1.25} />}
           heading="Select a message"
           body="Pick any message from the list to read or edit it."
         />
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 bg-bg items-center justify-center">
+        <EmptyState
+          icon={<Mail size={28} strokeWidth={1.25} />}
+          heading="Message not found"
+          body="This message may have been deleted. Return to the message list."
+        />
+      </div>
+    );
+  }
+
+  if (isLoading || !message) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 bg-bg">
+        <div className="h-16 border-b border-[color:var(--hairline)] bg-bg-elevated px-6 flex items-center">
+          <div className="h-5 w-48 bg-[color:var(--hairline)] rounded animate-pulse" />
+        </div>
+        <div className="p-6 space-y-4">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="h-4 bg-[color:var(--hairline)] rounded animate-pulse" style={{ width: `${80 - i * 15}%` }} />)}
+        </div>
+      </div>
+    );
+  }
+
+  const canMarkSent = message.sent_status === "not_sent";
+
+  return (
+    <div className="flex-1 flex flex-col min-w-0 bg-bg">
+      {/* Header strip — 64px */}
+      <div className="h-16 shrink-0 border-b border-[color:var(--hairline)] bg-bg-elevated flex items-center justify-between gap-3 px-6">
+        <span className="font-display text-base font-semibold text-fg truncate flex-1">
+          {message.subject}
+        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {canMarkSent && (
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={markSentMutation.isPending}
+              onClick={() => markSentMutation.mutate()}
+            >
+              Mark as sent
+            </Button>
+          )}
+          {!deleteConfirm ? (
+            <Button variant="danger" size="sm" onClick={() => setDeleteConfirm(true)}>
+              Delete
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 animate-in slide-in-from-top-2 duration-200">
+              <span className="text-xs font-sans text-fg-muted">Delete this message permanently?</span>
+              <Button
+                variant="danger"
+                size="sm"
+                loading={deleteMutation.isPending}
+                onClick={() => deleteMutation.mutate()}
+              >
+                Delete
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setDeleteConfirm(false)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Body area */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {/* Meta row */}
+        <div className="flex items-center gap-3 mb-4">
+          <span className="font-display text-sm font-semibold text-fg">
+            {message.candidate_full_name ?? "Unknown candidate"}
+          </span>
+          <Badge variant="neutral" size="sm" dot={false}>
+            {message.content_source === "ai_draft" ? "AI Draft" : "Template"}
+          </Badge>
+          <Badge variant={STATUS_VARIANT[message.sent_status]} size="sm" dot={false}>
+            {message.sent_status.replace("_", " ")}
+          </Badge>
+          <span className="text-xs font-sans text-fg-subtle tabular-nums">
+            {relativeTime(message.created_at)}
+          </span>
+          {message.sent_at && (
+            <span className="text-xs font-sans text-fg-subtle tabular-nums">
+              Sent {relativeTime(message.sent_at)}
+            </span>
+          )}
+        </div>
+        <div className="border-b border-[color:var(--hairline)] mb-4" />
+
+        {/* Subject input */}
+        <div className="mb-4">
+          <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+            Subject
+          </label>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            className={cn(
+              "w-full h-9 px-3 text-[13px] font-sans text-fg bg-bg rounded-[var(--radius-md)]",
+              "border border-[color:var(--hairline)] focus:border-[color:var(--hairline-strong)]",
+              "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none",
+            )}
+          />
+        </div>
+
+        {/* Body textarea */}
+        <div className="mb-4">
+          <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+            Body
+          </label>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={12}
+            className={cn(
+              "w-full px-3 py-2 text-[14px] font-sans text-fg bg-bg",
+              "border-none outline-none resize-none leading-[1.6]",
+              "placeholder:text-fg-subtle",
+            )}
+            placeholder="Write your message here…"
+            style={{ fieldSizing: "content" } as React.CSSProperties}
+          />
+        </div>
+
+        {/* Save button — only when dirty */}
+        {isDirty && (
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              size="sm"
+              loading={editMutation.isPending}
+              onClick={() => editMutation.mutate()}
+            >
+              Save
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function ComposeModal({
+  candidates,
+  onClose,
+}: {
+  candidates: ResumeResponse[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [candidateId, setCandidateId] = useState("");
+  const [contentSource, setContentSource] = useState<ContentSource>("ai_draft");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [discardWarning, setDiscardWarning] = useState(false);
+  const [candidateError, setCandidateError] = useState(false);
+
+  const hasContent = !!subject.trim() || !!body.trim() || !!candidateId;
+  const canSave = !!candidateId && !!subject.trim() && !!body.trim();
+
+  const composeMutation = useMutation({
+    mutationFn: () =>
+      api.outreach.create({
+        candidate_profile_id: candidateId,
+        created_by_user_id: PLACEHOLDER_USER_ID,
+        content_source: contentSource,
+        subject: subject.trim(),
+        body: body.trim(),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["outreach-count"] });
+      toast.success("Message saved to drafts");
+      onClose();
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onError: (err: any) => {
+      if (err?.response?.status === 404) {
+        setCandidateError(true);
+      } else {
+        toast.error("Something went wrong. Please try again.");
+      }
+    },
+  });
+
+  function handleDiscard() {
+    if (hasContent) {
+      setDiscardWarning(true);
+    } else {
+      onClose();
+    }
+  }
+
+  function candidateLabel(r: ResumeResponse): string {
+    return r.original_file_name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim() || r.original_file_name;
+  }
+
+  return (
+    <Modal open onOpenChange={(open) => !open && handleDiscard()}>
+      <ModalContent className="w-[560px] max-h-[80vh] overflow-y-auto rounded-[var(--radius-lg)]">
+        <ModalHeader>
+          <ModalTitle>New message</ModalTitle>
+          <ModalDescription>Compose an outreach message for a candidate.</ModalDescription>
+        </ModalHeader>
+
+        <div className="mt-4 space-y-4 px-1">
+          {/* Candidate selector */}
+          <div>
+            <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+              Candidate
+            </label>
+            <select
+              value={candidateId}
+              onChange={(e) => { setCandidateId(e.target.value); setCandidateError(false); }}
+              className={cn(
+                "w-full h-9 px-3 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)]",
+                "border focus:outline focus:outline-2 focus:outline-offset-1 outline-none",
+                candidateError
+                  ? "border-danger focus:outline-danger"
+                  : "border-[color:var(--hairline)] focus:outline-accent",
+              )}
+            >
+              <option value="">Select a candidate…</option>
+              {candidates.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {candidateLabel(r)}
+                </option>
+              ))}
+            </select>
+            {candidateError && (
+              <p className="mt-1 text-xs font-sans text-danger">
+                Candidate not found. Please select a different candidate.
+              </p>
+            )}
+          </div>
+
+          {/* Content source toggle */}
+          <div>
+            <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+              Content source
+            </label>
+            <div className="flex rounded-[var(--radius-md)] border border-[color:var(--hairline)] overflow-hidden">
+              {(["ai_draft", "template"] as ContentSource[]).map((src) => (
+                <button
+                  key={src}
+                  type="button"
+                  onClick={() => setContentSource(src)}
+                  className={cn(
+                    "flex-1 px-4 py-2 text-sm font-sans transition-colors",
+                    contentSource === src
+                      ? "bg-accent text-accent-fg font-medium"
+                      : "bg-bg text-fg-muted hover:bg-[color:var(--hairline)]",
+                  )}
+                >
+                  {src === "ai_draft" ? "AI Draft" : "Template"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Subject */}
+          <div>
+            <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+              Subject
+            </label>
+            <input
+              type="text"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value.slice(0, 255))}
+              maxLength={255}
+              placeholder="Subject line…"
+              className={cn(
+                "w-full h-9 px-3 text-[13px] font-sans text-fg bg-bg rounded-[var(--radius-md)]",
+                "border border-[color:var(--hairline)] focus:border-[color:var(--hairline-strong)]",
+                "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none",
+              )}
+            />
+          </div>
+
+          {/* Body */}
+          <div>
+            <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+              Body
+            </label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Write your message here…"
+              className={cn(
+                "w-full px-3 py-2 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)]",
+                "border border-[color:var(--hairline)] focus:border-[color:var(--hairline-strong)]",
+                "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none",
+                "resize-none leading-[1.6] min-h-[120px] max-h-[300px] overflow-y-auto",
+              )}
+              style={{ fieldSizing: "content" } as React.CSSProperties}
+            />
+          </div>
+
+          {/* Discard warning — inline, not a modal */}
+          {discardWarning && (
+            <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated px-3 py-2">
+              <span className="text-xs font-sans text-fg-muted flex-1">Discard draft? Your changes will be lost.</span>
+              <Button variant="danger" size="sm" onClick={onClose}>Discard</Button>
+              <Button variant="ghost" size="sm" onClick={() => setDiscardWarning(false)}>Keep editing</Button>
+            </div>
+          )}
+        </div>
+
+        <ModalFooter>
+          <Button variant="ghost" size="sm" onClick={handleDiscard}>
+            Discard draft
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!canSave}
+            loading={composeMutation.isPending}
+            onClick={() => composeMutation.mutate()}
+          >
+            Save draft
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
 
 export default function OutreachRoute() {
   const { folder, candidate, messageId, setFolder, setCandidate, setMessage } = useOutreachParams();
+  const [composeOpen, setComposeOpen] = useState(false);
 
   // Fetch candidates for the filter combobox
   const { data: resumeData } = useQuery({
@@ -296,7 +724,7 @@ export default function OutreachRoute() {
         candidates={candidates}
         onFolderChange={setFolder}
         onCandidateChange={setCandidate}
-        onNewMessage={() => {/* Plan 02 will wire this */}}
+        onNewMessage={() => setComposeOpen(true)}
       />
       <MessageList
         messages={messages}
@@ -306,7 +734,8 @@ export default function OutreachRoute() {
         folderLabel={folderDef.label}
         total={listData?.total ?? 0}
       />
-      <DetailPanelPlaceholder />
+      <MessageDetailPanel messageId={messageId} onClose={() => setMessage(undefined)} />
+      {composeOpen && <ComposeModal candidates={candidates} onClose={() => setComposeOpen(false)} />}
     </div>
   );
 }
