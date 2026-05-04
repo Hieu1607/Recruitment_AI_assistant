@@ -1,9 +1,19 @@
-import { useState, FormEvent } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { api } from "@/api";
 import { Button } from "@/components/ui";
-import { Sparkles, ArrowRight } from "lucide-react";
-import { toast } from "sonner";
+import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { ArrowRight, Sparkles } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
+import { toast } from "sonner";
+
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  google_email_not_verified: "Your Google email is not verified. Please verify it and try again.",
+  invalid_state: "Sign-in session expired. Please try again.",
+  missing_params: "Sign-in was cancelled or failed. Please try again.",
+  oauth_failed: "Google sign-in failed. Please try again.",
+  access_denied: "Google sign-in was cancelled.",
+};
 
 export default function LoginRoute() {
   const [searchParams] = useSearchParams();
@@ -14,18 +24,44 @@ export default function LoginRoute() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [isShake, setIsShake] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  useEffect(() => {
+    const error = searchParams.get("error");
+    if (error) {
+      toast.error(OAUTH_ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again.");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!email.includes("@")) {
       setIsShake(true);
       setTimeout(() => setIsShake(false), 500);
       return;
     }
-    
-    // Mock login since auth is not enforced
-    toast.success("Auth not yet enforced — welcome!");
-    navigate("/"); // Will redirect to dashboard since we assume "logged in" in the real app, but for now just go to / (which might be Dashboard or Landing depending on routing logic, actually / is Dashboard if authenticated).
+
+    setIsLoading(true);
+    try {
+      const { access_token } = isSignUp
+        ? await api.auth.register({ email, password, display_name: name })
+        : await api.auth.login({ email, password });
+      api.auth.storeToken(access_token);
+      try {
+        const user = await api.auth.me();
+        useAuthStore.getState().setUser(user);
+      } catch {
+        // non-critical — store hydrated by router loader on next navigation
+      }
+      const redirect = searchParams.get("redirect") ?? "/dashboard";
+      navigate(redirect, { replace: true });
+    } catch {
+      toast.error(isSignUp ? "Could not create account. Email may already be in use." : "Invalid email or password.");
+      setIsShake(true);
+      setTimeout(() => setIsShake(false), 500);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -82,6 +118,27 @@ export default function LoginRoute() {
                 ? "Start your 14-day free trial. No credit card required."
                 : "Enter your details to sign in to your workspace."}
             </p>
+          </div>
+
+          {/* Google OAuth button */}
+          <a
+            href={api.auth.getGoogleLoginUrl(searchParams.get("redirect") ?? "/dashboard")}
+            className="w-full h-12 flex items-center justify-center gap-3 border border-sand-200 rounded-xl hover:bg-sand-50 transition-colors text-sm font-medium text-forest-900"
+          >
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+              <path fill="none" d="M0 0h48v48H0z"/>
+            </svg>
+            Sign in with Google
+          </a>
+
+          <div className="flex items-center gap-3 text-xs text-forest-400">
+            <div className="flex-1 h-px bg-sand-200" />
+            <span>OR</span>
+            <div className="flex-1 h-px bg-sand-200" />
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -145,9 +202,9 @@ export default function LoginRoute() {
               />
             </div>
 
-            <Button type="submit" className="w-full h-12 text-base mt-2">
-              {isSignUp ? "Create account" : "Sign in"}
-              <ArrowRight className="w-4 h-4 ml-2 opacity-50" />
+            <Button type="submit" className="w-full h-12 text-base mt-2" disabled={isLoading}>
+              {isLoading ? (isSignUp ? "Creating account…" : "Signing in…") : isSignUp ? "Create account" : "Sign in"}
+              {!isLoading && <ArrowRight className="w-4 h-4 ml-2 opacity-50" />}
             </Button>
           </form>
 

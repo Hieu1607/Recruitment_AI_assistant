@@ -1,6 +1,7 @@
 export const routes = {
   landing: "/",
   login: "/login",
+  authCallback: "/auth/callback",
   dashboard: "/dashboard",
   candidates: "/candidates",
   candidateDetail: (id: string) => `/candidates/${id}`,
@@ -23,6 +24,7 @@ export const routes = {
 export const routePatterns = {
   landing: "/",
   login: "/login",
+  authCallback: "/auth/callback",
   dashboard: "/dashboard",
   candidates: "/candidates",
   candidateDetail: "/candidates/:id",
