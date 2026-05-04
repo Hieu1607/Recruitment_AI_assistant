@@ -170,7 +170,7 @@ Chạy các lệnh sau, mọi lệnh đều phải pass:
 
 ---
 
-### Sprint 2 — OAuth service layer (pure logic, không endpoint)
+### Sprint 2 — OAuth service layer (pure logic, không endpoint) ✅ DONE (commit: d19c056)
 
 **Goal:** Service module xử lý state signing, token exchange, id_token verification, user upsert. Có unit test. Chưa expose HTTP.
 
@@ -232,7 +232,7 @@ Implementation notes:
 
 ---
 
-### Sprint 3 — FastAPI endpoints
+### Sprint 3 — FastAPI endpoints ✅ DONE (commit: b00ac25)
 
 **Goal:** Wire service vào 2 endpoint mới. Manual test với Google thật.
 
@@ -322,7 +322,7 @@ async def google_callback(
 
 ---
 
-### Sprint 4 — Frontend integration
+### Sprint 4 — Frontend integration ✅ DONE (commit: adea5fd)
 
 **Goal:** Nút "Sign in with Google" trên `/login`, route `/auth/callback` xử lý token, đăng nhập xong vào dashboard.
 
@@ -429,7 +429,7 @@ async def google_callback(
 
 ---
 
-### Sprint 5 — Hardening & Docs
+### Sprint 5 — Hardening & Docs ✅ DONE (commit: bdc4d0c)
 
 **Goal:** Siết security, thêm E2E test tự động, update docs.
 
