@@ -3,6 +3,7 @@ from src.models.job_matching import InterviewQuestionSet, JobDescription, MatchR
 from src.models.outreach import OutreachMessage
 from src.models.query_shortlist import QuerySession, QueryTurn, ShortlistCollection, ShortlistItem
 from src.models.resume_document import ExtractionTrace, ResumeDocument
+from src.models.oauth_identity import OAuthIdentity
 from src.models.user_account import RoleAssignment, UserAccount
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "InterviewQuestionSet",
     "UserAccount",
     "RoleAssignment",
+    "OAuthIdentity",
 ]
