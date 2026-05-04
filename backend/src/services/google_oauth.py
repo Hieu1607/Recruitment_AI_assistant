@@ -1,8 +1,11 @@
+import logging
 import secrets
 import time
 from typing import Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 from joserfc import jwt as joserfc_jwt
 from joserfc.jwk import KeySet
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -143,8 +146,9 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
 
     if user is not None:
         if not email_verified:
+            logger.warning("Google OAuth rejected: email not verified for email=%s", email)
             raise ValueError("google_email_not_verified")
-        # Auto-link
+        # Auto-link existing account
         new_identity = OAuthIdentity(
             user_id=user.id,
             provider="google",
@@ -153,6 +157,7 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
         )
         db.add(new_identity)
         db.commit()
+        logger.info("Google OAuth: linked google identity to existing user_id=%s email=%s", user.id, email)
         return user
 
     # 3. Create new user
@@ -178,4 +183,5 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
     db.add(identity)
     db.commit()
     db.refresh(new_user)
+    logger.info("Google OAuth: created new user user_id=%s email=%s", new_user.id, email)
     return new_user
