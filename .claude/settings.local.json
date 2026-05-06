@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Read(//c/Users/HP/Desktop/**)",
+      "Bash(npx tsc *)",
+      "Bash(docker compose *)",
+      "Bash(docker info *)",
+      "WebFetch(domain:www.figma.com)",
+      "Skill(gsd-plan-phase)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__code-review-graph__semantic_search_nodes_tool"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "code-review-graph"
+  ]
+}
