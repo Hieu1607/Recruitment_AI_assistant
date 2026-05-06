@@ -31,6 +31,15 @@ class TestGoogleLogin:
         location = resp.headers["location"]
         assert "accounts.google.com/o/oauth2/v2/auth" in location
 
+    def test_missing_config_redirects_back_to_login(self):
+        with patch("src.api.v1.endpoints.auth.settings.GOOGLE_CLIENT_ID", ""), patch(
+            "src.api.v1.endpoints.auth.settings.GOOGLE_CLIENT_SECRET", "secret"
+        ):
+            resp = client.get("/api/v1/auth/google/login")
+
+        assert resp.status_code == 302
+        assert "/login?error=oauth_not_configured" in resp.headers["location"]
+
     def test_location_has_required_params(self):
         resp = client.get("/api/v1/auth/google/login")
         location = resp.headers["location"]

@@ -57,6 +57,9 @@ export const router = createBrowserRouter([
     loader: requireAuth,
     children: [
       { path: routePatterns.dashboard, ...lazy(() => import("@/routes/dashboard")) },
+      { path: routePatterns.jobs, ...lazy(() => import("@/routes/jobs/list")) },
+      { path: routePatterns.jobsNew, ...lazy(() => import("@/routes/jobs/edit")) },
+      { path: routePatterns.jobEdit, ...lazy(() => import("@/routes/jobs/edit")) },
       { path: routePatterns.candidates, ...lazy(() => import("@/routes/candidates/list")) },
       { path: routePatterns.candidateDetail, ...lazy(() => import("@/routes/candidates/detail")) },
       { path: routePatterns.jobDescriptions, ...lazy(() => import("@/routes/job-descriptions/list")) },

@@ -141,8 +141,15 @@ def update_me(
 
 @router.get("/google/login")
 def google_login(redirect: str = "/dashboard") -> RedirectResponse:
+    frontend = settings.FRONTEND_BASE_URL.rstrip("/")
     if not redirect.startswith("/") or redirect.startswith("//"):
         redirect = "/dashboard"
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        logger.error("Google OAuth is not configured: missing client ID or secret")
+        return RedirectResponse(
+            f"{frontend}/login?error=oauth_not_configured",
+            status_code=302,
+        )
     url, _ = google_oauth.build_authorize_url(redirect)
     return RedirectResponse(url, status_code=302)
 

@@ -11,6 +11,7 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   google_email_not_verified: "Your Google email is not verified. Please verify it and try again.",
   invalid_state: "Sign-in session expired. Please try again.",
   missing_params: "Sign-in was cancelled or failed. Please try again.",
+  oauth_not_configured: "Google sign-in is not configured for this environment yet.",
   oauth_failed: "Google sign-in failed. Please try again.",
   access_denied: "Google sign-in was cancelled.",
 };

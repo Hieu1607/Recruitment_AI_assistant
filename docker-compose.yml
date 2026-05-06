@@ -24,6 +24,8 @@ services:
   backend:
     build:
       context: ./backend
+    env_file:
+      - ./env
     ports:
       - "8000:8000"
     environment:
@@ -41,11 +43,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
-      - BACKEND_CORS_ORIGINS=["http://localhost:5173"]
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
-      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
+      - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
       - WATCHFILES_FORCE_POLLING=true
     depends_on:
       db:
@@ -61,6 +59,8 @@ services:
   worker:
     build:
       context: ./backend
+    env_file:
+      - ./env
     command: celery -A worker.celery_app worker --loglevel=info
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-recruitment_db}
@@ -77,10 +77,6 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
-      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
     depends_on:
       db:
         condition: service_healthy
@@ -97,6 +93,9 @@ services:
       target: dev
       args:
         VITE_API_BASE_URL: http://localhost:8000/api/v1
+    command: >
+      sh -c "[ -d /app/node_modules/@tailwindcss/vite ] || npm install;
+             npm run dev"
     ports:
       - "5173:5173"
     volumes:

@@ -1,8 +1,26 @@
 import os
+from pathlib import Path
 from typing import List, Union
 
 from pydantic import AnyHttpUrl, validator
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
+
+
+def _load_env_files() -> None:
+    backend_dir = Path(__file__).resolve().parents[2]
+    repo_root = backend_dir.parent
+    candidates = (
+        repo_root / ".env",
+        repo_root / "env",
+        backend_dir / ".env",
+    )
+    for env_path in candidates:
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+
+
+_load_env_files()
 
 
 class Settings(BaseSettings):

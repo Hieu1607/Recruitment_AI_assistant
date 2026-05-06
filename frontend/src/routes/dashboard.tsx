@@ -1,5 +1,6 @@
 import { api, type CollectionResponse, type ResumeResponse } from "@/api";
 import { UploadModal } from "@/components/candidates/UploadModal";
+import { Button } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore, useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -372,23 +373,105 @@ const ONBOARDING_STEPS = [
   },
   {
     id: "jd",
-    label: "Create a job description",
-    sub: "Define the role you're hiring for",
+    label: "Add the full job description",
+    sub: "Capture responsibilities, requirements, and hiring notes",
     href: "/job-descriptions",
   },
   {
     id: "score",
     label: "Run AI scoring",
-    sub: "Rank candidates against the JD with weighted criteria",
+    sub: "Compare candidates once resumes and the JD are ready",
     href: "/scoring",
   },
   {
     id: "chat",
     label: "Ask the AI Recruiter",
-    sub: "Query your candidate pool in natural language",
+    sub: "Interrogate your candidate pool after data starts flowing in",
     href: "/chat",
   },
 ];
+
+function FirstRunDashboardState({
+  jobTitle,
+  onUpload,
+  onAddJobDescription,
+}: {
+  jobTitle: string;
+  onUpload: () => void;
+  onAddJobDescription: () => void;
+}) {
+  return (
+    <div className="mx-auto max-w-5xl">
+      <div
+        className={cn(
+          "rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8",
+        )}
+      >
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(280px,1fr)] lg:items-start">
+          <div>
+            <p className="text-xs font-sans font-semibold uppercase tracking-[0.22em] text-fg-subtle">
+              Workspace Ready
+            </p>
+            <h2 className="mt-3 font-display text-3xl leading-tight text-fg sm:text-4xl">
+              {jobTitle ? `"${jobTitle}" is ready.` : "Your workspace is ready."}
+            </h2>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-fg-muted sm:text-base">
+              The job has been created. Next, upload resumes or add the full job description.
+              Scoring and AI chat become much more useful once one of those data sources exists.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button
+                icon={<FileUp size={16} strokeWidth={1.75} />}
+                onClick={onUpload}
+              >
+                Upload resumes
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<FileText size={16} strokeWidth={1.75} />}
+                onClick={onAddJobDescription}
+              >
+                Add job description
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+            <p className="text-xs font-sans font-semibold uppercase tracking-[0.22em] text-fg-subtle">
+              Recommended Flow
+            </p>
+            <div className="mt-4 space-y-3">
+              {[
+                "Upload resumes to build candidate profiles.",
+                "Add the full job description to define fit.",
+                "Run scoring after both are available.",
+                "Use AI chat to explore the candidate pool.",
+              ].map((item) => (
+                <div key={item} className="flex items-start gap-3">
+                  <CheckCircle2
+                    size={16}
+                    strokeWidth={1.75}
+                    className="mt-0.5 shrink-0 text-accent"
+                  />
+                  <p className="text-sm leading-6 text-fg-muted">{item}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-8">
+        <OnboardingChecklist
+          hasCandidates={false}
+          hasJDs={false}
+          hasScored={false}
+          hasChatted={false}
+        />
+      </div>
+    </div>
+  );
+}
 
 function OnboardingChecklist({
   hasCandidates,
@@ -482,6 +565,12 @@ export default function DashboardRoute() {
   const { data: uploadsData, isLoading: uploadsLoading } = useQuery({
     queryKey: ["dashboard-uploads"],
     queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 500 }) : Promise.resolve({ items: [], total: 0 })),
+    staleTime: 60_000,
+  });
+
+  const { data: currentJob } = useQuery({
+    queryKey: ["dashboard-job", selectedJobId],
+    queryFn: () => (selectedJobId ? api.jobs.get(selectedJobId) : Promise.resolve(null)),
     staleTime: 60_000,
   });
 
@@ -639,11 +728,10 @@ export default function DashboardRoute() {
 
       {isEmpty ? (
         /* ── Onboarding empty state ── */
-        <OnboardingChecklist
-          hasCandidates={hasCandidates}
-          hasJDs={hasJDs}
-          hasScored={hasScored}
-          hasChatted={hasChatted}
+        <FirstRunDashboardState
+          jobTitle={currentJob?.title ?? ""}
+          onUpload={() => setUploadOpen(true)}
+          onAddJobDescription={() => navigate("/job-descriptions/new")}
         />
       ) : (
         <>

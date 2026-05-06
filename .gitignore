@@ -53,3 +53,6 @@ pdfs/
 
 # Added by code-review-graph
 .code-review-graph/
+
+# Playwright MCP artifacts
+.playwright-mcp/

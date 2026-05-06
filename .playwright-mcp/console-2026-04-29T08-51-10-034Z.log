@@ -1,7 +1,0 @@
-[     116ms] [WARNING] No `HydrateFallback` element provided to render during initial hydration @ http://localhost:5173/assets/index-Delrl8Nt.js:49
-[     420ms] [ERROR] Access to XMLHttpRequest at 'http://localhost:8000/api/v1/job-descriptions/?limit=200' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/scoring:0
-[     421ms] [ERROR] Failed to load resource: net::ERR_FAILED @ http://localhost:8000/api/v1/job-descriptions/?limit=200:0
-[    1445ms] [ERROR] Access to XMLHttpRequest at 'http://localhost:8000/api/v1/job-descriptions/?limit=200' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/scoring:0
-[    1446ms] [ERROR] Failed to load resource: net::ERR_FAILED @ http://localhost:8000/api/v1/job-descriptions/?limit=200:0
-[    3500ms] [ERROR] Access to XMLHttpRequest at 'http://localhost:8000/api/v1/job-descriptions/?limit=200' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/scoring:0
-[    3502ms] [ERROR] Failed to load resource: net::ERR_FAILED @ http://localhost:8000/api/v1/job-descriptions/?limit=200:0

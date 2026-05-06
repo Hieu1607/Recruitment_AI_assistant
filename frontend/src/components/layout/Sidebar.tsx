@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "react-router";
 import {
   LayoutDashboard,
+  BriefcaseBusiness,
   Users,
   FileText,
   BarChart3,
@@ -22,6 +23,7 @@ import { UploadModal } from "@/components/candidates/UploadModal";
 
 const NAV_ITEMS = [
   { to: routes.dashboard, label: "Dashboard", icon: LayoutDashboard },
+  { to: routes.jobs, label: "Jobs", icon: BriefcaseBusiness },
   { to: routes.candidates, label: "Candidates", icon: Users },
   { to: routes.jobDescriptions, label: "Job Descriptions", icon: FileText },
   { to: routes.scoring, label: "Scoring", icon: BarChart3 },

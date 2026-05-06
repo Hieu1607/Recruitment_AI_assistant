@@ -1,5 +1,6 @@
 import { client } from "../client";
 import type {
+  CandidateProfileResponse,
   ChatResponse,
   JobDescriptionResponse,
   JobListResponse,
@@ -28,6 +29,11 @@ export const jobsApi = {
 
   async update(jobId: string, body: { title?: string; status?: string }): Promise<JobResponse> {
     const { data } = await client.patch<JobResponse>(`/jobs/${jobId}`, body);
+    return data;
+  },
+
+  async remove(jobId: string): Promise<{ deleted: boolean; job_id: string }> {
+    const { data } = await client.delete<{ deleted: boolean; job_id: string }>(`/jobs/${jobId}`);
     return data;
   },
 
@@ -80,8 +86,8 @@ export const jobsApi = {
     },
   },
 
-  async listCandidates(jobId: string): Promise<{ items: any[]; total: number }> {
-    const { data } = await client.get<{ items: any[]; total: number }>(`/jobs/${jobId}/candidates`);
+  async listCandidates(jobId: string): Promise<{ items: CandidateProfileResponse[]; total: number }> {
+    const { data } = await client.get<{ items: CandidateProfileResponse[]; total: number }>(`/jobs/${jobId}/candidates`);
     return data;
   },
 

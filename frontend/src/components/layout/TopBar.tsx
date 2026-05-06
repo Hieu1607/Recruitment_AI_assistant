@@ -10,6 +10,9 @@ import { routes } from "@/routes";
 // Order matters: longer prefixes first so /shortlists/collections/:id wins over /shortlists.
 const BREADCRUMB_RULES: Array<[string, string]> = [
   ["/dashboard", "Dashboard"],
+  ["/jobs/new", "Jobs / New"],
+  ["/jobs/", "Jobs / Edit"],
+  ["/jobs", "Jobs"],
   ["/candidates", "Candidates"],
   ["/job-descriptions/new", "Job Descriptions / New"],
   ["/job-descriptions", "Job Descriptions"],

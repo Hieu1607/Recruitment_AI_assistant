@@ -1,39 +1,51 @@
-import { api } from "@/api";
-import { Button, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle } from "@/components/ui";
+import { api, type JobResponse } from "@/api";
+import { JobWorkspaceGate } from "@/components/jobs/JobWorkspaceGate";
 import { useAuthStore } from "@/lib/auth";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Outlet } from "react-router";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { CommandPalette } from "../CommandPalette";
 
+const EMPTY_JOBS: JobResponse[] = [];
+
 export function AppShell() {
   const qc = useQueryClient();
   const selectedJobId = useAuthStore((s) => s.selectedJobId);
   const setSelectedJobId = useAuthStore((s) => s.setSelectedJobId);
-  const [jobTitle, setJobTitle] = useState("");
-  const { data: jobsData } = useQuery({
+  const jobsQuery = useQuery({
     queryKey: ["jobs"],
     queryFn: () => api.jobs.list(),
     staleTime: 60_000,
   });
-  const createJob = useMutation({
-    mutationFn: () => api.jobs.create({ title: jobTitle.trim() || "New Job" }),
-    onSuccess: (job) => {
-      setSelectedJobId(job.id);
-      setJobTitle("");
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-    },
-  });
 
-  const jobs = jobsData?.items ?? [];
+  const jobsData = jobsQuery.data;
+  const jobs = jobsData?.items ?? EMPTY_JOBS;
+
   useEffect(() => {
-    if (jobs.length === 0) return;
-    if (!selectedJobId || !jobs.some((job) => job.id === selectedJobId)) {
+    if (!jobsData) return;
+
+    const hasMatchingSelection = !!selectedJobId && jobs.some((job) => job.id === selectedJobId);
+    if (hasMatchingSelection) return;
+
+    if (jobs.length === 1) {
       setSelectedJobId(jobs[0].id);
+      return;
     }
-  }, [jobs, selectedJobId, setSelectedJobId]);
+
+    if (selectedJobId && !jobs.some((job) => job.id === selectedJobId)) {
+      setSelectedJobId(null);
+    }
+  }, [jobs, jobsData, selectedJobId, setSelectedJobId]);
+
+  const hasValidSelection = !!selectedJobId && jobs.some((job) => job.id === selectedJobId);
+  const shouldAutoSelectSingleJob =
+    jobsData !== undefined && jobs.length === 1 && !hasValidSelection;
+  const showWorkspaceGate =
+    (!selectedJobId && jobsQuery.isLoading) ||
+    Boolean(jobsQuery.error) ||
+    (jobsData !== undefined && !shouldAutoSelectSingleJob && (jobs.length === 0 || !hasValidSelection));
 
   return (
     <>
@@ -52,33 +64,14 @@ export function AppShell() {
         </div>
         <CommandPalette />
       </div>
-      <Modal open={jobsData !== undefined && jobs.length === 0} onOpenChange={() => {}}>
-        <ModalContent>
-          <ModalHeader>
-            <ModalTitle>Create your first job</ModalTitle>
-            <ModalDescription>
-              Jobs are now the primary workspace boundary. Create one job before adding a JD or resumes.
-            </ModalDescription>
-          </ModalHeader>
-          <div className="space-y-2">
-            <label htmlFor="job-title" className="text-sm font-sans text-fg-muted">
-              Job title
-            </label>
-            <input
-              id="job-title"
-              value={jobTitle}
-              onChange={(e) => setJobTitle(e.target.value)}
-              placeholder="Senior Backend Engineer"
-              className="w-full h-10 px-3 rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg text-fg"
-            />
-          </div>
-          <ModalFooter>
-            <Button variant="primary" loading={createJob.isPending} onClick={() => createJob.mutate()}>
-              Create job
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      {showWorkspaceGate && (
+        <JobWorkspaceGate
+          jobs={jobs}
+          isLoading={jobsQuery.isLoading}
+          error={jobsQuery.error}
+          onRetry={() => qc.invalidateQueries({ queryKey: ["jobs"] })}
+        />
+      )}
     </>
   );
 }
