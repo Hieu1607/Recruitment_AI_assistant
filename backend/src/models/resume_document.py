@@ -16,6 +16,7 @@ _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
 
 if TYPE_CHECKING:
     from src.models.candidate_profile import CandidateProfile
+    from src.models.job import Job
 
 
 class ResumeDocument(Base):
@@ -31,6 +32,12 @@ class ResumeDocument(Base):
         server_default=UploadStatus.UPLOADED.value,
     )
     duplicate_group_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     uploaded_by_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -41,6 +48,7 @@ class ResumeDocument(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    job: Mapped["Job"] = relationship(back_populates="resumes")
     extraction_traces: Mapped[list["ExtractionTrace"]] = relationship(
         back_populates="resume_document",
         cascade="all, delete-orphan",

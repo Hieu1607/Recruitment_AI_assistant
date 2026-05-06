@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from src.models.candidate_profile import CandidateProfile
 from src.models.enums import MatchRunStatus
 from src.models.job_matching import JobDescription, MatchResult, MatchRun
+from src.models.resume_document import ResumeDocument
 from src.prompts.build_prompts import build_prompts
 from src.services.llm_service import LLMProvider
 
@@ -110,7 +111,9 @@ def score_candidates(
         raise ValueError(f"Job description {job_description_id} not found")
 
     # -- Fetch candidates --------------------------------------------------
-    query = db.query(CandidateProfile)
+    query = db.query(CandidateProfile).join(
+        ResumeDocument, ResumeDocument.id == CandidateProfile.resume_document_id
+    ).filter(ResumeDocument.job_id == jd.job_id)
     if candidate_profile_ids:
         query = query.filter(CandidateProfile.id.in_(candidate_profile_ids))
     profiles: List[CandidateProfile] = query.all()

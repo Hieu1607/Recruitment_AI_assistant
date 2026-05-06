@@ -30,6 +30,7 @@ class UserAccount(Base):
 
     role_assignments: Mapped[list["RoleAssignment"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     oauth_identities: Mapped[list["OAuthIdentity"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    jobs: Mapped[list["Job"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
 
 
 class RoleAssignment(Base):

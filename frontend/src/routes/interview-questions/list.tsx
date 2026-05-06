@@ -1,23 +1,22 @@
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router";
-import { Plus, Trash2, Calendar } from "lucide-react";
-import { toast } from "sonner";
 import { api, type QuestionSetResponse } from "@/api";
 import {
-  DataTable,
-  type ColumnDef,
-  Button,
-  EmptyState,
-  Modal,
-  ModalHeader,
-  ModalTitle,
-  ModalDescription,
-  ModalContent,
-  ModalFooter,
+    Button,
+    DataTable,
+    EmptyState,
+    Modal,
+    ModalContent,
+    ModalDescription,
+    ModalFooter,
+    ModalHeader,
+    ModalTitle,
+    type ColumnDef,
 } from "@/components/ui";
-
-const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
+import { cn } from "@/lib/cn";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Calendar, Plus, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
+import { toast } from "sonner";
 
 function getQuestionCount(payload: Record<string, any> | undefined | null): number {
   if (!payload || !Array.isArray(payload.categories)) return 0;
@@ -62,26 +61,9 @@ export default function InterviewQuestionsListRoute() {
 
   const generateMutation = useMutation({
     mutationFn: () =>
-      api.interviewQuestions.create({
+      api.interviewQuestions.generate({
         candidate_profile_id: selectedCandidateId,
         job_description_id: selectedJdId,
-        generated_by_user_id: PLACEHOLDER_USER_ID,
-        question_payload: {
-          categories: [
-            {
-              name: "Technical",
-              questions: [
-                { id: "q1", text: "Generated tech question 1", difficulty: "medium" },
-              ],
-            },
-            {
-              name: "Behavioral",
-              questions: [
-                { id: "q2", text: "Generated behavioral question 1", difficulty: "hard" },
-              ],
-            },
-          ],
-        },
       }),
     onSuccess: (newSet) => {
       queryClient.invalidateQueries({ queryKey: ["interview-questions"] });
@@ -110,7 +92,7 @@ export default function InterviewQuestionsListRoute() {
       key: "candidate",
       header: "Candidate",
       render: (row) => (
-        <span className="font-serif font-medium text-forest-900">
+        <span className="font-sans font-medium text-fg">
           {row.candidate_full_name || "Unknown Candidate"}
         </span>
       ),
@@ -119,7 +101,7 @@ export default function InterviewQuestionsListRoute() {
       key: "jd",
       header: "Job Description",
       render: (row) => (
-        <span className="text-forest-700">
+        <span className="text-fg-muted">
           {row.job_description_title || "Unknown JD"}
         </span>
       ),
@@ -128,7 +110,7 @@ export default function InterviewQuestionsListRoute() {
       key: "count",
       header: "Questions",
       render: (row) => (
-        <span className="text-forest-600 font-mono text-sm">
+        <span className="text-fg-muted font-mono text-sm">
           {getQuestionCount(row.question_payload)} questions
         </span>
       ),
@@ -137,7 +119,7 @@ export default function InterviewQuestionsListRoute() {
       key: "created",
       header: "Generated",
       render: (row) => (
-        <div className="flex items-center text-forest-500 text-sm">
+        <div className="flex items-center text-fg-muted text-sm">
           <Calendar className="w-4 h-4 mr-1.5 opacity-50" />
           {new Date(row.created_at).toLocaleDateString()}
         </div>
@@ -159,7 +141,7 @@ export default function InterviewQuestionsListRoute() {
                 deleteMutation.mutate(row.id);
               }
             }}
-            className="text-forest-500 hover:text-red-600 hover:bg-red-50"
+            className="text-fg-muted hover:text-danger hover:bg-danger/10"
           >
             <Trash2 className="w-4 h-4" />
           </Button>
@@ -169,24 +151,29 @@ export default function InterviewQuestionsListRoute() {
   ];
 
   return (
-    <div className="flex-1 overflow-auto bg-sand-50 p-8">
+    <div className="px-8 py-8 min-h-full">
       <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-serif text-forest-900">Interview Questions</h1>
-            <p className="text-forest-600 mt-1">
-              Generated question sets for upcoming interviews.
+            <h1 className="font-display text-[2rem] font-medium text-fg leading-tight">
+              Interview Questions
+            </h1>
+            <p className="text-sm text-fg-muted mt-1 font-sans">
+              Generated question sets for upcoming interviews
             </p>
           </div>
-          <Button onClick={() => setIsGenerateOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" />
+          <Button
+            variant="primary"
+            icon={<Plus size={15} strokeWidth={2} />}
+            onClick={() => setIsGenerateOpen(true)}
+          >
             Generate new set
           </Button>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-sand-200 overflow-hidden">
+        <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] overflow-hidden">
           {isLoading ? (
-            <div className="p-8 text-center text-forest-500">Loading...</div>
+            <div className="p-8 text-center text-fg-muted font-sans text-sm">Loading…</div>
           ) : !data?.items?.length ? (
             <EmptyState
               icon={<Calendar className="w-8 h-8" />}
@@ -202,7 +189,6 @@ export default function InterviewQuestionsListRoute() {
               columns={columns}
               data={data.items}
               onRowClick={(row) => navigate(`/interview-questions/${row.id}`)}
-              className="w-full"
             />
           )}
         </div>
@@ -217,16 +203,20 @@ export default function InterviewQuestionsListRoute() {
             </ModalDescription>
           </ModalHeader>
           <div className="py-4 space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-forest-900 block">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-fg-muted uppercase tracking-wide">
                 Candidate
               </label>
               <select
-                className="w-full px-3 py-2 border border-sand-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-500 text-forest-900"
+                className={cn(
+                  "w-full h-9 px-3 text-sm font-sans rounded-[var(--radius-md)]",
+                  "border border-[color:var(--hairline-strong)] bg-bg text-fg",
+                  "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none",
+                )}
                 value={selectedCandidateId}
                 onChange={(e) => setSelectedCandidateId(e.target.value)}
               >
-                <option value="">Select candidate...</option>
+                <option value="">Select candidate…</option>
                 {candidates?.items?.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.original_file_name || "Unknown Candidate"}
@@ -234,16 +224,20 @@ export default function InterviewQuestionsListRoute() {
                 ))}
               </select>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-forest-900 block">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-fg-muted uppercase tracking-wide">
                 Job Description
               </label>
               <select
-                className="w-full px-3 py-2 border border-sand-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-500 text-forest-900"
+                className={cn(
+                  "w-full h-9 px-3 text-sm font-sans rounded-[var(--radius-md)]",
+                  "border border-[color:var(--hairline-strong)] bg-bg text-fg",
+                  "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none",
+                )}
                 value={selectedJdId}
                 onChange={(e) => setSelectedJdId(e.target.value)}
               >
-                <option value="">Select job description...</option>
+                <option value="">Select job description…</option>
                 {jds?.items?.map((jd) => (
                   <option key={jd.id} value={jd.id}>
                     {jd.title || "Untitled"}
@@ -257,10 +251,11 @@ export default function InterviewQuestionsListRoute() {
               Cancel
             </Button>
             <Button
+              variant="primary"
               onClick={() => generateMutation.mutate()}
               disabled={!selectedCandidateId || !selectedJdId || generateMutation.isPending}
             >
-              {generateMutation.isPending ? "Generating..." : "Generate"}
+              {generateMutation.isPending ? "Generating…" : "Generate"}
             </Button>
           </ModalFooter>
         </ModalContent>

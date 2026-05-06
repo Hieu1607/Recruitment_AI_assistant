@@ -82,7 +82,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             </span>
           )
         )}
-        {children && !isIcon && <span>{children}</span>}
+        {children && !isIcon && <span className="inline-flex items-center">{children}</span>}
       </button>
     );
   }

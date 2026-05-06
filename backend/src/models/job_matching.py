@@ -29,6 +29,7 @@ _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
 
 if TYPE_CHECKING:
     from src.models.candidate_profile import CandidateProfile
+    from src.models.job import Job
 
 
 class JobDescription(Base):
@@ -37,10 +38,17 @@ class JobDescription(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     jd_text: Mapped[str] = mapped_column(Text, nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
+    job: Mapped["Job"] = relationship(back_populates="job_descriptions")
     match_runs: Mapped[list["MatchRun"]] = relationship(back_populates="job_description", cascade="all, delete-orphan")
     interview_question_sets: Mapped[list["InterviewQuestionSet"]] = relationship(back_populates="job_description", cascade="all, delete-orphan")
 

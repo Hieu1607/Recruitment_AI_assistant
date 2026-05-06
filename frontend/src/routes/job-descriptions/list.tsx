@@ -13,6 +13,7 @@ import {
     Skeleton,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { useSelectedJobId } from "@/lib/auth";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart2, Eye, Plus, Trash2 } from "lucide-react";
@@ -45,6 +46,7 @@ function truncateBody(text: string, max = 120): string {
 export default function JobDescriptionsListRoute() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const selectedJobId = useSelectedJobId();
   const [params, setParams] = useSearchParams();
 
   const activeFilter = params.get("active"); // "true" | "false" | null
@@ -66,7 +68,18 @@ export default function JobDescriptionsListRoute() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["jobDescriptions", isActiveParam],
-    queryFn: () => api.jobDescriptions.list({ is_active: isActiveParam, limit: 200 }),
+    queryFn: async () => {
+      if (!selectedJobId) return { items: [], total: 0 };
+      try {
+        const jd = await api.jobs.jobDescription.get(selectedJobId);
+        if (isActiveParam !== undefined && jd.is_active !== isActiveParam) {
+          return { items: [], total: 0 };
+        }
+        return { items: [jd], total: 1 };
+      } catch {
+        return { items: [], total: 0 };
+      }
+    },
   });
 
   const items: JobDescriptionResponse[] = data?.items ?? [];
@@ -74,10 +87,13 @@ export default function JobDescriptionsListRoute() {
   // ── mutations ─────────────────────────────────────────────────────────────
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.jobDescriptions.remove(id),
+    mutationFn: async (_id: string) => {
+      if (!selectedJobId) throw new Error("No job selected");
+      return api.jobs.jobDescription.patch(selectedJobId, { is_active: false });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
-      toast.success("Job description deleted");
+      toast.success("Job description deactivated");
       setDeleteTarget(null);
     },
     onError: () => toast.error("Failed to delete job description"),

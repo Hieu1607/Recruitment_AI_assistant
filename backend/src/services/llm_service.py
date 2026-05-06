@@ -111,6 +111,37 @@ class _GroqAdapter(_BaseAdapter):
                 break
         raise LLMProviderError(f"Groq request failed: {last_error}") from last_error
 
+    def generate_with_images(
+        self, prompt: str, images: List[bytes], vision_model: str
+    ) -> LLMResponse:
+        import base64
+
+        content: List[Any] = [{"type": "text", "text": prompt}]
+        for img_bytes in images:
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            content.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            )
+        messages = [{"role": "user", "content": content}]
+        last_error: Optional[Exception] = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                completion = self._client.chat.completions.create(
+                    model=vision_model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=max(self.max_tokens, 2048),
+                )
+                text = (completion.choices[0].message.content or "").strip()
+                return LLMResponse(text=text, provider=ProviderType.GROQ.value, model=vision_model)
+            except Exception as exc:
+                last_error = exc
+                if attempt < self.max_retries:
+                    time.sleep(min(2 ** attempt, 3))
+                    continue
+                break
+        raise LLMProviderError(f"Groq vision request failed: {last_error}") from last_error
+
 
 class _OllamaAdapter(_BaseAdapter):
     def __init__(
@@ -248,6 +279,12 @@ class LLMProvider:
             messages.append({"role": "system", "content": system_prompt.strip()})
         messages.append({"role": "user", "content": prompt.strip()})
         return self.chat(messages)
+
+    def generate_with_images(self, prompt: str, images: List[bytes]) -> LLMResponse:
+        if self.provider != ProviderType.GROQ:
+            raise LLMProviderError("Vision is only supported for the Groq provider")
+        vision_model = settings.GROQ_VISION_MODEL_NAME
+        return self._adapter.generate_with_images(prompt, images, vision_model=vision_model)  # type: ignore[attr-defined]
 
     async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> LLMResponse:
         if not prompt or not prompt.strip():

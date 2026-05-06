@@ -1,6 +1,7 @@
 import type { ChatResponse, ResumeResponse } from "@/api";
 import { api } from "@/api";
 import { Avatar } from "@/components/ui/avatar";
+import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -331,6 +332,7 @@ function SessionItem({
 export default function ChatRoute() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const selectedJobId = useSelectedJobId();
 
   const [sessions, setSessions] = useState<LocalSession[]>(() => loadSessions());
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -343,7 +345,7 @@ export default function ChatRoute() {
 
   const { data: resumeData } = useQuery({
     queryKey: ["resumes-chat"],
-    queryFn: () => api.upload.list({ limit: 100, upload_status: "processed" }),
+    queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 100, upload_status: "processed" }) : Promise.resolve({ items: [], total: 0 })),
     staleTime: 60_000,
   });
   const processedCandidates = resumeData?.items ?? [];
@@ -351,39 +353,10 @@ export default function ChatRoute() {
   // ── load session history when active session changes ──────────────────────
 
   useEffect(() => {
+    setHistoryLoading(false);
     if (!activeSession?.chatSessionId) {
       setMessages([]);
-      return;
     }
-    setHistoryLoading(true);
-    api.chat
-      .getHistory(activeSession.chatSessionId)
-      .then((res) => {
-        setMessages(
-          res.messages.map((m, i) => ({
-            id: `hist-${i}`,
-            role: m.role,
-            content: m.content,
-          }))
-        );
-      })
-      .catch((err) => {
-        if (err?.response?.status === 404) {
-          toast.info("Session expired — history unavailable");
-          setSessions((prev) => {
-            const updated = prev.map((s) =>
-              s.id === activeSession.id ? { ...s, chatSessionId: null } : s
-            );
-            saveSessions(updated);
-            return updated;
-          });
-          setMessages([]);
-        } else {
-          toast.error("Failed to load session history");
-          setMessages([]);
-        }
-      })
-      .finally(() => setHistoryLoading(false));
   }, [activeSession?.id, activeSession?.chatSessionId]);
 
   // ── auto-scroll to bottom ─────────────────────────────────────────────────
@@ -397,7 +370,7 @@ export default function ChatRoute() {
 
   const sendMutation = useMutation<ChatResponse, Error, string>({
     mutationFn: (text: string) =>
-      api.chat.send({
+      api.jobs.chat.send(selectedJobId!, {
         message: text,
         session_id: activeSession?.chatSessionId ?? undefined,
         candidate_limit: 500,
@@ -454,6 +427,11 @@ export default function ChatRoute() {
   function handleSend(text?: string) {
     const msg = (text ?? input).trim();
     if (!msg || sendMutation.isPending) return;
+    if (!selectedJobId) {
+      toast.error("Select a job before using chat.");
+      return;
+    }
+    localStorage.setItem("recruiter_onboarding_chatted", "true");
 
     if (!activeSession) {
       const newSession: LocalSession = {

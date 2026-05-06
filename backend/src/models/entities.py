@@ -1,4 +1,5 @@
 from src.models.candidate_profile import CandidateProfile
+from src.models.job import Job
 from src.models.job_matching import InterviewQuestionSet, JobDescription, MatchResult, MatchRun
 from src.models.outreach import OutreachMessage
 from src.models.query_shortlist import QuerySession, QueryTurn, ShortlistCollection, ShortlistItem
@@ -10,6 +11,7 @@ __all__ = [
     "ResumeDocument",
     "ExtractionTrace",
     "CandidateProfile",
+    "Job",
     "JobDescription",
     "MatchRun",
     "MatchResult",

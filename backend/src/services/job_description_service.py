@@ -19,6 +19,7 @@ from src.models.job_matching import JobDescription
 def _jd_to_dict(jd: JobDescription) -> Dict[str, Any]:
     return {
         "id": str(jd.id),
+        "job_id": str(jd.job_id),
         "title": jd.title,
         "jd_text": jd.jd_text,
         "created_by_user_id": str(jd.created_by_user_id),
@@ -34,17 +35,16 @@ def _jd_to_dict(jd: JobDescription) -> Dict[str, Any]:
 def create_job_description(
     *,
     db: Session,
+    job_id: uuid.UUID,
     jd_text: str,
     created_by_user_id: uuid.UUID,
     title: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persist a new JobDescription and return its dict representation."""
-    if not jd_text or not jd_text.strip():
-        raise ValueError("jd_text must not be empty")
-
     jd = JobDescription(
+        job_id=job_id,
         title=title,
-        jd_text=jd_text.strip(),
+        jd_text=jd_text.strip() if jd_text else "",
         created_by_user_id=created_by_user_id,
         is_active=True,
     )
@@ -62,10 +62,13 @@ def get_job_description(
     *,
     db: Session,
     jd_id: uuid.UUID,
+    job_id: Optional[uuid.UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return a single JobDescription dict, or None if not found."""
     jd = db.get(JobDescription, jd_id)
     if jd is None:
+        return None
+    if job_id is not None and jd.job_id != job_id:
         return None
     return _jd_to_dict(jd)
 
@@ -73,6 +76,7 @@ def get_job_description(
 def list_job_descriptions(
     *,
     db: Session,
+    job_id: Optional[uuid.UUID] = None,
     is_active: Optional[bool] = None,
     limit: int = 50,
     offset: int = 0,
@@ -85,6 +89,8 @@ def list_job_descriptions(
         offset: Number of records to skip (default 0).
     """
     query = db.query(JobDescription)
+    if job_id is not None:
+        query = query.filter(JobDescription.job_id == job_id)
     if is_active is not None:
         query = query.filter(JobDescription.is_active == is_active)
     query = query.order_by(JobDescription.created_at.desc())

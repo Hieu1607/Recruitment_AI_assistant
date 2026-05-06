@@ -34,7 +34,6 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-
 from src.models.query_shortlist import (
     QuerySession,
     QueryTurn,
@@ -50,6 +49,7 @@ router = APIRouter()
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_or_404(db, model, record_id: uuid.UUID, label: str):
     obj = db.get(model, record_id)
     if obj is None:
@@ -62,6 +62,7 @@ def _get_or_404(db, model, record_id: uuid.UUID, label: str):
 # ---------------------------------------------------------------------------
 
 # --- QuerySession ---
+
 
 class SessionCreateRequest(BaseModel):
     user_id: uuid.UUID
@@ -82,6 +83,7 @@ class SessionResponse(BaseModel):
 
 
 # --- QueryTurn ---
+
 
 class TurnCreateRequest(BaseModel):
     user_question: str = Field(..., min_length=1)
@@ -104,6 +106,7 @@ class TurnResponse(BaseModel):
 
 # --- ShortlistCollection ---
 
+
 class CollectionCreateRequest(BaseModel):
     created_by_user_id: uuid.UUID
     name: str = Field(..., min_length=1, max_length=255)
@@ -123,7 +126,18 @@ class CollectionResponse(BaseModel):
     created_at: datetime
 
 
+class SessionListResponse(BaseModel):
+    items: List[SessionResponse]
+    total: int
+
+
+class CollectionListResponse(BaseModel):
+    items: List[CollectionResponse]
+    total: int
+
+
 # --- ShortlistItem ---
+
 
 class ItemAddRequest(BaseModel):
     candidate_profile_id: uuid.UUID
@@ -136,9 +150,15 @@ class ItemResponse(BaseModel):
     added_at: datetime
 
 
+class ItemListResponse(BaseModel):
+    items: list["ItemResponse"]
+    total: int
+
+
 # ---------------------------------------------------------------------------
 # Serialisers
 # ---------------------------------------------------------------------------
+
 
 def _ser_session(s: QuerySession) -> SessionResponse:
     return SessionResponse(
@@ -169,7 +189,9 @@ def _ser_collection(c: ShortlistCollection) -> CollectionResponse:
         id=str(c.id),
         name=c.name,
         created_by_user_id=str(c.created_by_user_id),
-        source_query_turn_id=str(c.source_query_turn_id) if c.source_query_turn_id else None,
+        source_query_turn_id=(
+            str(c.source_query_turn_id) if c.source_query_turn_id else None
+        ),
         item_count=len(c.items) if c.items is not None else 0,
         created_at=c.created_at,
     )
@@ -188,7 +210,10 @@ def _ser_item(i: ShortlistItem) -> ItemResponse:
 # QuerySession endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/sessions/", response_model=SessionResponse, status_code=201, tags=["sessions"])
+
+@router.post(
+    "/sessions/", response_model=SessionResponse, status_code=201, tags=["sessions"]
+)
 def create_session(body: SessionCreateRequest):
     db = SessionLocal()
     try:
@@ -201,7 +226,7 @@ def create_session(body: SessionCreateRequest):
         db.close()
 
 
-@router.get("/sessions/", response_model=List[SessionResponse], tags=["sessions"])
+@router.get("/sessions/", response_model=SessionListResponse, tags=["sessions"])
 def list_sessions(
     user_id: uuid.UUID = Query(..., description="Filter sessions by user UUID"),
     offset: int = Query(0, ge=0),
@@ -209,15 +234,15 @@ def list_sessions(
 ):
     db = SessionLocal()
     try:
+        query = db.query(QuerySession).filter(QuerySession.user_id == user_id)
+        total = query.count()
         rows = (
-            db.query(QuerySession)
-            .filter(QuerySession.user_id == user_id)
-            .order_by(QuerySession.updated_at.desc())
+            query.order_by(QuerySession.updated_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
         )
-        return [_ser_session(s) for s in rows]
+        return SessionListResponse(items=[_ser_session(s) for s in rows], total=total)
     finally:
         db.close()
 
@@ -232,7 +257,9 @@ def get_session(session_id: uuid.UUID):
         db.close()
 
 
-@router.patch("/sessions/{session_id}", response_model=SessionResponse, tags=["sessions"])
+@router.patch(
+    "/sessions/{session_id}", response_model=SessionResponse, tags=["sessions"]
+)
 def update_session(session_id: uuid.UUID, body: SessionUpdateRequest):
     db = SessionLocal()
     try:
@@ -260,6 +287,7 @@ def delete_session(session_id: uuid.UUID):
 # ---------------------------------------------------------------------------
 # QueryTurn endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/sessions/{session_id}/turns",
@@ -338,6 +366,7 @@ def delete_turn(turn_id: uuid.UUID):
 # ShortlistCollection endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post(
     "/collections/",
     response_model=CollectionResponse,
@@ -370,25 +399,31 @@ def create_collection(body: CollectionCreateRequest):
 
 @router.get(
     "/collections/",
-    response_model=List[CollectionResponse],
+    response_model=CollectionListResponse,
     tags=["collections"],
 )
 def list_collections(
-    user_id: uuid.UUID = Query(..., description="Filter collections by creator user UUID"),
+    user_id: uuid.UUID = Query(
+        ..., description="Filter collections by creator user UUID"
+    ),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ):
     db = SessionLocal()
     try:
+        query = db.query(ShortlistCollection).filter(
+            ShortlistCollection.created_by_user_id == user_id
+        )
+        total = query.count()
         rows = (
-            db.query(ShortlistCollection)
-            .filter(ShortlistCollection.created_by_user_id == user_id)
-            .order_by(ShortlistCollection.created_at.desc())
+            query.order_by(ShortlistCollection.created_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
         )
-        return [_ser_collection(c) for c in rows]
+        return CollectionListResponse(
+            items=[_ser_collection(c) for c in rows], total=total
+        )
     finally:
         db.close()
 
@@ -447,6 +482,7 @@ def delete_collection(collection_id: uuid.UUID):
 # ShortlistItem endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post(
     "/collections/{collection_id}/items",
     response_model=ItemResponse,
@@ -479,7 +515,7 @@ def add_item(collection_id: uuid.UUID, body: ItemAddRequest):
 
 @router.get(
     "/collections/{collection_id}/items",
-    response_model=List[ItemResponse],
+    response_model=ItemListResponse,
     tags=["items"],
 )
 def list_items(
@@ -490,6 +526,11 @@ def list_items(
     db = SessionLocal()
     try:
         _get_or_404(db, ShortlistCollection, collection_id, "Collection")
+        total = (
+            db.query(ShortlistItem)
+            .filter(ShortlistItem.shortlist_collection_id == collection_id)
+            .count()
+        )
         rows = (
             db.query(ShortlistItem)
             .filter(ShortlistItem.shortlist_collection_id == collection_id)
@@ -498,7 +539,7 @@ def list_items(
             .limit(limit)
             .all()
         )
-        return [_ser_item(i) for i in rows]
+        return ItemListResponse(items=[_ser_item(i) for i in rows], total=total)
     finally:
         db.close()
 

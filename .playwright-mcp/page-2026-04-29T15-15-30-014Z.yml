@@ -1,0 +1,43 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - link "RecruitAI" [ref=e8] [cursor=pointer]:
+        - /url: /
+        - img [ref=e9]
+        - generic [ref=e11]: RecruitAI
+      - generic [ref=e12]:
+        - heading "The talent you've been searching for is already in your pipeline." [level=1] [ref=e13]
+        - paragraph [ref=e14]: Stop digging through resumes. Start having meaningful conversations with the right candidates.
+      - generic [ref=e20]:
+        - text: Join
+        - strong [ref=e21]: 2,000+
+        - text: recruiters building better teams.
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - heading "Create an account" [level=2] [ref=e25]
+        - paragraph [ref=e26]: Start your 14-day free trial. No credit card required.
+      - generic [ref=e27]:
+        - generic [ref=e28]:
+          - text: Full name
+          - textbox "Full name" [ref=e29]:
+            - /placeholder: Jane Doe
+            - text: Test User 2
+        - generic [ref=e30]:
+          - text: Email address
+          - textbox "Email address" [ref=e31]:
+            - /placeholder: jane@company.com
+            - text: playwright_test_002@example.com
+        - generic [ref=e32]:
+          - generic [ref=e34]: Password
+          - textbox "Password" [ref=e35]:
+            - /placeholder: ••••••••
+            - text: Password123!
+        - button "Create account" [ref=e36]:
+          - generic [ref=e37]:
+            - text: Create account
+            - img [ref=e42]
+      - generic [ref=e40]:
+        - text: Already have an account?
+        - link "Sign in" [ref=e41] [cursor=pointer]:
+          - /url: /login
+  - region "Notifications alt+T"

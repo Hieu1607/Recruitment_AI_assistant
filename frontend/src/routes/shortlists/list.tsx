@@ -12,6 +12,7 @@ import {
     Skeleton,
     Tooltip,
 } from "@/components/ui";
+import { useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,8 +30,6 @@ import { Link } from "react-router";
 import { toast } from "sonner";
 
 // ── constants ─────────────────────────────────────────────────────────────────
-
-const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -251,11 +250,12 @@ function NewCollectionModal({
 }) {
   const [name, setName] = useState("");
   const qc = useQueryClient();
+  const userId = useUserId();
 
   const createMutation = useMutation({
     mutationFn: () =>
       api.shortlist.collections.create({
-        created_by_user_id: PLACEHOLDER_USER_ID,
+        created_by_user_id: userId ?? "",
         name: name.trim(),
         source_query_turn_id: sourceTurnId,
       }),
@@ -392,10 +392,11 @@ function QueryHistoryTab({
   onCreateCollection: (turnId: string) => void;
 }) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const userId = useUserId();
 
   const { data: sessionsData, isLoading: sessionsLoading } = useQuery({
     queryKey: ["shortlist-sessions"],
-    queryFn: () => api.shortlist.sessions.list({ user_id: PLACEHOLDER_USER_ID, limit: 100 }),
+    queryFn: () => api.shortlist.sessions.list({ user_id: userId ?? "", limit: 100 }),
     staleTime: 30_000,
   });
   const sessions = sessionsData?.items ?? [];
@@ -517,6 +518,7 @@ type Tab = "collections" | "history";
 
 export default function ShortlistsListRoute() {
   const qc = useQueryClient();
+  const userId = useUserId();
   const [activeTab, setActiveTab] = useState<Tab>("collections");
   const [newColOpen, setNewColOpen] = useState(false);
   const [newColTurnId, setNewColTurnId] = useState<string | undefined>();
@@ -525,7 +527,7 @@ export default function ShortlistsListRoute() {
 
   const { data: collectionsData, isLoading } = useQuery({
     queryKey: ["collections"],
-    queryFn: () => api.shortlist.collections.list({ user_id: PLACEHOLDER_USER_ID, limit: 100 }),
+    queryFn: () => api.shortlist.collections.list({ user_id: userId ?? "", limit: 100 }),
     staleTime: 30_000,
   });
   const collections = collectionsData?.items ?? [];

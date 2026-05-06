@@ -1,3 +1,6 @@
+import { api } from "@/api";
+import { useAuthStore } from "@/lib/auth";
+import { useQuery } from "@tanstack/react-query";
 import { Search, Bell, Command, ChevronRight } from "lucide-react";
 import { Link, useMatches, useLocation } from "react-router";
 import { UserMenu } from "./UserMenu";
@@ -28,10 +31,18 @@ function resolveBreadcrumb(pathname: string): string {
 
 export function TopBar() {
   const { pathname } = useLocation();
+  const selectedJobId = useAuthStore((s) => s.selectedJobId);
+  const setSelectedJobId = useAuthStore((s) => s.setSelectedJobId);
+  const { data: jobsData } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => api.jobs.list(),
+    staleTime: 60_000,
+  });
   // useMatches is referenced so future plans can swap to per-route handle metadata
   // (handle: { breadcrumb: string }) without TopBar re-architecture.
   useMatches();
   const crumb = resolveBreadcrumb(pathname);
+  const jobs = jobsData?.items ?? [];
 
   return (
     <header
@@ -55,6 +66,21 @@ export function TopBar() {
           {crumb || "—"}
         </span>
       </nav>
+
+      {jobs.length > 0 && (
+        <select
+          value={selectedJobId ?? ""}
+          onChange={(e) => setSelectedJobId(e.target.value || null)}
+          className="h-9 px-3 rounded-md border border-[color:var(--hairline)] bg-bg-elevated text-sm text-fg"
+          aria-label="Selected job"
+        >
+          {jobs.map((job) => (
+            <option key={job.id} value={job.id}>
+              {job.title}
+            </option>
+          ))}
+        </select>
+      )}
 
       {/* Search */}
       <div className="flex-1 max-w-xl ml-auto">

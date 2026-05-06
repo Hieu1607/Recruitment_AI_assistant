@@ -137,24 +137,37 @@ function MemberRow({
   onRemove: (item: ShortlistItemResponse) => void;
   removing: boolean;
 }) {
-  const displayId = truncateId(item.candidate_profile_id);
+  const { data: candidateProfile } = useQuery({
+    queryKey: ["candidate-profile-by-id", item.candidate_profile_id],
+    queryFn: () => api.candidates.getById(item.candidate_profile_id),
+    enabled: !!item.candidate_profile_id,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const displayName = candidateProfile?.full_name ?? `Candidate ${truncateId(item.candidate_profile_id)}`;
+  const skills = candidateProfile?.skills_text
+    ? candidateProfile.skills_text.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean).slice(0, 4)
+    : [];
 
   return (
     <div className="group flex items-center gap-4 px-5 py-3.5 hairline-b last:border-b-0 hover:bg-[color:var(--hairline)]/30 transition-colors">
-      <Avatar name={displayId} size="md" />
+      <Avatar name={displayName} size="md" />
 
       <div className="flex-1 min-w-0">
         <p className="text-sm font-sans font-medium text-fg truncate">
-          Candidate {displayId}
+          {displayName}
         </p>
-        <p className="text-xs font-mono text-fg-subtle mt-0.5 truncate">
-          {item.candidate_profile_id}
-        </p>
+        {candidateProfile?.current_job_title && (
+          <p className="text-xs font-sans text-fg-muted mt-0.5 truncate">
+            {candidateProfile.current_job_title}
+          </p>
+        )}
       </div>
 
-      {/* Placeholder skill chips */}
+      {/* Skill chips */}
       <div className="hidden xl:flex items-center gap-1.5 flex-1 min-w-0">
-        {["Profile", "Available"].map((s) => (
+        {skills.map((s) => (
           <span
             key={s}
             className="px-2 py-0.5 text-[11px] font-sans text-fg-muted rounded-[var(--radius-sm)] border border-[color:var(--hairline)] bg-bg shrink-0"

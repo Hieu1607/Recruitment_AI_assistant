@@ -1,9 +1,9 @@
 import { client } from "../client";
 import type {
-  QuestionSetResponse,
-  QuestionSetListResponse,
-  QuestionSetCreateRequest,
-  QuestionSetUpdateRequest,
+    QuestionSetCreateRequest,
+    QuestionSetListResponse,
+    QuestionSetResponse,
+    QuestionSetUpdateRequest,
 } from "../types";
 
 export const interviewQuestionsApi = {
@@ -69,5 +69,20 @@ export const interviewQuestionsApi = {
    */
   async remove(questionSetId: string): Promise<void> {
     await client.delete(`/interview-questions/${questionSetId}`);
+  },
+
+  /**
+   * Generate a question set via LLM.
+   * POST /interview-questions/generate
+   */
+  async generate(body: {
+    candidate_profile_id: string;
+    job_description_id: string;
+  }): Promise<QuestionSetResponse> {
+    const { data } = await client.post<QuestionSetResponse>(
+      "/interview-questions/generate",
+      body,
+    );
+    return data;
   },
 };

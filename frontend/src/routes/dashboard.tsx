@@ -1,6 +1,7 @@
 import { api, type CollectionResponse, type ResumeResponse } from "@/api";
 import { UploadModal } from "@/components/candidates/UploadModal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuthStore, useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -392,15 +393,19 @@ const ONBOARDING_STEPS = [
 function OnboardingChecklist({
   hasCandidates,
   hasJDs,
+  hasScored,
+  hasChatted,
 }: {
   hasCandidates: boolean;
   hasJDs: boolean;
+  hasScored: boolean;
+  hasChatted: boolean;
 }) {
   const statuses = {
     upload: hasCandidates,
     jd: hasJDs,
-    score: false,
-    chat: false,
+    score: hasScored,
+    chat: hasChatted,
   };
   const done = Object.values(statuses).filter(Boolean).length;
 
@@ -465,23 +470,32 @@ function OnboardingChecklist({
 
 // ── main component ─────────────────────────────────────────────────────────────
 
-const DEMO_USER_ID = "00000000-0000-0000-0000-000000000000";
-
 export default function DashboardRoute() {
   const navigate = useNavigate();
   const [uploadOpen, setUploadOpen] = useState(false);
+  const selectedJobId = useSelectedJobId();
+  const user = useAuthStore((s) => s.user);
+  const firstName = user?.display_name?.split(" ")[0] ?? "there";
 
   // ── data queries ──────────────────────────────────────────────────────────
 
   const { data: uploadsData, isLoading: uploadsLoading } = useQuery({
     queryKey: ["dashboard-uploads"],
-    queryFn: () => api.upload.list({ limit: 500 }),
+    queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 500 }) : Promise.resolve({ items: [], total: 0 })),
     staleTime: 60_000,
   });
 
   const { data: jdsData, isLoading: jdsLoading } = useQuery({
     queryKey: ["dashboard-jds"],
-    queryFn: () => api.jobDescriptions.list({ limit: 500 }),
+    queryFn: async () => {
+      if (!selectedJobId) return { items: [], total: 0 };
+      try {
+        const jd = await api.jobs.jobDescription.get(selectedJobId);
+        return { items: [jd], total: 1 };
+      } catch {
+        return { items: [], total: 0 };
+      }
+    },
     staleTime: 60_000,
   });
 
@@ -500,7 +514,7 @@ export default function DashboardRoute() {
   const { data: collectionsData } = useQuery({
     queryKey: ["dashboard-collections"],
     queryFn: () =>
-      api.shortlist.collections.list({ user_id: DEMO_USER_ID, limit: 4 }).catch(() => ({
+      api.shortlist.collections.list({ user_id: user?.id ?? "", limit: 4 }).catch(() => ({
         items: [] as CollectionResponse[],
         total: 0,
       })),
@@ -590,6 +604,20 @@ export default function DashboardRoute() {
 
   const recentActivity = activityEntries.slice(0, 12);
 
+  // ── onboarding tracking ─────────────────────────────────────────────────
+
+  const [hasScored] = useState(
+    () => localStorage.getItem("recruiter_onboarding_scored") === "true",
+  );
+  const [hasChatted] = useState(
+    () => localStorage.getItem("recruiter_onboarding_chatted") === "true",
+  );
+
+  const hasCandidates = totalCandidates > 0;
+  const hasJDs = (jdsData?.items ?? []).length > 0;
+  const onboardingDone = [hasCandidates, hasJDs, hasScored, hasChatted].filter(Boolean).length;
+  const onboardingComplete = onboardingDone === ONBOARDING_STEPS.length;
+
   // ── empty state detection ─────────────────────────────────────────────────
 
   const isEmpty =
@@ -604,16 +632,33 @@ export default function DashboardRoute() {
       {/* ── Greeting ── */}
       <div className="mb-8">
         <h1 className="font-display text-[2.25rem] font-medium text-fg leading-tight">
-          {timeGreeting()}, Hieu.
+          {timeGreeting()}, {firstName}.
         </h1>
         <p className="text-sm font-sans text-fg-muted mt-1">{todayLabel()}</p>
       </div>
 
       {isEmpty ? (
         /* ── Onboarding empty state ── */
-        <OnboardingChecklist hasCandidates={false} hasJDs={false} />
+        <OnboardingChecklist
+          hasCandidates={hasCandidates}
+          hasJDs={hasJDs}
+          hasScored={hasScored}
+          hasChatted={hasChatted}
+        />
       ) : (
         <>
+          {/* ── Onboarding checklist (shown until complete) ── */}
+          {!onboardingComplete && (
+            <div className="mb-8">
+              <OnboardingChecklist
+                hasCandidates={hasCandidates}
+                hasJDs={hasJDs}
+                hasScored={hasScored}
+                hasChatted={hasChatted}
+              />
+            </div>
+          )}
+
           {/* ── Metric cards ── */}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
             <MetricCard

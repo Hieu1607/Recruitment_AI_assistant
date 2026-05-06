@@ -16,6 +16,7 @@ import {
     type ColumnDef,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { useSelectedJobId } from "@/lib/auth";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -114,6 +115,7 @@ const SORT_OPTIONS: SortOption[] = [
 
 export default function CandidatesListRoute() {
   const qc = useQueryClient();
+  const selectedJobId = useSelectedJobId();
   const [params, setParams] = useSearchParams();
 
   const view = (params.get("view") as "table" | "grid") ?? "table";
@@ -163,11 +165,13 @@ export default function CandidatesListRoute() {
   const { data, isLoading } = useQuery({
     queryKey: ["candidates", statusFilter, page, pageSize],
     queryFn: () =>
-      api.upload.list({
-        upload_status: statusFilter || undefined,
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-      }),
+      selectedJobId
+        ? api.jobs.resumes.list(selectedJobId, {
+            upload_status: statusFilter || undefined,
+            limit: pageSize,
+            offset: (page - 1) * pageSize,
+          })
+        : Promise.resolve({ items: [], total: 0 }),
   });
 
   const allItems: ResumeResponse[] = data?.items ?? [];
@@ -197,7 +201,7 @@ export default function CandidatesListRoute() {
   // ── mutations ─────────────────────────────────────────────────────────────
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.upload.remove(id),
+    mutationFn: (id: string) => api.jobs.resumes.remove(selectedJobId!, id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["candidates"] });
       toast.success("Resume deleted");
@@ -206,7 +210,7 @@ export default function CandidatesListRoute() {
   });
 
   const bulkDeleteMutation = useMutation({
-    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.upload.remove(id))),
+    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.jobs.resumes.remove(selectedJobId!, id))),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["candidates"] });
       toast.success(`${selectedIds.length} resumes deleted`);
@@ -224,7 +228,7 @@ export default function CandidatesListRoute() {
       id: string;
       name: string;
       status: UploadStatus;
-    }) => api.upload.update(id, { original_file_name: name, upload_status: status }),
+    }) => api.jobs.resumes.update(selectedJobId!, id, { original_file_name: name, upload_status: status }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["candidates"] });
       toast.success("Resume updated");

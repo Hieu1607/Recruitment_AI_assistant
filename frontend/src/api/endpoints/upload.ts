@@ -1,10 +1,11 @@
 import { client } from "../client";
 import type {
-  ResumeResponse,
-  ResumeListResponse,
-  ResumeBatchParseResponse,
-  DeleteResumeResponse,
-  UploadStatus,
+    CandidateProfileResponse,
+    DeleteResumeResponse,
+    ResumeBatchParseResponse,
+    ResumeListResponse,
+    ResumeResponse,
+    UploadStatus
 } from "../types";
 
 export const uploadApi = {
@@ -60,6 +61,28 @@ export const uploadApi = {
     const { data } = await client.delete<DeleteResumeResponse>(
       `/upload/${resumeId}`,
       { params: { delete_file: deleteFile } },
+    );
+    return data;
+  },
+
+  /**
+   * Get the parsed candidate profile linked to a resume.
+   * GET /upload/{resume_id}/profile
+   */
+  async getProfile(resumeId: string): Promise<CandidateProfileResponse> {
+    const { data } = await client.get<CandidateProfileResponse>(
+      `/upload/${resumeId}/profile`,
+    );
+    return data;
+  },
+
+  /**
+   * Get a candidate profile directly by its own UUID.
+   * GET /upload/profiles/{profile_id}
+   */
+  async getProfileById(profileId: string): Promise<CandidateProfileResponse> {
+    const { data } = await client.get<CandidateProfileResponse>(
+      `/upload/profiles/${profileId}`,
     );
     return data;
   },

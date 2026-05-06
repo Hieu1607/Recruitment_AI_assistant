@@ -33,14 +33,14 @@ export default function LandingRoute() {
           <h1 className="text-6xl md:text-8xl font-serif text-forest-900 tracking-tight leading-[1.1] mb-8">
             Hire like it's <span className="italic text-accent-600">2030.</span>
           </h1>
-          <p className="text-xl md:text-2xl text-forest-600 max-w-3xl mx-auto mb-10 font-sans font-light leading-relaxed">
+          <p className="text-xl md:text-2xl text-fg-muted max-w-3xl mx-auto mb-10 font-sans font-light leading-relaxed">
             The intelligent recruitment platform that turns overwhelming resume piles into
             curated shortlists, predictive scores, and automated outreach in minutes.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link to="/login?mode=signup">
               <Button size="lg" className="text-base px-8 h-14">
-                Start your free trial <ChevronRight className="w-4 h-4 ml-2" />
+                Start your free trial <ChevronRight className="inline w-4 h-4 ml-2 align-middle" />
               </Button>
             </Link>
             <Button size="lg" variant="secondary" className="text-base px-8 h-14">

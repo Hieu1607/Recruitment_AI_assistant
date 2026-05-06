@@ -51,3 +51,5 @@ pdfs/
 !frontend/src/lib/
 !frontend/src/lib/**
 
+# Added by code-review-graph
+.code-review-graph/

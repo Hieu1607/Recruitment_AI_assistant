@@ -2,10 +2,14 @@ import uuid
 from decimal import Decimal
 from typing import Annotated, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
-from src.models.session import SessionLocal
+from src.models.deps import get_current_user, get_db
+from src.models.job import Job
+from src.models.job_matching import JobDescription
+from src.models.user_account import UserAccount
 from src.services.score_candidate import score_candidates
 
 router = APIRouter()
@@ -48,9 +52,6 @@ class SectionWeights(BaseModel):
 class ScoreRequest(BaseModel):
     job_description_id: uuid.UUID = Field(
         ..., description="UUID of the JobDescription to score against"
-    )
-    initiated_by_user_id: uuid.UUID = Field(
-        ..., description="UUID of the user initiating the score run"
     )
     score_threshold: float = Field(
         50.0,
@@ -119,7 +120,11 @@ class ScoreResponse(BaseModel):
         "Use `batch_size` to control how many candidates are sent per LLM call."
     ),
 )
-def score_candidates_endpoint(body: ScoreRequest):
+def score_candidates_endpoint(
+    body: ScoreRequest,
+    db=Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
     # Resolve section_weights: only include keys that were explicitly set
     weights_dict: Optional[Dict[str, float]] = None
     if body.section_weights is not None:
@@ -131,12 +136,18 @@ def score_candidates_endpoint(body: ScoreRequest):
                        "At least one section must have a positive weight.",
             )
 
-    db = SessionLocal()
+    owned = db.execute(
+        select(JobDescription)
+        .join(Job, Job.id == JobDescription.job_id)
+        .where(JobDescription.id == body.job_description_id, Job.owner_user_id == current_user.id)
+    ).scalar_one_or_none()
+    if owned is None:
+        raise HTTPException(status_code=404, detail=f"Job description {body.job_description_id} not found")
     try:
         result = score_candidates(
             db=db,
             job_description_id=body.job_description_id,
-            initiated_by_user_id=body.initiated_by_user_id,
+            initiated_by_user_id=current_user.id,
             score_threshold=Decimal(str(body.score_threshold)),
             candidate_profile_ids=body.candidate_profile_ids,
             section_weights=weights_dict,
@@ -144,7 +155,5 @@ def score_candidates_endpoint(body: ScoreRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    finally:
-        db.close()
 
     return result

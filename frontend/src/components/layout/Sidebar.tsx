@@ -1,3 +1,6 @@
+import { api } from "@/api";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "react-router";
 import {
   LayoutDashboard,
@@ -13,7 +16,9 @@ import {
   FileUp
 } from "lucide-react";
 import { routes } from "@/routes";
+import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { UploadModal } from "@/components/candidates/UploadModal";
 
 const NAV_ITEMS = [
   { to: routes.dashboard, label: "Dashboard", icon: LayoutDashboard },
@@ -32,6 +37,14 @@ const SECONDARY_ITEMS = [
 ] as const;
 
 export function Sidebar() {
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const selectedJobId = useAuthStore((s) => s.selectedJobId);
+  const { data: jobsData } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => api.jobs.list(),
+    staleTime: 60_000,
+  });
+  const activeJob = (jobsData?.items ?? []).find((job) => job.id === selectedJobId);
   return (
     <aside
       className="hairline-r flex flex-col bg-bg-sidebar"
@@ -42,6 +55,9 @@ export function Sidebar() {
         <p className="font-display text-xl font-medium leading-none text-fg">RecruitAI</p>
         <p className="font-mono text-[10px] text-fg-subtle uppercase tracking-widest mt-1">
           Editorial Intelligence
+        </p>
+        <p className="mt-3 text-xs font-sans text-fg-muted truncate">
+          {activeJob ? `Job: ${activeJob.title}` : "No job selected"}
         </p>
       </div>
 
@@ -87,12 +103,15 @@ export function Sidebar() {
       <div className="hairline-t px-4 pt-3 pb-3">
         <button
           type="button"
+          onClick={() => setUploadOpen(true)}
           className="w-full bg-accent text-accent-fg rounded-md px-4 py-2.5 font-sans text-sm font-medium flex items-center gap-2 hover:bg-accent-hover transition-colors"
         >
           <FileUp size={16} strokeWidth={1.75} />
           Upload resume
         </button>
       </div>
+
+      <UploadModal open={uploadOpen} onOpenChange={setUploadOpen} />
 
       {/* Secondary footer */}
       <div className="hairline-t px-3 py-3">

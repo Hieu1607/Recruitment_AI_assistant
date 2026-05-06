@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -6,8 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import fitz  # PyMuPDF
+import requests
 from sqlalchemy.orm import Session
-
+from src.core.config import settings
 from src.models.candidate_profile import CandidateProfile
 from src.models.enums import ProfileStatus, UploadStatus
 from src.models.resume_document import ExtractionTrace, ResumeDocument
@@ -25,6 +27,35 @@ def extract_text_from_pdf(filepath: str) -> str:
     except Exception as exc:
         print(f"Error extracting text from {filepath}: {exc}")
         return ""
+
+
+def extract_text_via_hf_ocr(filepath: str) -> str:
+    """Fallback for image-based PDFs: submit to HF Tesseract OCR space and return text."""
+    base_url = settings.HF_OCR_BASE_URL.rstrip("/")
+    with open(filepath, "rb") as f:
+        resp = requests.post(
+            f"{base_url}/ocr/submit",
+            files={"file": (Path(filepath).name, f, "application/pdf")},
+            timeout=60,
+        )
+    resp.raise_for_status()
+    job_id = resp.json()["job_id"]
+
+    deadline = time.monotonic() + settings.HF_OCR_POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        status_resp = requests.get(f"{base_url}/ocr/status/{job_id}", timeout=10)
+        status_resp.raise_for_status()
+        data = status_resp.json()
+        if data["status"] == "done":
+            requests.delete(f"{base_url}/ocr/job/{job_id}", timeout=10)
+            return data.get("text") or ""
+        if data["status"] == "error":
+            raise RuntimeError(f"HF OCR job failed: {data.get('error')}")
+        time.sleep(settings.HF_OCR_POLL_INTERVAL)
+
+    raise TimeoutError(
+        f"HF OCR job {job_id} timed out after {settings.HF_OCR_POLL_TIMEOUT}s"
+    )
 
 
 def _extract_json_object(raw_text: str) -> Dict[str, Any]:
@@ -74,7 +105,9 @@ def _normalize_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
-def _build_profile_from_parsed(resume_document_id: uuid.UUID, parsed: Dict[str, Any]) -> CandidateProfile:
+def _build_profile_from_parsed(
+    resume_document_id: uuid.UUID, parsed: Dict[str, Any]
+) -> CandidateProfile:
     full_name = parsed.get("name") or "Unknown Candidate"
 
     return CandidateProfile(
@@ -108,6 +141,7 @@ def _build_profile_from_parsed(resume_document_id: uuid.UUID, parsed: Dict[str, 
 def parse_pdf_to_sections(
     filepaths: Sequence[str],
     db: Session,
+    job_id: uuid.UUID,
     uploaded_by_user_id: Optional[uuid.UUID] = None,
     retention_days: int = 365,
     original_filenames: Optional[List[str]] = None,
@@ -131,8 +165,10 @@ def parse_pdf_to_sections(
             original_file_name=display_name,
             storage_uri=str(source_path),
             upload_status=UploadStatus.UPLOADED.value,
+            job_id=job_id,
             uploaded_by_user_id=actor_id,
-            retention_expires_at=datetime.now(timezone.utc) + timedelta(days=retention_days),
+            retention_expires_at=datetime.now(timezone.utc)
+            + timedelta(days=retention_days),
         )
         db.add(resume)
         db.commit()
@@ -152,8 +188,7 @@ def parse_pdf_to_sections(
 
             cv_text = extract_text_from_pdf(str(source_path))
             if not cv_text.strip():
-                raise ValueError("No text extracted from PDF")
-
+                cv_text = extract_text_via_hf_ocr(str(source_path))
             prompt = build_prompts.build_cv_parsing_prompt(cv_text)
             llm_response = llm_provider.generate(prompt)
             parsed_payload = _extract_json_object(llm_response.text)
@@ -224,17 +259,29 @@ def batch_score_CVs():
 # Read
 # ---------------------------------------------------------------------------
 
+
 def _resume_to_dict(resume: ResumeDocument) -> Dict[str, Any]:
     return {
         "id": str(resume.id),
+        "job_id": str(resume.job_id),
         "original_file_name": resume.original_file_name,
         "storage_uri": resume.storage_uri,
-        "upload_status": resume.upload_status.value if hasattr(resume.upload_status, "value") else resume.upload_status,
+        "upload_status": (
+            resume.upload_status.value
+            if hasattr(resume.upload_status, "value")
+            else resume.upload_status
+        ),
         "duplicate_group_key": resume.duplicate_group_key,
         "uploaded_by_user_id": str(resume.uploaded_by_user_id),
         "uploaded_at": resume.uploaded_at.isoformat() if resume.uploaded_at else None,
-        "processed_at": resume.processed_at.isoformat() if resume.processed_at else None,
-        "retention_expires_at": resume.retention_expires_at.isoformat() if resume.retention_expires_at else None,
+        "processed_at": (
+            resume.processed_at.isoformat() if resume.processed_at else None
+        ),
+        "retention_expires_at": (
+            resume.retention_expires_at.isoformat()
+            if resume.retention_expires_at
+            else None
+        ),
     }
 
 
@@ -242,10 +289,13 @@ def get_resume(
     *,
     db: Session,
     resume_id: uuid.UUID,
+    job_id: Optional[uuid.UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return a single ResumeDocument dict, or None if not found."""
     resume = db.get(ResumeDocument, resume_id)
     if resume is None:
+        return None
+    if job_id is not None and resume.job_id != job_id:
         return None
     return _resume_to_dict(resume)
 
@@ -253,6 +303,7 @@ def get_resume(
 def list_resumes(
     *,
     db: Session,
+    job_id: Optional[uuid.UUID] = None,
     upload_status: Optional[str] = None,
     uploaded_by_user_id: Optional[uuid.UUID] = None,
     limit: int = 50,
@@ -267,6 +318,8 @@ def list_resumes(
         offset: Records to skip (default 0).
     """
     query = db.query(ResumeDocument)
+    if job_id is not None:
+        query = query.filter(ResumeDocument.job_id == job_id)
     if upload_status is not None:
         query = query.filter(ResumeDocument.upload_status == upload_status)
     if uploaded_by_user_id is not None:
@@ -279,6 +332,7 @@ def list_resumes(
 # ---------------------------------------------------------------------------
 # Update
 # ---------------------------------------------------------------------------
+
 
 def update_resume(
     *,
@@ -321,6 +375,7 @@ def update_resume(
 # ---------------------------------------------------------------------------
 # Delete
 # ---------------------------------------------------------------------------
+
 
 def delete_resume(
     *,

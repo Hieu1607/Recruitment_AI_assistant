@@ -8,6 +8,7 @@ import {
     Skeleton,
     type ScoreSegment,
 } from "@/components/ui";
+import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -26,8 +27,6 @@ import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 // ── constants ────────────────────────────────────────────────────────────────
-
-const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 const PROCESSING_MESSAGES = [
   "Reading job description…",
@@ -89,6 +88,7 @@ function scoreColor(n: number) {
 
 export default function ScoringSetupRoute() {
   const [searchParams] = useSearchParams();
+  const selectedJobId = useSelectedJobId();
 
   // ── step state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>(1);
@@ -121,18 +121,32 @@ export default function ScoringSetupRoute() {
 
   const { data: jdData, isLoading: jdsLoading } = useQuery({
     queryKey: ["jobDescriptions"],
-    queryFn: () => api.jobDescriptions.list({ limit: 200 }),
+    queryFn: async () => {
+      if (!selectedJobId) return { items: [], total: 0 };
+      try {
+        const jd = await api.jobs.jobDescription.get(selectedJobId);
+        return { items: [jd], total: 1 };
+      } catch {
+        return { items: [], total: 0 };
+      }
+    },
   });
 
   const { data: resumeData, isLoading: resumesLoading } = useQuery({
     queryKey: ["resumes", 200],
-    queryFn: () => api.upload.list({ limit: 200 }),
+    queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 200 }) : Promise.resolve({ items: [], total: 0 })),
     enabled: candidateMode === "specific",
   });
 
   const jds: JobDescriptionResponse[] = jdData?.items ?? [];
   const resumes = resumeData?.items ?? [];
   const selectedJd = jds.find((j) => j.id === selectedJdId);
+
+  useEffect(() => {
+    if (!selectedJdId && jds.length > 0) {
+      setSelectedJdId(jds[0].id);
+    }
+  }, [jds, selectedJdId]);
 
   // ── processing timers ─────────────────────────────────────────────────────
 
@@ -159,9 +173,7 @@ export default function ScoringSetupRoute() {
       sections.forEach((s) => {
         sw[s.key] = s.value;
       });
-      return api.scoring.score({
-        job_description_id: selectedJdId,
-        initiated_by_user_id: PLACEHOLDER_USER_ID,
+      return api.jobs.score(selectedJobId!, {
         score_threshold: threshold,
         batch_size: batchSize,
         section_weights: sw,
@@ -174,6 +186,7 @@ export default function ScoringSetupRoute() {
     onSuccess: (data) => {
       setScoreResult(data);
       setStep(3);
+      localStorage.setItem("recruiter_onboarding_scored", "true");
     },
     onError: () => {
       toast.error("Scoring failed — please try again");
@@ -266,7 +279,7 @@ export default function ScoringSetupRoute() {
   }
 
   function startScoring() {
-    if (!selectedJdId) {
+    if (!selectedJobId || !selectedJdId) {
       toast.error("Please select a job description");
       return;
     }

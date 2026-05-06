@@ -1,6 +1,8 @@
 import axios, { type AxiosInstance } from "axios";
 import { ApiError, parseAxiosError } from "./errors";
 
+const TOKEN_KEY = "recruitai.token";
+
 const baseURL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
@@ -9,6 +11,14 @@ export const client: AxiosInstance = axios.create({
   timeout: 60_000,
   withCredentials: false,
   headers: { "Content-Type": "application/json" },
+});
+
+client.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 client.interceptors.response.use(

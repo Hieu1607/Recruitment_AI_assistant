@@ -24,6 +24,7 @@ export type RoleName = "admin" | "recruiter" | "viewer";
 
 export interface ResumeResponse {
   id: string;                              // UUID
+  job_id?: string;                         // UUID
   original_file_name: string;
   storage_uri: string;                     // server-side file path
   upload_status: UploadStatus;
@@ -53,12 +54,32 @@ export interface ResumeListResponse {
   items: ResumeResponse[];
 }
 
+export interface CandidateProfileResponse {
+  id: string;
+  resume_document_id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  location_normalized: string | null;
+  current_job_title: string | null;
+  summary_text: string | null;
+  skills_text: string | null;
+  experience_text: string | null;
+  experience_years: number | null;
+  education_text: string | null;
+  languages_text: string | null;
+  projects_text: string | null;
+  achievements_text: string | null;
+  certifications_text: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Job Descriptions
 // ---------------------------------------------------------------------------
 
 export interface JobDescriptionResponse {
   id: string;                              // UUID
+  job_id?: string;                         // UUID
   title: string | null;
   jd_text: string;
   created_by_user_id: string;             // UUID
@@ -146,6 +167,21 @@ export interface ChatRequest {
   message: string;
   session_id?: string;
   candidate_limit?: number;             // 1 - 2000, default 500
+}
+
+export interface JobResponse {
+  id: string;
+  owner_user_id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface JobListResponse {
+  items: JobResponse[];
+  total: number;
 }
 
 export interface ChatResponse {

@@ -1,0 +1,3 @@
+[      75ms] [WARNING] No `HydrateFallback` element provided to render during initial hydration @ http://localhost:5173/assets/index-BiSzbFX_.js:49
+[   57334ms] [ERROR] Failed to load resource: the server responded with a status of 422 (Unprocessable Entity) @ http://localhost:8000/api/v1/job-descriptions/:0
+[   69899ms] [ERROR] Failed to load resource: the server responded with a status of 422 (Unprocessable Entity) @ http://localhost:8000/api/v1/job-descriptions/:0

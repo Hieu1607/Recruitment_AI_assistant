@@ -10,6 +10,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:alpine
@@ -17,7 +22,7 @@ services:
       - "6379:6379"
 
   backend:
-    build: 
+    build:
       context: ./backend
     ports:
       - "8000:8000"
@@ -31,19 +36,30 @@ services:
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-openai/gpt-oss-20b}
+      - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-llama-3.1-8b-instant}
+      - GROQ_VISION_MODEL_NAME=${GROQ_VISION_MODEL_NAME:-meta-llama/llama-4-scout-17b-16e-instruct}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
       - BACKEND_CORS_ORIGINS=["http://localhost:5173"]
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
+      - WATCHFILES_FORCE_POLLING=true
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: >
+      sh -c "alembic -c alembic.ini upgrade head &&
+             uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src --reload-dir /app/migrations"
     volumes:
       - ./backend:/app
 
   worker:
-    build: 
+    build:
       context: ./backend
     command: celery -A worker.celery_app worker --loglevel=info
     environment:
@@ -56,20 +72,31 @@ services:
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-openai/gpt-oss-20b}
+      - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-llama-3.1-8b-instant}
+      - GROQ_VISION_MODEL_NAME=${GROQ_VISION_MODEL_NAME:-meta-llama/llama-4-scout-17b-16e-instruct}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
     depends_on:
-      - db
-      - redis
-      - backend
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      backend:
+        condition: service_started
     volumes:
       - ./backend:/app
 
   frontend:
     build:
       context: ./frontend
+      target: dev
+      args:
+        VITE_API_BASE_URL: http://localhost:8000/api/v1
     ports:
       - "5173:5173"
     volumes:

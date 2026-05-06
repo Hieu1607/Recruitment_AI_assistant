@@ -4,32 +4,34 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 class BuildPrompts:
-	"""Build prompt strings for CV parsing, scoring, and CV section retrieval."""
+    """Build prompt strings for CV parsing, scoring, and CV section retrieval."""
 
-	DEFAULT_SECTION_WEIGHTS: Dict[str, float] = {
-		"skills": 0.35,
-		"experience": 0.35,
-		"projects": 0.15,
-		"education": 0.10,
-		"summary": 0.05,
-	}
+    DEFAULT_SECTION_WEIGHTS: Dict[str, float] = {
+        "skills": 0.35,
+        "experience": 0.35,
+        "projects": 0.15,
+        "education": 0.10,
+        "summary": 0.05,
+    }
 
-	def __init__(self, prompt_dir: Optional[Path] = None, max_prompt_chars: int = 24000):
-		self.prompt_dir = prompt_dir or Path(__file__).parent
-		self.max_prompt_chars = max_prompt_chars
+    def __init__(
+        self, prompt_dir: Optional[Path] = None, max_prompt_chars: int = 24000
+    ):
+        self.prompt_dir = prompt_dir or Path(__file__).parent
+        self.max_prompt_chars = max_prompt_chars
 
-	def _clip_text(self, text: str, max_chars: Optional[int] = None) -> str:
-		limit = max_chars or self.max_prompt_chars
-		cleaned = (text or "").strip()
-		if len(cleaned) <= limit:
-			return cleaned
-		head = cleaned[: int(limit * 0.7)]
-		tail = cleaned[-int(limit * 0.3):]
-		return f"{head}\n\n...[TRUNCATED]...\n\n{tail}"
+    def _clip_text(self, text: str, max_chars: Optional[int] = None) -> str:
+        limit = max_chars or self.max_prompt_chars
+        cleaned = (text or "").strip()
+        if len(cleaned) <= limit:
+            return cleaned
+        head = cleaned[: int(limit * 0.7)]
+        tail = cleaned[-int(limit * 0.3) :]
+        return f"{head}\n\n...[TRUNCATED]...\n\n{tail}"
 
-	def build_cv_parsing_prompt(self, cv_text: str) -> str:
-		clipped = self._clip_text(cv_text)
-		return f"""
+    def build_cv_parsing_prompt(self, cv_text: str) -> str:
+        clipped = self._clip_text(cv_text)
+        return f"""
 		Analyze the CV text and return ONLY one valid JSON object (no markdown, no explanation).
 
 		Required schema:
@@ -67,148 +69,189 @@ class BuildPrompts:
 		{clipped}
 		""".strip()
 
-	def build_batch_scoring_prompt(
-		self,
-		*,
-		job_description_text: str,
-		candidates: Iterable[Dict[str, Any]],
-		section_weights: Optional[Dict[str, float]] = None,
-	) -> str:
-		if section_weights is not None:
-			# Explicit weights provided: unmentioned sections default to 0
-			weights: Dict[str, float] = {
-				str(k): max(0.0, float(v))
-				for k, v in section_weights.items()
-				if v is not None
-			}
-		else:
-			# No weights provided: fall back to class defaults
-			weights = dict(self.DEFAULT_SECTION_WEIGHTS)
+    def build_cv_vision_prompt(self) -> str:
+        return """Analyze the CV image(s) and return ONLY one valid JSON object (no markdown, no explanation).
 
-		total = sum(weights.values())
-		if total <= 0:
-			raise ValueError("section_weights total must be > 0")
+Required schema:
+{
+"name": string|null,
+"phone": string|null,
+"email": string|null,
+"location": string|null,
+"contact": string|null,
+"current_job_title": string|null,
+"educated": boolean,
+"ever_studied_abroad": boolean,
+"major": string|null,
+"cpa": string|null,
+"education": string|null,
+"experience": string|null,
+"experience_years": number|null,
+"skills": string|null,
+"languages": string|null,
+"projects": string|null,
+"summary": string|null,
+"achievements": string|null,
+"publications": string|null,
+"certifications": string|null,
+"references": string|null,
+"other": string|null
+}
 
-		normalized_weights = {
-			k: round(v / total, 4)
-			for k, v in weights.items()
-		}
+Rules:
+- Use null when unknown.
+- Keep extracted text concise and faithful to the CV.
+- experience_years must be numeric (e.g., 3 or 4.5) or null.
+- The CV may be in Vietnamese — extract text exactly as written.""".strip()
 
-		payload = {
-			"jobDescription": self._clip_text(job_description_text, max_chars=12000),
-			"sectionWeights": normalized_weights,
-			"candidates": [
-				{
-					"candidateId": str(candidate.get("id") or candidate.get("candidateId") or ""),
-					"fullName": candidate.get("full_name") or candidate.get("fullName"),
-					"currentJobTitle": candidate.get("current_job_title")
-					or candidate.get("currentJobTitle"),
-					"education": candidate.get("education_text") or candidate.get("education"),
-					"experience": candidate.get("experience_text") or candidate.get("experience"),
-					"skills": candidate.get("skills_text") or candidate.get("skills"),
-					"summary": candidate.get("summary_text") or candidate.get("summary"),
-				}
-				for candidate in candidates
-			],
-			"responseFormat": {
-				"scores": [
-					{
-						"candidateId": "uuid",
-						"totalScore": 0,
-						"passedThreshold": False,
-						"rationale": "string",
-						"componentScores": [
-							{
-								"criterionKey": "skills",
-								"weight": 0.4,
-								"score": 80,
-								"weightedScore": 32,
-								"evidenceSummary": "string",
-							}
-						],
-					}
-				]
-			},
-		}
+    def build_batch_scoring_prompt(
+        self,
+        *,
+        job_description_text: str,
+        candidates: Iterable[Dict[str, Any]],
+        section_weights: Optional[Dict[str, float]] = None,
+    ) -> str:
+        if section_weights is not None:
+            # Explicit weights provided: unmentioned sections default to 0
+            weights: Dict[str, float] = {
+                str(k): max(0.0, float(v))
+                for k, v in section_weights.items()
+                if v is not None
+            }
+        else:
+            # No weights provided: fall back to class defaults
+            weights = dict(self.DEFAULT_SECTION_WEIGHTS)
 
-		return (
-			"You are an objective recruitment scoring system. "
-			"Use sectionWeights when calculating scores. "
-			"Return valid JSON only with the shape shown in responseFormat.\n\n"
-			f"{json.dumps(payload, ensure_ascii=True)}"
-		)
+        total = sum(weights.values())
+        if total <= 0:
+            raise ValueError("section_weights total must be > 0")
 
-	def build_cv_section_match_prompt(
-		self,
-		*,
-		question: str,
-		cv_section_items: Iterable[Dict[str, Any]],
-		allowed_sections: Optional[List[str]] = None,
-		max_items: int = 200,
-	) -> str:
-		"""Build prompt to find matching CVs from section-level CV payloads.
+        normalized_weights = {k: round(v / total, 4) for k, v in weights.items()}
 
-		Each item should contain:
-		- cvId (or id)
-		- cvName (or name/fullName)
-		- sections: dict or list of section snippets
-		"""
-		if not question or not question.strip():
-			raise ValueError("question must not be empty")
+        payload = {
+            "jobDescription": self._clip_text(job_description_text, max_chars=12000),
+            "sectionWeights": normalized_weights,
+            "candidates": [
+                {
+                    "candidateId": str(
+                        candidate.get("id") or candidate.get("candidateId") or ""
+                    ),
+                    "fullName": candidate.get("full_name") or candidate.get("fullName"),
+                    "currentJobTitle": candidate.get("current_job_title")
+                    or candidate.get("currentJobTitle"),
+                    "education": candidate.get("education_text")
+                    or candidate.get("education"),
+                    "experience": candidate.get("experience_text")
+                    or candidate.get("experience"),
+                    "skills": candidate.get("skills_text") or candidate.get("skills"),
+                    "summary": candidate.get("summary_text")
+                    or candidate.get("summary"),
+                }
+                for candidate in candidates
+            ],
+            "responseFormat": {
+                "scores": [
+                    {
+                        "candidateId": "uuid",
+                        "totalScore": 0,
+                        "passedThreshold": False,
+                        "rationale": "string",
+                        "componentScores": [
+                            {
+                                "criterionKey": "skills",
+                                "weight": 0.4,
+                                "score": 80,
+                                "weightedScore": 32,
+                                "evidenceSummary": "string",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
 
-		normalized: List[Dict[str, Any]] = []
-		for idx, item in enumerate(cv_section_items):
-			if idx >= max_items:
-				break
-			cv_id = item.get("cvId") or item.get("id") or ""
-			cv_name = item.get("cvName") or item.get("name") or item.get("fullName") or ""
-			sections = item.get("sections") or {}
+        return (
+            "You are an objective recruitment scoring system. "
+            "Use sectionWeights when calculating scores. "
+            "Return valid JSON only with the shape shown in responseFormat.\n\n"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
 
-			if isinstance(sections, list):
-				sections_text = "\n".join(str(s) for s in sections)
-				sections = {"raw": self._clip_text(sections_text, max_chars=3000)}
-			elif isinstance(sections, dict):
-				clipped_sections: Dict[str, str] = {}
-				for key, value in sections.items():
-					if allowed_sections and key not in allowed_sections:
-						continue
-					clipped_sections[str(key)] = self._clip_text(str(value), max_chars=1200)
-				sections = clipped_sections
-			else:
-				sections = {"raw": self._clip_text(str(sections), max_chars=2000)}
+    def build_cv_section_match_prompt(
+        self,
+        *,
+        question: str,
+        cv_section_items: Iterable[Dict[str, Any]],
+        allowed_sections: Optional[List[str]] = None,
+        max_items: int = 200,
+    ) -> str:
+        """Build prompt to find matching CVs from section-level CV payloads.
 
-			normalized.append(
-				{
-					"cvId": str(cv_id),
-					"cvName": str(cv_name),
-					"sections": sections,
-				}
-			)
+        Each item should contain:
+        - cvId (or id)
+        - cvName (or name/fullName)
+        - sections: dict or list of section snippets
+        """
+        if not question or not question.strip():
+            raise ValueError("question must not be empty")
 
-		payload = {
-			"question": question.strip(),
-			"candidates": normalized,
-			"responseFormat": {
-				"matches": [
-					{
-						"cvId": "string",
-						"cvName": "string",
-						"reason": "short evidence-based explanation",
-					}
-				]
-			},
-		}
+        normalized: List[Dict[str, Any]] = []
+        for idx, item in enumerate(cv_section_items):
+            if idx >= max_items:
+                break
+            cv_id = item.get("cvId") or item.get("id") or ""
+            cv_name = (
+                item.get("cvName") or item.get("name") or item.get("fullName") or ""
+            )
+            sections = item.get("sections") or {}
 
-		instructions = (
-			"You are a CV retrieval assistant. Use only candidate section data to answer the question. "
-			"Return JSON only. Include only truly relevant CVs. "
-			"Do not invent IDs or names. If none match, return {\"matches\": []}."
-		)
+            if isinstance(sections, list):
+                sections_text = "\n".join(str(s) for s in sections)
+                sections = {"raw": self._clip_text(sections_text, max_chars=3000)}
+            elif isinstance(sections, dict):
+                clipped_sections: Dict[str, str] = {}
+                for key, value in sections.items():
+                    if allowed_sections and key not in allowed_sections:
+                        continue
+                    clipped_sections[str(key)] = self._clip_text(
+                        str(value), max_chars=1200
+                    )
+                sections = clipped_sections
+            else:
+                sections = {"raw": self._clip_text(str(sections), max_chars=2000)}
 
-		return f"{instructions}\n\n{json.dumps(payload, ensure_ascii=True)}"
+            normalized.append(
+                {
+                    "cvId": str(cv_id),
+                    "cvName": str(cv_name),
+                    "sections": sections,
+                }
+            )
 
-	def build_dsl_query_prompt(self, question: str) -> str:
-		_template = """You are a recruitment data query assistant. Translate the user's question into a JSON object that can be used to query the candidate database with the following schema:
+        payload = {
+            "question": question.strip(),
+            "candidates": normalized,
+            "responseFormat": {
+                "matches": [
+                    {
+                        "cvId": "string",
+                        "cvName": "string",
+                        "reason": "short evidence-based explanation",
+                    }
+                ]
+            },
+        }
+
+        instructions = (
+            "You are a CV retrieval assistant. Use only candidate section data to answer the question. "
+            "Return JSON only. Include only truly relevant CVs. "
+            'Do not invent IDs or names. If none match, return {"matches": []}.'
+        )
+
+        return f"{instructions}\n\n{json.dumps(payload, ensure_ascii=True)}"
+
+    def build_dsl_query_prompt(self, question: str) -> str:
+        _template = """You are a recruitment data query assistant. Translate the user's question into a JSON object that can be used to query the candidate database with the following schema:
 		    full_name: String, name of the candidate
 			phone: String, phone number of the candidate
 			email: String, email address of the candidate
@@ -284,11 +327,11 @@ Return a JSON object with the following structure:
 
 ---
 		Question: """
-		return _template + question + "\n"
-	
-	def build_llm_query_prompt(self, question: str, candidate_data: list) -> str:
+        return _template + question + "\n"
 
-		return f"""You are a recruitment assistant. Answer the user's question based on the candidate data.
+    def build_llm_query_prompt(self, question: str, candidate_data: list) -> str:
+
+        return f"""You are a recruitment assistant. Answer the user's question based on the candidate data.
 		Return a Json list object with the following schema:
 		{{
 		  "total_qualified_candidates": number, // the total number of candidates that meet the criteria
@@ -300,11 +343,11 @@ Return a JSON object with the following structure:
 		If the question cannot be answered with the available data, respond with empty dictionary. Question: {question}
 		
 """
-	
-	def build_answer_prompt(self, question: str, candidates: list) -> str:
-		"""Build a RAG prompt to generate a natural-language answer from candidate data."""
-		candidate_json = json.dumps(candidates, ensure_ascii=False, indent=2)
-		return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below with simple explaination. Answer nicely by Vietnamese.
+
+    def build_answer_prompt(self, question: str, candidates: list) -> str:
+        """Build a RAG prompt to generate a natural-language answer from candidate data."""
+        candidate_json = json.dumps(candidates, ensure_ascii=False, indent=2)
+        return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below with simple explaination. Answer nicely by Vietnamese.
 
 Rules:
 - Be concise and specific. Reference candidates by name when relevant.
@@ -318,8 +361,8 @@ Question: {question}
 
 Answer:"""
 
-	def build_router_prompt(self, question: str) -> str:
-		return f"""You are a recruitment assistant router. Given the user's question, do two things in one response:
+    def build_router_prompt(self, question: str) -> str:
+        return f"""You are a recruitment assistant router. Given the user's question, do two things in one response:
 
 1. Decide if the question is related to recruitment, candidates, resumes, hiring, or HR topics.
 2. If it is related, decide how to route it (structured DSL query, LLM analysis, or both).
@@ -358,5 +401,47 @@ Database schema:
   publications_text, certifications_text, references_text, other_text
 
 Question: {question}"""
+
+    def build_interview_questions_prompt(
+        self,
+        *,
+        candidate_data: Dict[str, Any],
+        job_description_text: str,
+    ) -> str:
+        """Build a prompt to generate structured interview questions for a candidate+JD pair."""
+        clipped_jd = self._clip_text(job_description_text, max_chars=8000)
+        clipped_candidate = {
+            k: self._clip_text(str(v or ""), max_chars=2000)
+            for k, v in candidate_data.items()
+            if v
+        }
+
+        payload = {
+            "jobDescription": clipped_jd,
+            "candidate": clipped_candidate,
+            "responseFormat": {
+                "categories": [
+                    {
+                        "name": "string (e.g. Technical, Behavioral, Situational)",
+                        "questions": [
+                            {
+                                "id": "unique string e.g. q1",
+                                "text": "question text",
+                                "difficulty": "easy | medium | hard",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+
+        return (
+            "You are a recruitment assistant generating tailored interview questions. "
+            "Based on the candidate profile and job description, generate 2-3 categories "
+            "with 3-5 questions each. Tailor questions to the candidate's background. "
+            "Return valid JSON only matching the responseFormat shape exactly.\n\n"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
+
 
 build_prompts = BuildPrompts()

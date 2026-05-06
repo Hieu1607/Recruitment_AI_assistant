@@ -1,0 +1,190 @@
+- generic:
+  - generic:
+    - generic:
+      - complementary:
+        - generic:
+          - paragraph: RecruitAI
+          - paragraph: Editorial Intelligence
+        - navigation:
+          - list:
+            - listitem:
+              - link:
+                - /url: /dashboard
+                - img
+                - generic: Dashboard
+            - listitem:
+              - link:
+                - /url: /candidates
+                - img
+                - generic: Candidates
+            - listitem:
+              - link:
+                - /url: /job-descriptions
+                - img
+                - generic: Job Descriptions
+            - listitem:
+              - link:
+                - /url: /scoring
+                - img
+                - generic: Scoring
+            - listitem:
+              - link:
+                - /url: /chat
+                - img
+                - generic: AI Chat
+            - listitem:
+              - link:
+                - /url: /shortlists
+                - img
+                - generic: Shortlists
+            - listitem:
+              - link:
+                - /url: /outreach
+                - img
+                - generic: Outreach
+            - listitem:
+              - link:
+                - /url: /interview-questions
+                - img
+                - generic: Interview Prep
+        - generic:
+          - button:
+            - img
+            - text: Upload resume
+        - generic:
+          - list:
+            - listitem:
+              - link:
+                - /url: /settings
+                - img
+                - generic: Settings
+            - listitem:
+              - link:
+                - /url: /candidates#support
+                - img
+                - generic: Support
+      - generic:
+        - banner:
+          - link:
+            - /url: /dashboard
+            - generic: RecruitAI
+          - navigation:
+            - img
+            - generic: Candidates
+          - generic:
+            - button:
+              - img
+              - generic: Search candidates, JDs…
+              - generic:
+                - img
+                - text: K
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+            - group:
+              - generic:
+                - generic:
+                  - generic: R
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - heading [level=1]: Candidates
+                  - paragraph: Manage parsed resumes and candidate profiles
+                - button:
+                  - generic:
+                    - img
+                  - generic: Upload resumes
+              - generic:
+                - generic:
+                  - img
+                  - textbox:
+                    - /placeholder: Search by name or file…
+                - generic:
+                  - checkbox [checked]: All
+                  - checkbox: Uploaded
+                  - checkbox: Processing
+                  - checkbox: Processed
+                  - checkbox: Failed
+                - generic:
+                  - button:
+                    - generic:
+                      - text: Newest first
+                      - img
+                - generic:
+                  - button [pressed]:
+                    - img
+                  - button:
+                    - img
+              - generic:
+                - generic:
+                  - table:
+                    - rowgroup:
+                      - row:
+                        - columnheader:
+                          - checkbox
+                        - columnheader:
+                          - generic: Candidate
+                        - columnheader:
+                          - generic: Status
+                        - columnheader:
+                          - generic: Uploaded by
+                        - columnheader:
+                          - generic: Uploaded
+                        - columnheader:
+                          - generic: Expires
+                        - columnheader
+                    - rowgroup:
+                      - row:
+                        - cell:
+                          - checkbox
+                        - cell:
+                          - generic:
+                            - link:
+                              - /url: /candidates/192b7c02-9a45-45d2-a80b-1e64a14ed6d3
+                              - text: Khang
+                            - generic: Khang.pdf
+                        - cell:
+                          - generic: Failed
+                        - cell: "#000000…0000"
+                        - cell: just now
+                        - cell: just now
+                        - cell:
+                          - generic:
+                            - link:
+                              - /url: /candidates/192b7c02-9a45-45d2-a80b-1e64a14ed6d3
+                              - img
+                            - button
+                            - button
+              - generic:
+                - generic:
+                  - generic: Showing 1–1 of 1
+                  - generic:
+                    - generic:
+                      - generic: Rows
+                      - combobox
+                    - generic:
+                      - button [disabled]:
+                        - img
+                      - generic: 1 / 1
+                      - button [disabled]:
+                        - img
+    - region "Notifications alt+T"
+  - dialog "0 of 1 resumes processed" [active] [ref=e216]:
+    - generic [ref=e217]:
+      - heading "0 of 1 resumes processed" [level=2] [ref=e218]
+      - paragraph [ref=e219]: 1 file failed to parse.
+    - generic [ref=e221]:
+      - img [ref=e222]
+      - paragraph [ref=e226]: Khang.pdf
+      - generic [ref=e227]: Failed
+    - generic [ref=e228]:
+      - button "Upload more" [ref=e229]:
+        - generic [ref=e230]: Upload more
+      - button "View candidates" [ref=e231]:
+        - generic [ref=e232]: View candidates
+    - button "Close" [ref=e233]:
+      - img [ref=e234]

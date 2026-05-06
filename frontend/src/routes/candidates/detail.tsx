@@ -1,4 +1,5 @@
 import type {
+    CandidateProfileResponse,
     OutreachResponse,
     QuestionSetResponse,
     ResumeResponse
@@ -10,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Modal, ModalContent, ModalFooter, ModalHeader, ModalTitle } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,8 +34,6 @@ import { toast } from "sonner";
 // ── types ─────────────────────────────────────────────────────────────────────
 
 type Tab = "overview" | "resume" | "scoring" | "outreach" | "interview";
-
-const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -139,90 +139,129 @@ function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function OverviewTab({ resume }: { resume: ResumeResponse }) {
+function ProfileSection({ label, text }: { label: string; text: string | null | undefined }) {
+  if (!text) return null;
+  return (
+    <div>
+      <h3 className="font-display text-lg font-medium text-fg mb-3">{label}</h3>
+      <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+        <p className="text-sm font-sans text-fg leading-relaxed whitespace-pre-wrap">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function OverviewTab({
+  resume,
+  profile,
+  profileLoading,
+}: {
+  resume: ResumeResponse;
+  profile: CandidateProfileResponse | undefined;
+  profileLoading: boolean;
+}) {
+  const skills = profile?.skills_text
+    ? profile.skills_text.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean)
+    : [];
+
   return (
     <div className="grid grid-cols-3 gap-8">
       {/* Left: profile data */}
       <div className="col-span-2 space-y-8">
-        {/* Summary */}
-        <div>
-          <h3 className="font-display text-lg font-medium text-fg mb-3">Summary</h3>
-          {resume.upload_status === "processed" ? (
-            <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
-              <p className="text-sm font-sans text-fg-muted leading-relaxed italic">
-                Detailed profile summary is extracted and stored server-side after LLM processing.
-                Run a scoring session to see this candidate's strengths in context.
-              </p>
-            </div>
-          ) : (
-            <EmptyState
-              heading="Profile not yet analysed"
-              body={`This resume is ${resume.upload_status}. Summary will appear once processing completes.`}
-            />
-          )}
-        </div>
-
-        {/* Skills */}
-        <div>
-          <h3 className="font-display text-lg font-medium text-fg mb-3">Key Skills</h3>
-          {resume.upload_status === "processed" ? (
-            <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
-              <div className="flex flex-wrap gap-2">
-                {[
-                  "Profile Analysis", "Resume Processed", "LLM Extracted",
-                  "Awaiting Skill Endpoint", "Score to See Breakdown",
-                ].map((skill) => (
-                  <span
-                    key={skill}
-                    className="px-2.5 py-1 text-xs font-sans text-fg-muted rounded-[var(--radius-sm)] border border-[color:var(--hairline)]"
-                  >
-                    {skill}
-                  </span>
-                ))}
+        {profileLoading ? (
+          <div className="space-y-4">
+            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-24 w-full" />)}
+          </div>
+        ) : !profile ? (
+          <EmptyState
+            heading="Profile not yet analysed"
+            body={`This resume is ${resume.upload_status}. Profile data will appear once processing completes.`}
+          />
+        ) : (
+          <>
+            {/* Basic contact / identity info — always shown when profile exists */}
+            {(profile.current_job_title || profile.email || profile.phone || profile.location_normalized || profile.experience_years != null) && (
+              <div className="grid grid-cols-2 gap-3">
+                {profile.current_job_title && (
+                  <div className="col-span-2 p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                    <p className="text-xs text-fg-muted mb-0.5">Current role</p>
+                    <p className="text-sm font-medium text-fg">{profile.current_job_title}</p>
+                  </div>
+                )}
+                {profile.email && (
+                  <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                    <p className="text-xs text-fg-muted mb-0.5">Email</p>
+                    <p className="text-sm text-fg break-all">{profile.email}</p>
+                  </div>
+                )}
+                {profile.phone && (
+                  <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                    <p className="text-xs text-fg-muted mb-0.5">Phone</p>
+                    <p className="text-sm text-fg">{profile.phone}</p>
+                  </div>
+                )}
+                {profile.location_normalized && (
+                  <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                    <p className="text-xs text-fg-muted mb-0.5">Location</p>
+                    <p className="text-sm text-fg">{profile.location_normalized}</p>
+                  </div>
+                )}
+                {profile.experience_years != null && (
+                  <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                    <p className="text-xs text-fg-muted mb-0.5">Experience</p>
+                    <p className="text-sm text-fg">{profile.experience_years} years</p>
+                  </div>
+                )}
               </div>
-              <p className="text-xs text-fg-subtle font-sans mt-3">
-                Structured skill extraction requires a dedicated profile endpoint — not yet exposed by the API.
-              </p>
-            </div>
-          ) : (
-            <EmptyState heading="No skills extracted yet" body="Resume must be processed first." />
-          )}
-        </div>
+            )}
 
-        {/* Experience timeline */}
-        <div>
-          <h3 className="font-display text-lg font-medium text-fg mb-3">Experience</h3>
-          {resume.upload_status === "processed" ? (
-            <div className="relative pl-6 space-y-6">
-              <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[color:var(--hairline)]" />
-              <div className="relative">
-                <div className="absolute -left-6 top-1.5 h-3 w-3 rounded-full border-2 border-accent bg-bg" />
+            {/* Summary */}
+            {profile.summary_text && (
+              <div>
+                <h3 className="font-display text-lg font-medium text-fg mb-3">Summary</h3>
                 <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
-                  <p className="text-xs font-sans text-fg-muted italic">
-                    Work experience timeline is extracted during processing but requires a profile endpoint to retrieve.
-                    Run a scoring session to view component scores including experience evaluation.
-                  </p>
+                  <p className="text-sm font-sans text-fg leading-relaxed">{profile.summary_text}</p>
                 </div>
               </div>
-            </div>
-          ) : (
-            <EmptyState heading="No experience data yet" body="Resume must be processed first." />
-          )}
-        </div>
+            )}
 
-        {/* Education */}
-        <div>
-          <h3 className="font-display text-lg font-medium text-fg mb-3">Education</h3>
-          {resume.upload_status === "processed" ? (
-            <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
-              <p className="text-sm font-sans text-fg-muted italic">
-                Education history available after profile endpoint is exposed.
-              </p>
-            </div>
-          ) : (
-            <EmptyState heading="No education data yet" body="Resume must be processed first." />
-          )}
-        </div>
+            {/* Skills */}
+            {skills.length > 0 && (
+              <div>
+                <h3 className="font-display text-lg font-medium text-fg mb-3">Key Skills</h3>
+                <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                  <div className="flex flex-wrap gap-2">
+                    {skills.map((skill) => (
+                      <span
+                        key={skill}
+                        className="px-2.5 py-1 text-xs font-sans text-fg rounded-[var(--radius-sm)] border border-[color:var(--hairline)] bg-bg"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <ProfileSection label="Experience" text={profile.experience_text} />
+            <ProfileSection label="Education" text={profile.education_text} />
+            <ProfileSection label="Projects" text={profile.projects_text} />
+            <ProfileSection label="Certifications" text={profile.certifications_text} />
+            <ProfileSection label="Achievements" text={profile.achievements_text} />
+
+            {/* Fallback when all text sections are empty */}
+            {!profile.summary_text && skills.length === 0 && !profile.experience_text &&
+              !profile.education_text && !profile.projects_text && (
+              <div className="p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated">
+                <p className="text-sm font-sans text-fg-muted italic">
+                  Detailed sections (summary, skills, experience, education) were not extracted for this
+                  candidate. Re-upload the resume to trigger a fresh extraction.
+                </p>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Right: metadata card */}
@@ -538,12 +577,13 @@ function AddToShortlistModal({
   candidateId: string;
 }) {
   const qc = useQueryClient();
+  const userId = useUserId();
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 
   const { data: collectionsData, isLoading } = useQuery({
     queryKey: ["collections-picker"],
-    queryFn: () => api.shortlist.collections.list({ user_id: PLACEHOLDER_USER_ID, limit: 50 }),
+    queryFn: () => api.shortlist.collections.list({ user_id: userId ?? "", limit: 50 }),
     enabled: open,
   });
   const collections = collectionsData?.items ?? [];
@@ -562,7 +602,7 @@ function AddToShortlistModal({
   const createAndAddMutation = useMutation({
     mutationFn: async () => {
       const collection = await api.shortlist.collections.create({
-        created_by_user_id: PLACEHOLDER_USER_ID,
+        created_by_user_id: userId ?? "",
         name: newName.trim(),
       });
       await api.shortlist.items.add(collection.id, { candidate_profile_id: candidateId });
@@ -688,16 +728,25 @@ export default function CandidateDetailRoute() {
     enabled: !!id,
   });
 
+  const { data: profile, isLoading: profileLoading } = useQuery({
+    queryKey: ["candidate-profile", id],
+    queryFn: () => api.upload.getProfile(id!),
+    enabled: !!id && resume?.upload_status === "processed",
+    retry: false,
+  });
+
+  const profileId = profile?.id;
+
   const { data: outreachData, isLoading: outreachLoading } = useQuery({
-    queryKey: ["outreach-candidate", id],
-    queryFn: () => api.outreach.list({ candidate_profile_id: id, limit: 50 }),
-    enabled: !!id,
+    queryKey: ["outreach-candidate", profileId],
+    queryFn: () => api.outreach.list({ candidate_profile_id: profileId, limit: 50 }),
+    enabled: !!profileId,
   });
 
   const { data: interviewData, isLoading: interviewLoading } = useQuery({
-    queryKey: ["interviews-candidate", id],
-    queryFn: () => api.interviewQuestions.list({ candidate_profile_id: id, limit: 50 }),
-    enabled: !!id,
+    queryKey: ["interviews-candidate", profileId],
+    queryFn: () => api.interviewQuestions.list({ candidate_profile_id: profileId, limit: 50 }),
+    enabled: !!profileId,
   });
 
   const outreachItems = outreachData?.items ?? [];
@@ -728,7 +777,7 @@ export default function CandidateDetailRoute() {
     );
   }
 
-  const name = fileToName(resume.original_file_name);
+  const name = profile?.full_name || fileToName(resume.original_file_name);
 
   return (
     <div className="px-8 py-8 min-h-full">
@@ -792,6 +841,7 @@ export default function CandidateDetailRoute() {
             variant="primary"
             size="sm"
             icon={<Plus size={14} strokeWidth={2} />}
+            disabled={!profileId}
             onClick={() => setShortlistOpen(true)}
           >
             Add to shortlist
@@ -809,7 +859,9 @@ export default function CandidateDetailRoute() {
 
       {/* ── Tab content ── */}
       <div className="mt-8">
-        {activeTab === "overview" && <OverviewTab resume={resume} />}
+        {activeTab === "overview" && (
+          <OverviewTab resume={resume} profile={profile} profileLoading={profileLoading} />
+        )}
         {activeTab === "resume" && <ResumePdfTab resume={resume} />}
         {activeTab === "scoring" && <ScoringTab candidateId={id!} />}
         {activeTab === "outreach" && (
@@ -824,7 +876,7 @@ export default function CandidateDetailRoute() {
       <AddToShortlistModal
         open={shortlistOpen}
         onClose={() => setShortlistOpen(false)}
-        candidateId={id!}
+        candidateId={profileId ?? ""}
       />
     </div>
   );

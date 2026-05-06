@@ -4,21 +4,21 @@ export * from "./types";
 // Re-export client utilities
 export { client, isApiError } from "./client";
 export {
-  ApiError,
-  parseAxiosError,
-  type FieldError,
-  type ApiErrorKind,
+    ApiError,
+    parseAxiosError, type ApiErrorKind, type FieldError
 } from "./errors";
 export { queryClient } from "./queryClient";
 
 // Import endpoint modules
-import { uploadApi } from "./endpoints/upload";
-import { jobDescriptionsApi } from "./endpoints/jobDescriptions";
-import { scoringApi } from "./endpoints/scoring";
+import { authApi } from "./endpoints/auth";
 import { chatApi } from "./endpoints/chat";
-import { shortlistApi } from "./endpoints/shortlist";
-import { outreachApi } from "./endpoints/outreach";
 import { interviewQuestionsApi } from "./endpoints/interviewQuestions";
+import { jobsApi } from "./endpoints/jobs";
+import { jobDescriptionsApi } from "./endpoints/jobDescriptions";
+import { outreachApi } from "./endpoints/outreach";
+import { scoringApi } from "./endpoints/scoring";
+import { shortlistApi } from "./endpoints/shortlist";
+import { uploadApi } from "./endpoints/upload";
 
 /**
  * Unified API namespace.
@@ -30,7 +30,12 @@ import { interviewQuestionsApi } from "./endpoints/interviewQuestions";
  *   api.shortlist.collections.create({ ... });
  */
 export const api = {
+  auth: authApi,
+  jobs: jobsApi,
   upload: uploadApi,
+  candidates: {
+    getById: (profileId: string) => uploadApi.getProfileById(profileId),
+  },
   jobDescriptions: jobDescriptionsApi,
   scoring: scoringApi,
   chat: chatApi,

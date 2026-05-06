@@ -10,6 +10,7 @@ import {
     ModalTitle,
     Skeleton,
 } from "@/components/ui";
+import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,8 +29,6 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
-const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
-
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 // ─── main component ──────────────────────────────────────────────────────────
@@ -38,6 +37,7 @@ export default function JobDescriptionEditRoute() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const selectedJobId = useSelectedJobId();
   const isNew = !id;
 
   const titleRef = useRef<HTMLInputElement>(null);
@@ -60,8 +60,8 @@ export default function JobDescriptionEditRoute() {
 
   const { data: jd, isLoading } = useQuery({
     queryKey: ["jobDescription", id],
-    queryFn: () => api.jobDescriptions.get(id!),
-    enabled: !isNew,
+    queryFn: () => api.jobs.jobDescription.get(selectedJobId!),
+    enabled: !!selectedJobId,
   });
 
   useEffect(() => {
@@ -79,16 +79,15 @@ export default function JobDescriptionEditRoute() {
 
   const createMutation = useMutation({
     mutationFn: (body: { title: string; jd_text: string }) =>
-      api.jobDescriptions.create({
+      api.jobs.jobDescription.upsert(selectedJobId!, {
         title: body.title || undefined,
         jd_text: body.jd_text,
-        created_by_user_id: PLACEHOLDER_USER_ID,
       }),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
       setSaveState("saved");
       setSavedAt(new Date());
-      navigate(routes.jobDescriptionEdit(data.id), { replace: true });
+      navigate(routes.jobDescriptionEdit(data.id || "current"), { replace: true });
     },
     onError: () => {
       setSaveState("error");
@@ -98,7 +97,7 @@ export default function JobDescriptionEditRoute() {
 
   const updateMutation = useMutation({
     mutationFn: (body: Partial<{ title: string; jd_text: string; is_active: boolean }>) =>
-      api.jobDescriptions.update(id!, body),
+      api.jobs.jobDescription.patch(selectedJobId!, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
       qc.invalidateQueries({ queryKey: ["jobDescription", id] });
@@ -112,10 +111,10 @@ export default function JobDescriptionEditRoute() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.jobDescriptions.remove(id!),
+    mutationFn: () => api.jobs.jobDescription.patch(selectedJobId!, { is_active: false }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
-      toast.success("Job description deleted");
+      toast.success("Job description deactivated");
       navigate(routes.jobDescriptions);
     },
     onError: () => toast.error("Failed to delete job description"),
@@ -144,13 +143,13 @@ export default function JobDescriptionEditRoute() {
   function scheduleAutosave() {
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(() => {
-      if (!isNew) saveNow();
+      if (selectedJobId) saveNow();
     }, 1500);
   }
 
   function cancelAndSaveNow() {
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    if (!isNew) saveNow();
+    if (selectedJobId) saveNow();
   }
 
   useEffect(() => () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); }, []);
@@ -189,7 +188,7 @@ export default function JobDescriptionEditRoute() {
 
   // ── render ────────────────────────────────────────────────────────────────
 
-  if (!isNew && isLoading) {
+  if (selectedJobId && isLoading) {
     return (
       <div className="px-12 py-10 max-w-4xl space-y-6">
         <Skeleton className="h-8 w-48" />

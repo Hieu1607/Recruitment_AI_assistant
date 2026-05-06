@@ -21,7 +21,14 @@ from src.services.llm_service import LLMProvider
 
 logger = logging.getLogger(__name__)
 
-_llm = LLMProvider()
+_llm: LLMProvider | None = None
+
+
+def _get_llm() -> LLMProvider:
+    global _llm
+    if _llm is None:
+        _llm = LLMProvider()
+    return _llm
 
 # All valid filterable/queryable fields on CandidateProfile (excludes id/full_name)
 _ALL_CANDIDATE_FIELDS: frozenset = frozenset({
@@ -180,7 +187,7 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[router_node] question=%r", question)
 
     prompt = build_prompts.build_router_prompt(question)
-    response = _llm.generate(prompt)
+    response = _get_llm().generate(prompt)
 
     try:
         router_output = _parse_json(response.text)
@@ -242,7 +249,7 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[dsl_node] fetched %d candidate(s) from DB", len(candidates))
 
     prompt = build_prompts.build_dsl_query_prompt(dsl_question)
-    response = _llm.generate(prompt)
+    response = _get_llm().generate(prompt)
 
     try:
         dsl = _parse_json(response.text)
@@ -297,7 +304,7 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[llm_node] fetched %d candidate(s) for LLM analysis", len(candidates))
 
     prompt = build_prompts.build_llm_query_prompt(llm_question, candidates)
-    response = _llm.generate(prompt)
+    response = _get_llm().generate(prompt)
 
     try:
         llm_result = _parse_json(response.text)
@@ -389,7 +396,7 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # --- RAG: ask LLM to answer using the retrieved candidate data ---
     logger.info("[answer_node] calling LLM with %d candidate(s)", len(candidates))
     prompt = build_prompts.build_answer_prompt(question, candidates)
-    response = _llm.generate(prompt)
+    response = _get_llm().generate(prompt)
 
     answer = response.text.strip()
     logger.info("[answer_node] answer (first 200 chars): %r", answer[:200])

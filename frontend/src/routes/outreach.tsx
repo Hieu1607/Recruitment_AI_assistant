@@ -1,14 +1,13 @@
-import type { OutreachResponse, SentStatus, ResumeResponse, ContentSource } from "@/api";
+import type { ContentSource, OutreachResponse, ResumeResponse, SentStatus } from "@/api";
 import { api } from "@/api";
-import { Badge, Button, EmptyState, Skeleton, Modal, ModalContent, ModalHeader, ModalTitle, ModalDescription, ModalFooter } from "@/components/ui";
+import { Badge, Button, EmptyState, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle, Skeleton } from "@/components/ui";
+import { useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, Mail } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-
-const PLACEHOLDER_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 type FolderKey = "all" | "not_sent" | "sent" | "failed";
 
@@ -497,6 +496,7 @@ function ComposeModal({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const userId = useUserId();
   const [candidateId, setCandidateId] = useState("");
   const [contentSource, setContentSource] = useState<ContentSource>("ai_draft");
   const [subject, setSubject] = useState("");
@@ -511,7 +511,7 @@ function ComposeModal({
     mutationFn: () =>
       api.outreach.create({
         candidate_profile_id: candidateId,
-        created_by_user_id: PLACEHOLDER_USER_ID,
+        created_by_user_id: userId ?? "",
         content_source: contentSource,
         subject: subject.trim(),
         body: body.trim(),
