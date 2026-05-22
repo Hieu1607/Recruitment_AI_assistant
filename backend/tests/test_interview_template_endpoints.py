@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +19,7 @@ if str(BACKEND_ROOT) not in sys.path:
 import src.models  # noqa: F401, E402
 from src.models.base import Base  # noqa: E402
 from src.models.candidate_profile import CandidateProfile  # noqa: E402
+from src.models.deps import get_current_user, get_db  # noqa: E402
 from src.models.enums import ProfileStatus, UploadStatus, UserStatus  # noqa: E402
 from src.models.interview_invitation import InterviewInvitation  # noqa: E402
 from src.models.interview_session import (  # noqa: E402
@@ -29,6 +32,7 @@ from src.models.interview_template import InterviewTemplate  # noqa: E402
 from src.models.job import Job  # noqa: E402
 from src.models.resume_document import ResumeDocument  # noqa: E402
 from src.models.user_account import UserAccount  # noqa: E402
+from src.main import app  # noqa: E402
 
 
 MIGRATION_PATH = BACKEND_ROOT / "migrations" / "versions" / "20260522_0006_add_voice_interview_domain.py"
@@ -38,6 +42,7 @@ def _make_engine():
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
 
     @event.listens_for(engine, "connect")
@@ -147,6 +152,7 @@ def seeded_interview_domain(db_session: Session):
 
     return {
         "user_id": user.id,
+        "user_email": user.email,
         "primary_job_id": primary_job.id,
         "secondary_job_id": secondary_job.id,
         "candidate_id": candidate.id,
@@ -154,6 +160,213 @@ def seeded_interview_domain(db_session: Session):
         "template_id": template.id,
         "secondary_template_id": secondary_template.id,
     }
+
+
+@pytest.fixture()
+def api_client(db_session: Session, seeded_interview_domain):
+    def _override_db():
+        yield db_session
+
+    def _override_current_user():
+        user = db_session.get(UserAccount, seeded_interview_domain["user_id"])
+        assert user is not None
+        return user
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_current_user
+    client = TestClient(app, follow_redirects=False)
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_recruiter_can_create_list_get_and_update_interview_templates(
+    api_client: TestClient,
+    seeded_interview_domain,
+):
+    job_id = seeded_interview_domain["primary_job_id"]
+
+    create_response = api_client.post(
+        f"/api/v1/jobs/{job_id}/interview-templates",
+        json={
+            "name": "Structured Screen",
+            "language_code": "en-US",
+            "status": "active",
+            "intro_script": "Welcome to the interview.",
+            "closing_script": "Thanks for your time.",
+            "question_payload": {
+                "questions": [
+                    {"key": "q1", "prompt": "Tell me about yourself."},
+                ]
+            },
+            "report_rubric": {"score_bands": ["strong", "mixed", "weak"]},
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["job_id"] == str(job_id)
+    assert created["name"] == "Structured Screen"
+    assert created["version"] == 1
+    assert created["question_payload"]["questions"][0]["key"] == "q1"
+
+    list_response = api_client.get(f"/api/v1/jobs/{job_id}/interview-templates")
+    assert list_response.status_code == 200
+    listed = list_response.json()
+    assert listed["total"] == 2
+    assert {item["id"] for item in listed["items"]} >= {created["id"], str(seeded_interview_domain["template_id"])}
+
+    get_response = api_client.get(f"/api/v1/interview-templates/{created['id']}")
+    assert get_response.status_code == 200
+    fetched = get_response.json()
+    assert fetched["id"] == created["id"]
+    assert fetched["intro_script"] == "Welcome to the interview."
+
+    patch_response = api_client.patch(
+        f"/api/v1/interview-templates/{created['id']}",
+        json={
+            "name": "Structured Screen v2",
+            "question_payload": {
+                "questions": [
+                    {"key": "q1", "prompt": "Walk me through your most relevant project."},
+                ]
+            },
+        },
+    )
+    assert patch_response.status_code == 200
+    updated = patch_response.json()
+    assert updated["name"] == "Structured Screen v2"
+    assert updated["version"] == 2
+    assert updated["question_payload"]["questions"][0]["prompt"].startswith("Walk me through")
+
+    whitespace_patch_response = api_client.patch(
+        f"/api/v1/interview-templates/{created['id']}",
+        json={
+            "intro_script": "  Welcome to the interview.  ",
+            "closing_script": "   Thanks for your time.   ",
+        },
+    )
+    assert whitespace_patch_response.status_code == 200
+    whitespace_updated = whitespace_patch_response.json()
+    assert whitespace_updated["version"] == 2
+    assert whitespace_updated["intro_script"] == "Welcome to the interview."
+    assert whitespace_updated["closing_script"] == "Thanks for your time."
+
+
+def test_interview_template_endpoints_enforce_recruiter_job_ownership(
+    db_session: Session,
+    seeded_interview_domain,
+):
+    outsider = UserAccount(
+        email="outsider@example.com",
+        display_name="Outsider",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db_session.add(outsider)
+    db_session.commit()
+
+    def _override_db():
+        yield db_session
+
+    def _override_current_user():
+        return db_session.get(UserAccount, outsider.id)
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_current_user
+    client = TestClient(app, follow_redirects=False)
+    try:
+        response = client.get(
+            f"/api/v1/jobs/{seeded_interview_domain['primary_job_id']}/interview-templates"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+
+
+def test_recruiter_can_create_and_list_interview_invitations(
+    api_client: TestClient,
+    seeded_interview_domain,
+):
+    job_id = seeded_interview_domain["primary_job_id"]
+    template_id = seeded_interview_domain["template_id"]
+    candidate_id = seeded_interview_domain["candidate_id"]
+
+    create_response = api_client.post(
+        "/api/v1/interview-invitations",
+        json={
+            "job_id": str(job_id),
+            "candidate_profile_id": str(candidate_id),
+            "interview_template_id": str(template_id),
+            "expires_in_hours": 48,
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["job_id"] == str(job_id)
+    assert created["candidate_profile_id"] == str(candidate_id)
+    assert created["interview_template_id"] == str(template_id)
+    assert created["status"] == "pending"
+    assert created["attempt_count"] == 0
+    assert created["max_attempts"] == 1
+    assert created["sent_by_user_id"] == str(seeded_interview_domain["user_id"])
+    assert created["public_url"].endswith(f"/interviews/{created['public_token']}")
+    assert created["expires_at"] is not None
+
+    list_response = api_client.get(f"/api/v1/jobs/{job_id}/interview-invitations")
+    assert list_response.status_code == 200
+    listed = list_response.json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["id"] == created["id"]
+    assert listed["items"][0]["public_url"] == created["public_url"]
+
+
+def test_interview_template_rejects_whitespace_only_trimmed_fields(
+    api_client: TestClient,
+    seeded_interview_domain,
+):
+    job_id = seeded_interview_domain["primary_job_id"]
+
+    create_response = api_client.post(
+        f"/api/v1/jobs/{job_id}/interview-templates",
+        json={
+            "name": "   ",
+            "language_code": "en-US",
+            "status": "active",
+        },
+    )
+    assert create_response.status_code == 422
+
+    patch_response = api_client.patch(
+        f"/api/v1/interview-templates/{seeded_interview_domain['template_id']}",
+        json={
+            "language_code": "   ",
+            "status": "   ",
+        },
+    )
+    assert patch_response.status_code == 422
+
+    create_script_response = api_client.post(
+        f"/api/v1/jobs/{job_id}/interview-templates",
+        json={
+            "name": "Valid Name",
+            "language_code": "en-US",
+            "status": "active",
+            "intro_script": "   ",
+        },
+    )
+    assert create_script_response.status_code == 422
+
+    patch_script_response = api_client.patch(
+        f"/api/v1/interview-templates/{seeded_interview_domain['template_id']}",
+        json={
+            "closing_script": "   ",
+        },
+    )
+    assert patch_script_response.status_code == 422
 
 
 def test_voice_interview_tables_are_registered_in_metadata():
@@ -324,11 +537,15 @@ def test_voice_interview_migration_declares_expected_tables_and_indexes(monkeypa
 
     created_tables: list[str] = []
     created_indexes: list[tuple[str, str, bool]] = []
+    captured_table_args: dict[str, tuple] = {}
 
     monkeypatch.setattr(
         migration_module.op,
         "create_table",
-        lambda table_name, *args, **kwargs: created_tables.append(table_name),
+        lambda table_name, *args, **kwargs: (
+            created_tables.append(table_name),
+            captured_table_args.setdefault(table_name, args),
+        )[-1],
     )
     monkeypatch.setattr(
         migration_module.op,
@@ -356,3 +573,31 @@ def test_voice_interview_migration_declares_expected_tables_and_indexes(monkeypa
         ("ix_interview_transcript_turns_response_item_id", "interview_transcript_turns", False),
         ("ix_interview_reports_interview_session_id", "interview_reports", True),
     }.issubset(set(created_indexes))
+
+    template_args = captured_table_args["interview_templates"]
+    template_columns = {arg.name: arg for arg in template_args if hasattr(arg, "name") and hasattr(arg, "server_default")}
+    template_constraints = {
+        getattr(arg, "name", None): arg
+        for arg in template_args
+        if getattr(arg, "name", None)
+    }
+    assert str(template_columns["language_code"].server_default.arg) == "vi-VN"
+    assert str(template_columns["status"].server_default.arg) == "draft"
+    assert str(template_columns["version"].server_default.arg) == "1"
+    assert "uq_interview_templates_id_job_id" in template_constraints
+
+    invitation_args = captured_table_args["interview_invitations"]
+    invitation_columns = {arg.name: arg for arg in invitation_args if hasattr(arg, "name") and hasattr(arg, "server_default")}
+    invitation_constraints = {
+        getattr(arg, "name", None): arg
+        for arg in invitation_args
+        if getattr(arg, "name", None)
+    }
+    assert str(invitation_columns["status"].server_default.arg) == "pending"
+    assert str(invitation_columns["max_attempts"].server_default.arg) == "1"
+    assert str(invitation_columns["attempt_count"].server_default.arg) == "0"
+    assert {
+        "ck_interview_invitations_max_attempts_positive",
+        "ck_interview_invitations_attempt_count_non_negative",
+        "ck_interview_invitations_attempt_count_within_max",
+    }.issubset(set(invitation_constraints))
