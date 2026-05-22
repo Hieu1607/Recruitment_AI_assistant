@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from src.models.job import Job
 
 
+
 class JobDescription(Base):
     __tablename__ = "job_descriptions"
 

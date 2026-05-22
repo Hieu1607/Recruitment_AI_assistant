@@ -16,6 +16,7 @@ from src.models.enums import ProfileStatus
 _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
 
 if TYPE_CHECKING:
+    from src.models.interview_invitation import InterviewInvitation
     from src.models.job_matching import InterviewQuestionSet, MatchResult
     from src.models.outreach import OutreachMessage
     from src.models.query_shortlist import ShortlistItem
@@ -34,8 +35,10 @@ class CandidateProfile(Base):
     )
 
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    submitted_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    submitted_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     location_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
     contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
     current_job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -75,5 +78,9 @@ class CandidateProfile(Base):
     resume_document: Mapped["ResumeDocument"] = relationship(back_populates="candidate_profile")
     match_results: Mapped[list["MatchResult"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
     outreach_messages: Mapped[list["OutreachMessage"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
+    interview_invitations: Mapped[list["InterviewInvitation"]] = relationship(
+        back_populates="candidate_profile",
+        cascade="all, delete-orphan",
+    )
     interview_question_sets: Mapped[list["InterviewQuestionSet"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
     shortlist_items: Mapped[list["ShortlistItem"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
