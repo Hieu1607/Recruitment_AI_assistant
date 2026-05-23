@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import cast
 
@@ -25,6 +26,7 @@ from src.services.voice_provider import UnsupportedVoiceProviderError, VoiceProv
 
 
 ACTIVE_INVITATION_STATUSES = {"pending", "opened", "in_progress"}
+logger = logging.getLogger(__name__)
 
 
 def serialize_public_interview_invitation(invitation: InterviewInvitation) -> PublicInterviewInvitationPayload:
@@ -161,6 +163,19 @@ def complete_public_interview_session(
     invitation.completed_at = now
 
     db.commit()
+    try:
+        enqueue_interview_report_generation(db, session_record.id)
+    except Exception as exc:
+        from src.services.interview_report_service import mark_interview_report_failure_in_db
+
+        mark_interview_report_failure_in_db(
+            db,
+            interview_session_id=session_record.id,
+            stage="enqueue",
+            message=str(exc),
+            retryable=True,
+        )
+        logger.exception("Failed to enqueue interview report generation for %s", session_record.id)
     refreshed_invitation = _get_public_interview_invitation(db, token)
     refreshed_session = db.get(InterviewSession, session_record.id)
     assert refreshed_session is not None
@@ -271,3 +286,17 @@ def _get_active_session(invitation: InterviewInvitation) -> InterviewSession | N
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def enqueue_interview_report_generation(db: Session, interview_session_id) -> None:
+    from src.services.interview_report_service import mark_interview_report_pending_in_db
+    from worker.tasks import generate_interview_report
+
+    task_result = generate_interview_report.delay(str(interview_session_id))
+    mark_interview_report_pending_in_db(
+        db,
+        interview_session_id=interview_session_id,
+        task_id=getattr(task_result, "id", None),
+        retry_count=0,
+        state="queued",
+    )
