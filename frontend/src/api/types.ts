@@ -174,14 +174,34 @@ export interface JobResponse {
   owner_user_id: string;
   title: string;
   status: string;
+  candidate_message: string | null;
+  public_apply_enabled: boolean;
+  public_apply_url: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
 }
 
+export interface JobApplicationLinkResponse {
+  public_apply_enabled: boolean;
+  public_apply_url: string;
+  candidate_message: string | null;
+}
+
 export interface JobListResponse {
   items: JobResponse[];
   total: number;
+}
+
+export interface PublicJobResponse {
+  job_title: string;
+  candidate_message: string | null;
+  public_apply_enabled: boolean;
+}
+
+export interface PublicResumeUploadResponse {
+  submitted: boolean;
+  candidate_profile_id: string | null;
 }
 
 export interface ChatResponse {
@@ -373,6 +393,164 @@ export interface QuestionSetCreateRequest {
 
 export interface QuestionSetUpdateRequest {
   question_payload: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Interview Templates / Invitations / Reports
+// ---------------------------------------------------------------------------
+
+export interface InterviewTemplateResponse {
+  id: string;
+  job_id: string;
+  name: string;
+  language_code: string;
+  status: string;
+  intro_script: string | null;
+  closing_script: string | null;
+  question_payload: Record<string, unknown>;
+  report_rubric: Record<string, unknown>;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InterviewTemplateListResponse {
+  items: InterviewTemplateResponse[];
+  total: number;
+}
+
+export interface InterviewTemplateCreateRequest {
+  name: string;
+  language_code?: string;
+  status?: string;
+  intro_script?: string | null;
+  closing_script?: string | null;
+  question_payload?: Record<string, unknown>;
+  report_rubric?: Record<string, unknown>;
+}
+
+export interface InterviewTemplateUpdateRequest {
+  name?: string;
+  language_code?: string;
+  status?: string;
+  intro_script?: string | null;
+  closing_script?: string | null;
+  question_payload?: Record<string, unknown>;
+  report_rubric?: Record<string, unknown>;
+}
+
+export interface InterviewInvitationCreateRequest {
+  job_id: string;
+  candidate_profile_id: string;
+  interview_template_id: string;
+  expires_in_hours?: number | null;
+}
+
+export interface InterviewInvitationResponse {
+  id: string;
+  job_id: string;
+  candidate_profile_id: string;
+  candidate_full_name: string | null;
+  interview_template_id: string;
+  interview_template_name: string | null;
+  public_token: string;
+  public_url: string;
+  status: string;
+  expires_at: string | null;
+  max_attempts: number;
+  attempt_count: number;
+  sent_by_user_id: string | null;
+  sent_at: string | null;
+  opened_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InterviewInvitationListResponse {
+  items: InterviewInvitationResponse[];
+  total: number;
+}
+
+export interface InterviewReportResponse {
+  id: string;
+  interview_session_id: string;
+  interview_template_id: string | null;
+  summary_text: string | null;
+  report_payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicInterviewStartRequest {
+  provider?: string | null;
+  provider_session_id?: string | null;
+  device_metadata?: Record<string, unknown> | null;
+  browser_metadata?: Record<string, unknown> | null;
+  connection_metadata?: Record<string, unknown> | null;
+}
+
+export interface PublicInterviewEventItemRequest {
+  speaker: string;
+  text: string;
+  offset_ms?: number | null;
+  question_key?: string | null;
+  payload?: Record<string, unknown> | null;
+}
+
+export interface PublicInterviewEventsRequest {
+  provider?: string | null;
+  events: PublicInterviewEventItemRequest[];
+}
+
+export interface PublicInterviewCompleteRequest {
+  provider?: string | null;
+}
+
+export interface PublicInterviewInvitationPayload {
+  id: string;
+  public_token: string;
+  status: string;
+  expires_at: string | null;
+  max_attempts: number;
+  attempt_count: number;
+  candidate_full_name: string | null;
+  completed_at: string | null;
+}
+
+export interface PublicInterviewSessionPayload {
+  id: string;
+  provider: string | null;
+  provider_session_id: string | null;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface PublicInterviewTemplatePayload {
+  id: string;
+  name: string;
+  language_code: string;
+  intro_script: string | null;
+  closing_script: string | null;
+  question_payload: Record<string, unknown>;
+}
+
+export interface PublicInterviewStartResponse {
+  invitation: PublicInterviewInvitationPayload;
+  session: PublicInterviewSessionPayload;
+  template: PublicInterviewTemplatePayload;
+}
+
+export interface PublicInterviewEventsResponse {
+  accepted: boolean;
+  stored_turns: number;
+}
+
+export interface PublicInterviewCompleteResponse {
+  invitation: PublicInterviewInvitationPayload;
+  session: PublicInterviewSessionPayload;
 }
 
 // ---------------------------------------------------------------------------

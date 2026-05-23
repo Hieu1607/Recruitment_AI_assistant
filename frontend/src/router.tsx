@@ -51,6 +51,14 @@ export const router = createBrowserRouter([
     path: routePatterns.authCallback,
     ...lazy(() => import("@/routes/auth-callback")),
   },
+  {
+    path: routePatterns.apply,
+    ...lazy(() => import("@/routes/apply")),
+  },
+  {
+    path: routePatterns.publicInterview,
+    ...lazy(() => import("@/routes/public-interview")),
+  },
   // Authenticated routes (wrapped in AppShell)
   {
     Component: AppShell,
@@ -72,6 +80,9 @@ export const router = createBrowserRouter([
       { path: routePatterns.shortlists, ...lazy(() => import("@/routes/shortlists/list")) },
       { path: routePatterns.shortlistCollection, ...lazy(() => import("@/routes/shortlists/collection")) },
       { path: routePatterns.outreach, ...lazy(() => import("@/routes/outreach")) },
+      { path: routePatterns.interviewTemplates, ...lazy(() => import("@/routes/interviews/templates")) },
+      { path: routePatterns.interviewTemplateDetail, ...lazy(() => import("@/routes/interviews/template-detail")) },
+      { path: routePatterns.interviewReport, ...lazy(() => import("@/routes/interviews/report")) },
       { path: routePatterns.interviewQuestions, ...lazy(() => import("@/routes/interview-questions/list")) },
       { path: routePatterns.interviewQuestionDetail, ...lazy(() => import("@/routes/interview-questions/detail")) },
       { path: routePatterns.settings, ...lazy(() => import("@/routes/settings")) },

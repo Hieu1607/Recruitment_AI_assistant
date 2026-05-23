@@ -4,6 +4,7 @@ from src.api.v1.endpoints import (
     chat,
     interview_public,
     interview_questions,
+    interview_reports,
     interview_templates,
     jobDescription,
     jobs,
@@ -26,4 +27,5 @@ api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(shortlist.router, prefix="/shortlist", tags=["shortlist"])
 api_router.include_router(interview_questions.router, prefix="/interview-questions", tags=["interview-questions"])
 api_router.include_router(interview_templates.router, tags=["interview-templates"])
+api_router.include_router(interview_reports.router, tags=["interview-reports"])
 api_router.include_router(outreach.router, prefix="/outreach", tags=["outreach"])

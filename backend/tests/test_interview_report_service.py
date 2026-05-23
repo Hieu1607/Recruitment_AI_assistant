@@ -5,14 +5,17 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import src.models  # noqa: F401
+from src.main import app
 from src.models.base import Base
 from src.models.candidate_profile import CandidateProfile
+from src.models.deps import get_current_user, get_db
 from src.models.enums import ProfileStatus, UploadStatus, UserStatus
 from src.models.interview_invitation import InterviewInvitation
 from src.models.interview_session import InterviewReport, InterviewSession, InterviewTranscriptTurn
@@ -194,6 +197,24 @@ def _create_completed_session(db_session: Session, interview_invitation: Intervi
     return session_record
 
 
+@pytest.fixture()
+def api_client(db_session: Session, interview_invitation: InterviewInvitation):
+    owner = db_session.get(UserAccount, interview_invitation.job.owner_user_id)
+
+    def _override_db():
+        yield db_session
+
+    def _override_current_user():
+        return owner
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_current_user
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_generate_interview_report_from_completed_session_persists_structured_payload_and_markdown(
     db_session: Session,
     interview_invitation: InterviewInvitation,
@@ -276,6 +297,63 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
     assert "## Recommendation" not in persisted_report.summary_text
     assert "accept" not in persisted_report.summary_text.lower()
     assert "reject" not in persisted_report.summary_text.lower()
+
+
+def test_recruiter_can_fetch_interview_report_by_session_id(
+    api_client: TestClient,
+    db_session: Session,
+    interview_invitation: InterviewInvitation,
+    monkeypatch,
+):
+    from src.services import interview_report_service
+    from src.services.llm_service import LLMResponse
+
+    session_record = _create_completed_session(db_session, interview_invitation)
+    generated_json = """
+    {
+      "candidate_overview": "Candidate described ownership of backend ingestion and recovery workflows.",
+      "competencies": [
+        {
+          "name": "System design",
+          "summary": "Explained queue-based ingestion architecture with retries and idempotency.",
+          "evidence": [
+            {
+              "transcript_turn_id": "__TURN_1__",
+              "turn_index": 1,
+              "question_key": "system_design",
+              "speaker_role": "candidate",
+              "transcript_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes."
+            }
+          ]
+        }
+      ],
+      "communication_summary": "Answers were concrete and tied to implementation details.",
+      "follow_up_topics": ["Scale limits of the ingestion pipeline"],
+      "overall_summary": "Interview shows backend experience with reliability-focused examples."
+    }
+    """
+
+    monkeypatch.setattr(
+        interview_report_service.LLMProvider,
+        "generate",
+        lambda self, prompt, system_prompt=None: LLMResponse(
+            text=generated_json.replace("__TURN_1__", str(session_record.transcript_turns[1].id)),
+            provider="test",
+            model="test-model",
+        ),
+    )
+
+    interview_report_service.generate_interview_report(
+        db_session,
+        interview_session_id=session_record.id,
+    )
+
+    response = api_client.get(f"/api/v1/interview-reports/{session_record.id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["interview_session_id"] == str(session_record.id)
+    assert body["report_payload"]["status"] == "completed"
+    assert body["summary_text"].startswith("# Interview Report")
 
 
 def test_complete_public_interview_session_dispatches_report_generation(

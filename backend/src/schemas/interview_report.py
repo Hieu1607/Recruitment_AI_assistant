@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -62,3 +63,13 @@ class InterviewReportPayload(BaseModel):
 
     def to_payload(self) -> dict[str, Any]:
         return self.model_dump()
+
+
+class InterviewReportResponse(BaseModel):
+    id: str
+    interview_session_id: str
+    interview_template_id: str | None
+    summary_text: str | None
+    report_payload: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
