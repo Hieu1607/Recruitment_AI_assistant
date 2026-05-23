@@ -565,6 +565,14 @@ These items are intentionally deferred and should not block MVP design approval:
 - whether recruiter scoring rubrics should be editable in the initial UI
 - whether multilingual templates should be supported in the first or second iteration
 
+## Implementation Note
+
+The MVP browser client should keep the domain and public-session APIs compatible with future realtime microphone streaming, but the regression suite should stay deterministic. In practice this means:
+
+- browser E2E can use mocked or simulated transcript submission instead of live microphone capture
+- transcript ingestion should remain provider-agnostic
+- provider-specific realtime audio transport can be added later without changing invitation, session, or report domain objects
+
 ## Recommendation
 
 Proceed with a browser-first hybrid interview design that keeps the interview script job-scoped, invitations candidate-scoped, and reporting recruiter-facing. This is the most practical MVP because it minimizes cost and implementation complexity while preserving a clean upgrade path to higher-quality realtime voice infrastructure and future phone support.
