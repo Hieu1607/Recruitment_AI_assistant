@@ -35,7 +35,7 @@ function relativeTime(value: string | null) {
 }
 
 function absoluteDate(value: string | null) {
-  if (!value) return "—";
+  if (!value) return "No infomation";
   return new Date(value).toLocaleDateString();
 }
 
@@ -44,6 +44,14 @@ function statusVariant(status: string): "neutral" | "warning" | "success" | "dan
   if (status === "processing" || status === "pending") return "warning";
   if (status === "failed" || status === "cancelled") return "danger";
   return "neutral";
+}
+
+function displayValue(value: string | number | boolean | null | undefined) {
+  if (value === null || value === undefined) return "No infomation";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  const normalized = value.trim();
+  return normalized || "No infomation";
 }
 
 function TabButton({
@@ -76,52 +84,78 @@ function OverviewTab({
   resume: ResumeResponse;
   profile: CandidateProfileResponse | undefined;
 }) {
+  const displayName = profile?.full_name || profile?.submitted_full_name;
+  const displayEmail = profile?.email || profile?.submitted_email;
+  const sectionFields = [
+    { title: "Name", content: displayName },
+    { title: "Current Role", content: profile?.current_job_title },
+    { title: "Summary", content: profile?.summary_text },
+    { title: "Skills", content: profile?.skills_text },
+    { title: "Experience", content: profile?.experience_text },
+    { title: "Education", content: profile?.education_text },
+    { title: "Projects", content: profile?.projects_text },
+    { title: "Languages", content: profile?.languages_text },
+    { title: "Achievements", content: profile?.achievements_text },
+    { title: "Publications", content: profile?.publications_text },
+    { title: "Certifications", content: profile?.certifications_text },
+    { title: "References", content: profile?.references_text },
+    { title: "Other", content: profile?.other_text },
+  ];
+
+  const resumeInfoRows = [
+    { label: "Status", value: resume.upload_status, badge: true },
+    { label: "Uploaded", value: absoluteDate(resume.uploaded_at) },
+    { label: "Processed", value: absoluteDate(resume.processed_at) },
+    { label: "Extraction mode", value: profile?.extraction_mode },
+    { label: "Email", value: displayEmail },
+    { label: "Phone", value: profile?.phone },
+    { label: "Location", value: profile?.location_normalized },
+    { label: "Contact", value: profile?.contact },
+    { label: "Experience years", value: profile?.experience_years },
+    { label: "Major", value: profile?.major },
+    { label: "CPA", value: profile?.cpa },
+    { label: "Educated", value: profile?.educated },
+    { label: "Studied abroad", value: profile?.ever_studied_abroad },
+    { label: "Profile ID", value: profile?.id },
+    { label: "Resume ID", value: profile?.resume_document_id ?? resume.id },
+  ];
+
   return (
     <div className="grid gap-8 lg:grid-cols-[2fr_1fr]">
       <div className="space-y-5">
-        {profile?.summary_text ? (
-          <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
-            <h2 className="font-display text-xl font-medium text-fg">Summary</h2>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
-              {profile.summary_text}
-            </p>
-          </section>
-        ) : (
+        {!profile && (
           <EmptyState
-            heading="Profile summary unavailable"
-            body={`This resume is ${resume.upload_status}. Candidate profile data appears after processing completes.`}
+            heading="Candidate profile unavailable"
+            body={`This resume is ${resume.upload_status}. Sections are shown with fallback values until profile data is available.`}
           />
         )}
 
-        {profile?.skills_text && (
-          <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
-            <h2 className="font-display text-xl font-medium text-fg">Skills</h2>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{profile.skills_text}</p>
+        {sectionFields.map((section) => (
+          <section
+            key={section.title}
+            className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5"
+          >
+            <h2 className="font-display text-xl font-medium text-fg">{section.title}</h2>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
+              {displayValue(section.content)}
+            </p>
           </section>
-        )}
+        ))}
       </div>
 
       <aside className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
         <h2 className="font-display text-xl font-medium text-fg">Resume Info</h2>
         <div className="mt-4 space-y-3 text-sm">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-fg-muted">Status</span>
-            <Badge variant={statusVariant(resume.upload_status)}>{resume.upload_status}</Badge>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-fg-muted">Uploaded</span>
-            <span className="text-fg">{absoluteDate(resume.uploaded_at)}</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-fg-muted">Processed</span>
-            <span className="text-fg">{absoluteDate(resume.processed_at)}</span>
-          </div>
-          {profile?.email && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-fg-muted">Email</span>
-              <span className="text-fg">{profile.email}</span>
+          {resumeInfoRows.map((row) => (
+            <div key={row.label} className="flex items-center justify-between gap-3">
+              <span className="text-fg-muted">{row.label}</span>
+              {row.badge ? (
+                <Badge variant={statusVariant(String(row.value ?? ""))}>{displayValue(row.value)}</Badge>
+              ) : (
+                <span className="text-right text-fg">{displayValue(row.value)}</span>
+              )}
             </div>
-          )}
+          ))}
         </div>
       </aside>
     </div>
@@ -221,6 +255,10 @@ export default function CandidateDetailRoute() {
     queryKey: ["candidate", id],
     queryFn: () => api.upload.get(id!),
     enabled: !!id,
+    refetchInterval: (query) => {
+      const status = query.state.data?.upload_status;
+      return status === "uploaded" || status === "processing" ? 3000 : false;
+    },
   });
 
   const { data: profile } = useQuery({
@@ -267,7 +305,7 @@ export default function CandidateDetailRoute() {
     );
   }
 
-  const candidateName = profile?.full_name || fileToName(resume.original_file_name);
+  const candidateName = profile?.full_name || profile?.submitted_full_name || fileToName(resume.original_file_name);
 
   return (
     <div className="px-8 py-8 min-h-full">

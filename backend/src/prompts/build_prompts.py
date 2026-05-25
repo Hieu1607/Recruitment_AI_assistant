@@ -62,7 +62,16 @@ class BuildPrompts:
 
 		Rules:
 		- Use null when unknown.
-		- Keep extracted text concise and faithful to CV.
+		- Preserve as much source detail as possible in the correct field.
+		- Do not summarize, shorten, paraphrase, or normalize away specifics.
+		- Keep bullet points, lists, metrics, technologies, dates, organizations, titles, and outcomes whenever present.
+		- Classify every relevant piece of CV content into the most appropriate field from the schema.
+		- If text does not clearly fit an earlier field, put it in other instead of dropping it.
+		- summary should capture the candidate's own profile/objective/overview statement from the CV, not a new AI-written summary.
+		- For "projects", include full project entries: project name, organization, link, date range, and all project bullet details as one multi-line string.
+		- For "experience", include full role entries: title, company, location, dates, and all role bullet details as one multi-line string.
+		- For "education", include full education entries: degree, institution, location, GPA, coursework, dates, and related bullet details as one multi-line string.
+		- For "skills", preserve grouped skill categories and all listed tools/technologies instead of flattening to a short summary.
 		- experience_years must be numeric (e.g., 3 or 4.5) or null.
 
 		CV text:
@@ -100,7 +109,16 @@ Required schema:
 
 Rules:
 - Use null when unknown.
-- Keep extracted text concise and faithful to the CV.
+- Preserve as much source detail as possible in the correct field.
+- Do not summarize, shorten, paraphrase, or normalize away specifics.
+- Keep bullet points, lists, metrics, technologies, dates, organizations, titles, and outcomes whenever present.
+- Classify every relevant piece of CV content into the most appropriate field from the schema.
+- If text does not clearly fit an earlier field, put it in other instead of dropping it.
+- summary should capture the candidate's own profile/objective/overview statement from the CV, not a new AI-written summary.
+- For "projects", include full project entries: project name, organization, link, date range, and all project bullet details as one multi-line string.
+- For "experience", include full role entries: title, company, location, dates, and all role bullet details as one multi-line string.
+- For "education", include full education entries: degree, institution, location, GPA, coursework, dates, and related bullet details as one multi-line string.
+- For "skills", preserve grouped skill categories and all listed tools/technologies instead of flattening to a short summary.
 - experience_years must be numeric (e.g., 3 or 4.5) or null.
 - The CV may be in Vietnamese — extract text exactly as written.""".strip()
 

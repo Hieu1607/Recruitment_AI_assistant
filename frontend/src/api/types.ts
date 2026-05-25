@@ -38,14 +38,14 @@ export interface ResumeResponse {
 export interface ResumeBatchParseItem {
   file_name: string;
   resume_document_id: string;             // UUID
-  candidate_profile_id: string | null;    // UUID — null if parsing failed
-  status: UploadStatus;
+  candidate_profile_id?: string | null;   // UUID — only present for synchronous/legacy flows
+  task_id?: string | null;                // Celery task id for async queueing
+  status: "queued" | UploadStatus;
 }
 
 export interface ResumeBatchParseResponse {
   total_files: number;
-  processed_files: number;
-  failed_files: number;
+  queued_files: number;
   items: ResumeBatchParseItem[];
 }
 
@@ -57,11 +57,19 @@ export interface ResumeListResponse {
 export interface CandidateProfileResponse {
   id: string;
   resume_document_id: string;
+  extraction_mode?: string | null;
   full_name: string;
+  submitted_full_name: string | null;
   phone: string | null;
   email: string | null;
+  submitted_email: string | null;
   location_normalized: string | null;
+  contact: string | null;
   current_job_title: string | null;
+  educated: boolean;
+  ever_studied_abroad: boolean;
+  major: string | null;
+  cpa: string | null;
   summary_text: string | null;
   skills_text: string | null;
   experience_text: string | null;
@@ -70,7 +78,10 @@ export interface CandidateProfileResponse {
   languages_text: string | null;
   projects_text: string | null;
   achievements_text: string | null;
+  publications_text: string | null;
   certifications_text: string | null;
+  references_text: string | null;
+  other_text: string | null;
 }
 
 // ---------------------------------------------------------------------------
