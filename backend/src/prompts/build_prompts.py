@@ -6,6 +6,19 @@ from typing import Any, Dict, Iterable, List, Optional
 class BuildPrompts:
     """Build prompt strings for CV parsing, scoring, and CV section retrieval."""
 
+    SUPPORTED_SCORING_SECTIONS: List[str] = [
+        "skills",
+        "experience",
+        "education",
+        "projects",
+        "summary",
+        "languages",
+        "achievements",
+        "certifications",
+        "publications",
+        "other",
+    ]
+
     DEFAULT_SECTION_WEIGHTS: Dict[str, float] = {
         "skills": 0.35,
         "experience": 0.35,
@@ -57,7 +70,36 @@ class BuildPrompts:
 		"publications": string|null,
 		"certifications": string|null,
 		"references": string|null,
-		"other": string|null
+		"other": string|null,
+		"structured_profile": {{
+		  "summary": {{
+		    "text": string|null,
+		    "links": [{{"url": string, "label": string|null}}]
+		  }}|null,
+		  "experience": {{
+		    "entries": [{{
+		      "title": string|null,
+		      "subtitle": string|null,
+		      "role": string|null,
+		      "location": string|null,
+		      "dateRange": string|null,
+		      "description": string|null,
+		      "bullets": [string],
+		      "links": [{{"url": string, "label": string|null}}],
+		      "metadata": [string]
+		    }}],
+		    "rawText": string|null
+		  }}|null,
+		  "education": same shape as experience|null,
+		  "projects": same shape as experience|null,
+		  "skills": same shape as experience|null,
+		  "languages": same shape as experience|null,
+		  "achievements": same shape as experience|null,
+		  "publications": same shape as experience|null,
+		  "certifications": same shape as experience|null,
+		  "references": same shape as experience|null,
+		  "other": same shape as experience|null
+		}}|null
 		}}
 
 		Rules:
@@ -70,8 +112,13 @@ class BuildPrompts:
 		- summary should capture the candidate's own profile/objective/overview statement from the CV, not a new AI-written summary.
 		- For "projects", include full project entries: project name, organization, link, date range, and all project bullet details as one multi-line string.
 		- For "experience", include full role entries: title, company, location, dates, and all role bullet details as one multi-line string.
+		- "experience" is only for actual work history such as employment, internships, assistantships, apprenticeships, consulting, or freelance roles.
+		- Do not place personal projects, academic projects, research builds, capstones, portfolio pieces, or product demos into "experience" unless the CV clearly presents them as paid or formal work roles in a work-experience section.
+		- Put non-employment build work into "projects", keeping all attached bullets, dates, organizations, and links there.
 		- For "education", include full education entries: degree, institution, location, GPA, coursework, dates, and related bullet details as one multi-line string.
 		- For "skills", preserve grouped skill categories and all listed tools/technologies instead of flattening to a short summary.
+		- Preserve links wherever they appear, both in the raw text fields and in structured_profile.links.
+		- structured_profile must organize the same CV content into section objects with generic entries that work for any profession, not only software resumes.
 		- experience_years must be numeric (e.g., 3 or 4.5) or null.
 
 		CV text:
@@ -104,7 +151,36 @@ Required schema:
 "publications": string|null,
 "certifications": string|null,
 "references": string|null,
-"other": string|null
+"other": string|null,
+"structured_profile": {
+  "summary": {
+    "text": string|null,
+    "links": [{"url": string, "label": string|null}]
+  }|null,
+  "experience": {
+    "entries": [{
+      "title": string|null,
+      "subtitle": string|null,
+      "role": string|null,
+      "location": string|null,
+      "dateRange": string|null,
+      "description": string|null,
+      "bullets": [string],
+      "links": [{"url": string, "label": string|null}],
+      "metadata": [string]
+    }],
+    "rawText": string|null
+  }|null,
+  "education": "same shape as experience"|null,
+  "projects": "same shape as experience"|null,
+  "skills": "same shape as experience"|null,
+  "languages": "same shape as experience"|null,
+  "achievements": "same shape as experience"|null,
+  "publications": "same shape as experience"|null,
+  "certifications": "same shape as experience"|null,
+  "references": "same shape as experience"|null,
+  "other": "same shape as experience"|null
+}|null
 }
 
 Rules:
@@ -117,8 +193,13 @@ Rules:
 - summary should capture the candidate's own profile/objective/overview statement from the CV, not a new AI-written summary.
 - For "projects", include full project entries: project name, organization, link, date range, and all project bullet details as one multi-line string.
 - For "experience", include full role entries: title, company, location, dates, and all role bullet details as one multi-line string.
+- "experience" is only for actual work history such as employment, internships, assistantships, apprenticeships, consulting, or freelance roles.
+- Do not place personal projects, academic projects, research builds, capstones, portfolio pieces, or product demos into "experience" unless the CV clearly presents them as paid or formal work roles in a work-experience section.
+- Put non-employment build work into "projects", keeping all attached bullets, dates, organizations, and links there.
 - For "education", include full education entries: degree, institution, location, GPA, coursework, dates, and related bullet details as one multi-line string.
 - For "skills", preserve grouped skill categories and all listed tools/technologies instead of flattening to a short summary.
+- Preserve links wherever they appear, both in the raw text fields and in structured_profile.links.
+- structured_profile must organize the same CV content into section objects with generic entries that work for any profession, not only software resumes.
 - experience_years must be numeric (e.g., 3 or 4.5) or null.
 - The CV may be in Vietnamese — extract text exactly as written.""".strip()
 
@@ -149,24 +230,7 @@ Rules:
         payload = {
             "jobDescription": self._clip_text(job_description_text, max_chars=12000),
             "sectionWeights": normalized_weights,
-            "candidates": [
-                {
-                    "candidateId": str(
-                        candidate.get("id") or candidate.get("candidateId") or ""
-                    ),
-                    "fullName": candidate.get("full_name") or candidate.get("fullName"),
-                    "currentJobTitle": candidate.get("current_job_title")
-                    or candidate.get("currentJobTitle"),
-                    "education": candidate.get("education_text")
-                    or candidate.get("education"),
-                    "experience": candidate.get("experience_text")
-                    or candidate.get("experience"),
-                    "skills": candidate.get("skills_text") or candidate.get("skills"),
-                    "summary": candidate.get("summary_text")
-                    or candidate.get("summary"),
-                }
-                for candidate in candidates
-            ],
+            "candidates": [self._build_scoring_candidate_payload(candidate) for candidate in candidates],
             "responseFormat": {
                 "scores": [
                     {
@@ -191,9 +255,102 @@ Rules:
         return (
             "You are an objective recruitment scoring system. "
             "Use sectionWeights when calculating scores. "
+            "Only score sections that are present in sectionWeights. "
+            "Do not penalize candidates for sections not referenced by the job requirements. "
             "Return valid JSON only with the shape shown in responseFormat.\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
         )
+
+    def build_jd_rubric_extraction_prompt(
+        self,
+        *,
+        job_description_text: str,
+        section_weights: Optional[Dict[str, float]] = None,
+    ) -> str:
+        weights = section_weights or dict(self.DEFAULT_SECTION_WEIGHTS)
+        payload = {
+            "jobDescription": self._clip_text(job_description_text, max_chars=12000),
+            "sectionWeights": weights,
+            "supportedSections": self.SUPPORTED_SCORING_SECTIONS,
+            "criterionTypes": ["must_have", "semantic", "upper_bound"],
+            "responseFormat": {
+                "criteria": [
+                    {
+                        "key": "experience_years",
+                        "section": "experience",
+                        "requirementText": "5+ years of backend experience",
+                        "type": "must_have",
+                        "measurable": {
+                            "field": "experience_years",
+                            "operator": ">=",
+                            "value": 5,
+                        },
+                    }
+                ]
+            },
+        }
+        return (
+            "Extract a locked scoring rubric from the job description. "
+            "Return JSON only, no markdown. "
+            "Use only supportedSections. "
+            "Drop empty or duplicate criteria. "
+            "Use measurable only when the requirement can be checked directly from structured candidate data. "
+            "For bonus-style thresholds such as IELTS 7.5+ being a plus, emit type upper_bound instead of must_have. "
+            "Do not invent sections outside supportedSections.\n\n"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
+
+    def build_locked_rubric_semantic_scoring_prompt(
+        self,
+        *,
+        candidates: Iterable[Dict[str, Any]],
+        rubric: Dict[str, Any],
+    ) -> str:
+        payload = {
+            "rubric": rubric,
+            "candidates": [self._build_scoring_candidate_payload(candidate) for candidate in candidates],
+            "responseFormat": {
+                "scores": [
+                    {
+                        "candidateId": "uuid",
+                        "rationale": "string",
+                        "criteria": [
+                            {
+                                "criterionKey": "skills.python",
+                                "score": 0,
+                                "evidenceSummary": "string",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        return (
+            "You are scoring candidates against a locked rubric that has already been approved by the backend. "
+            "Score only the listed criteria. "
+            "Do not add, remove, or reinterpret criteria. "
+            "Use only evidence from the provided candidate sections. "
+            "Return JSON only and include evidence for every scored criterion.\n\n"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
+
+    def _build_scoring_candidate_payload(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "candidateId": str(candidate.get("id") or candidate.get("candidateId") or ""),
+            "fullName": candidate.get("full_name") or candidate.get("fullName"),
+            "currentJobTitle": candidate.get("current_job_title") or candidate.get("currentJobTitle"),
+            "experienceYears": candidate.get("experience_years") or candidate.get("experienceYears"),
+            "education": candidate.get("education_text") or candidate.get("education"),
+            "experience": candidate.get("experience_text") or candidate.get("experience"),
+            "skills": candidate.get("skills_text") or candidate.get("skills"),
+            "projects": candidate.get("projects_text") or candidate.get("projects"),
+            "summary": candidate.get("summary_text") or candidate.get("summary"),
+            "languages": candidate.get("languages_text") or candidate.get("languages"),
+            "achievements": candidate.get("achievements_text") or candidate.get("achievements"),
+            "certifications": candidate.get("certifications_text") or candidate.get("certifications"),
+            "publications": candidate.get("publications_text") or candidate.get("publications"),
+            "other": candidate.get("other_text") or candidate.get("other"),
+        }
 
     def build_cv_section_match_prompt(
         self,
