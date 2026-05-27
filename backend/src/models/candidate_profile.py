@@ -3,10 +3,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, Enum as SqlEnum, ForeignKey, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base
@@ -60,6 +60,10 @@ class CandidateProfile(Base):
     certifications_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     references_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structured_profile: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
 
     profile_status: Mapped[ProfileStatus] = mapped_column(
         SqlEnum(ProfileStatus, name="profile_status_enum", values_callable=_ENUM_VALUES),

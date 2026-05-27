@@ -50,7 +50,8 @@ export interface FilterChipOptionProps extends Omit<FilterChipProps, "selected" 
   value: string;
 }
 
-function FilterChipOption({ value: _value, ...props }: FilterChipOptionProps) {
+function FilterChipOption({ value, ...props }: FilterChipOptionProps) {
+  void value;
   return <FilterChip {...props} />;
 }
 

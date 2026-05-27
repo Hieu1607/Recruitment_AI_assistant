@@ -1,12 +1,10 @@
-import { api, type JobDescriptionResponse, type ScoreResponse } from "@/api";
+import { api, type ScoreResponse } from "@/api";
 import {
     Avatar,
     Badge,
     Button,
-    ScoreDonut,
     ScoreRadar,
     Skeleton,
-    type ScoreSegment,
 } from "@/components/ui";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -23,7 +21,6 @@ import {
     X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -87,14 +84,15 @@ function scoreColor(n: number) {
 // ── main component ───────────────────────────────────────────────────────────
 
 export default function ScoringSetupRoute() {
-  const [searchParams] = useSearchParams();
   const selectedJobId = useSelectedJobId();
 
   // ── step state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>(1);
 
   // ── step-1 state ──────────────────────────────────────────────────────────
-  const [selectedJdId, setSelectedJdId] = useState(searchParams.get("jd") ?? "");
+  const [hiddenText, setHiddenText] = useState("");
+  const [hiddenDirty, setHiddenDirty] = useState(false);
+  const [savingHidden, setSavingHidden] = useState(false);
   const [candidateMode, setCandidateMode] = useState<"all" | "specific">("all");
   const [candSearch, setCandSearch] = useState("");
   const [selectedCandIds, setSelectedCandIds] = useState<Set<string>>(new Set());
@@ -119,15 +117,14 @@ export default function ScoringSetupRoute() {
 
   // ── data ──────────────────────────────────────────────────────────────────
 
-  const { data: jdData, isLoading: jdsLoading } = useQuery({
-    queryKey: ["jobDescriptions"],
+  const { data: workspaceJd, isLoading: jdLoading } = useQuery({
+    queryKey: ["jobs", selectedJobId, "job-description", "scoring"],
     queryFn: async () => {
-      if (!selectedJobId) return { items: [], total: 0 };
+      if (!selectedJobId) return null;
       try {
-        const jd = await api.jobs.jobDescription.get(selectedJobId);
-        return { items: [jd], total: 1 };
+        return await api.jobs.jobDescription.get(selectedJobId);
       } catch {
-        return { items: [], total: 0 };
+        return null;
       }
     },
   });
@@ -138,15 +135,23 @@ export default function ScoringSetupRoute() {
     enabled: candidateMode === "specific",
   });
 
-  const jds: JobDescriptionResponse[] = jdData?.items ?? [];
   const resumes = resumeData?.items ?? [];
-  const selectedJd = jds.find((j) => j.id === selectedJdId);
 
   useEffect(() => {
-    if (!selectedJdId && jds.length > 0) {
-      setSelectedJdId(jds[0].id);
+    if (!workspaceJd) {
+      setHiddenText("");
+      setHiddenDirty(false);
+      return;
     }
-  }, [jds, selectedJdId]);
+    setHiddenText(workspaceJd.hidden_text ?? "");
+    setHiddenDirty(false);
+  }, [workspaceJd?.id]);
+
+  useEffect(() => {
+    if (workspaceJd && !hiddenDirty) {
+      setHiddenText(workspaceJd.hidden_text ?? "");
+    }
+  }, [workspaceJd?.hidden_text, hiddenDirty]);
 
   // ── processing timers ─────────────────────────────────────────────────────
 
@@ -168,7 +173,8 @@ export default function ScoringSetupRoute() {
   // ── mutation ──────────────────────────────────────────────────────────────
 
   const scoreMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      await saveHiddenInformation();
       const sw: Record<string, number> = {};
       sections.forEach((s) => {
         sw[s.key] = s.value;
@@ -196,14 +202,6 @@ export default function ScoringSetupRoute() {
 
   // ── weight helpers ────────────────────────────────────────────────────────
 
-  const totalWeight = sections.reduce((sum, s) => sum + s.value, 0);
-
-  const donutSegments: ScoreSegment[] = sections.map((s, i) => ({
-    label: s.label,
-    value: totalWeight > 0 ? Math.round((s.value / totalWeight) * 100) : 0,
-    color: SEG_COLORS[i % SEG_COLORS.length],
-  }));
-
   const availableToAdd = EXTRA_SECTIONS.filter(
     (es) => !sections.find((s) => s.key === es.key)
   );
@@ -219,6 +217,22 @@ export default function ScoringSetupRoute() {
         r.original_file_name.toLowerCase().includes(q)
     );
   }, [resumes, candSearch]);
+
+  async function saveHiddenInformation() {
+    if (!selectedJobId || !workspaceJd || !hiddenDirty) return;
+    setSavingHidden(true);
+    try {
+      await api.jobs.jobDescription.patch(selectedJobId, {
+        hidden_text: hiddenText,
+      });
+      setHiddenDirty(false);
+    } catch (error) {
+      toast.error("Hidden information could not be saved");
+      throw error;
+    } finally {
+      setSavingHidden(false);
+    }
+  }
 
   // ── result helpers ────────────────────────────────────────────────────────
 
@@ -279,8 +293,8 @@ export default function ScoringSetupRoute() {
   }
 
   function startScoring() {
-    if (!selectedJobId || !selectedJdId) {
-      toast.error("Please select a job description");
+    if (!selectedJobId || !workspaceJd) {
+      toast.error("Please create or select the current workspace job description");
       return;
     }
     setStep(2);
@@ -303,10 +317,10 @@ export default function ScoringSetupRoute() {
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="px-8 py-8 min-h-full">
+    <div className="px-8 py-6 min-h-full">
 
       {/* Stepper */}
-      <div className="flex items-center gap-0 mb-10">
+      <div className="flex items-center gap-0 mb-6">
         {[
           { n: 1, label: "Setup" },
           { n: 2, label: "Processing" },
@@ -347,46 +361,50 @@ export default function ScoringSetupRoute() {
 
       {/* ── STEP 1: Setup ── */}
       {step === 1 && (
-        <div className="grid grid-cols-5 gap-10">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(260px,320px)] gap-8 items-start">
 
           {/* Left: JD + Candidates */}
-          <div className="col-span-3 space-y-8">
+          <div className="space-y-7">
 
-            {/* JD Selector */}
+            {/* Hidden information */}
             <div>
               <h2 className="font-display text-xl font-medium text-fg mb-4">
-                Job Description
+                Hidden Information
               </h2>
-              {jdsLoading ? (
-                <Skeleton className="h-10 w-full" />
+              {jdLoading ? (
+                <Skeleton className="h-32 w-full" />
+              ) : !workspaceJd ? (
+                <div
+                  className={cn(
+                    "rounded-[var(--radius-md)] border border-[color:var(--hairline)]",
+                    "bg-bg-elevated p-4 text-sm text-fg-muted font-sans",
+                  )}
+                >
+                  Create a workspace job description before scoring.
+                </div>
               ) : (
-                <div className="space-y-3">
-                  <select
-                    value={selectedJdId}
-                    onChange={(e) => setSelectedJdId(e.target.value)}
+                <div className="space-y-2">
+                  <textarea
+                    aria-label="Hidden Information"
+                    value={hiddenText}
+                    onChange={(e) => {
+                      setHiddenText(e.target.value);
+                      setHiddenDirty(true);
+                    }}
+                    onBlur={() => {
+                      if (hiddenDirty) void saveHiddenInformation();
+                    }}
+                    placeholder="Internal criteria, preferred signals, red flags, compensation constraints..."
                     className={cn(
-                      "w-full h-10 px-3 text-sm font-sans rounded-[var(--radius-md)]",
+                      "w-full min-h-32 resize-y px-3 py-2.5 text-sm font-sans leading-relaxed rounded-[var(--radius-md)]",
                       "border border-[color:var(--hairline-strong)] bg-bg text-fg",
+                      "placeholder:text-fg-subtle",
                       "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
                     )}
-                  >
-                    <option value="">Select a job description…</option>
-                    {jds.map((j) => (
-                      <option key={j.id} value={j.id}>
-                        {j.title ?? "Untitled position"}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedJd && (
-                    <div
-                      className={cn(
-                        "p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)]",
-                        "bg-bg-elevated text-sm text-fg-muted font-sans leading-relaxed line-clamp-4"
-                      )}
-                    >
-                      {selectedJd.jd_text}
-                    </div>
-                  )}
+                  />
+                  <div className="h-4 text-[11px] font-sans text-fg-subtle">
+                    {savingHidden ? "Saving..." : hiddenDirty ? "Unsaved" : ""}
+                  </div>
                 </div>
               )}
             </div>
@@ -479,17 +497,14 @@ export default function ScoringSetupRoute() {
           </div>
 
           {/* Right: Weights + Config */}
-          <div className="col-span-2 space-y-8">
+          <div className="space-y-4">
 
             {/* Section Weights */}
             <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-4">
+              <h2 className="font-display text-xl font-medium text-fg mb-3">
                 Section Weights
               </h2>
-              <div className="flex justify-center mb-5">
-                <ScoreDonut score={100} segments={donutSegments} size={152} />
-              </div>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {sections.map((s, i) => (
                   <div key={s.key} className="flex items-center gap-2.5">
                     <div
@@ -551,7 +566,7 @@ export default function ScoringSetupRoute() {
               </div>
 
               {availableToAdd.length > 0 && (
-                <div className="relative mt-3">
+                <div className="relative mt-2">
                   <button
                     type="button"
                     onClick={() => setAddSectionOpen((v) => !v)}
@@ -592,10 +607,10 @@ export default function ScoringSetupRoute() {
 
             {/* Config */}
             <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-4">
+              <h2 className="font-display text-xl font-medium text-fg mb-3">
                 Configuration
               </h2>
-              <div className="space-y-5">
+              <div className="space-y-3">
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-sans font-medium text-fg-muted">
@@ -663,7 +678,8 @@ export default function ScoringSetupRoute() {
               size="lg"
               className="w-full justify-center"
               icon={<BarChart2 size={16} strokeWidth={2} />}
-              disabled={!selectedJdId}
+              loading={scoreMutation.isPending || savingHidden}
+              disabled={!selectedJobId || !workspaceJd}
               onClick={startScoring}
             >
               Start scoring
@@ -755,11 +771,11 @@ export default function ScoringSetupRoute() {
                   <ClipboardCopy size={13} strokeWidth={1.75} />
                 )}
               </button>
-              {selectedJd && (
+              {workspaceJd && (
                 <span className="text-sm text-fg-muted font-sans">
                   vs{" "}
                   <span className="text-fg font-medium">
-                    {selectedJd.title ?? "Untitled position"}
+                    {workspaceJd.title ?? "Untitled position"}
                   </span>
                 </span>
               )}

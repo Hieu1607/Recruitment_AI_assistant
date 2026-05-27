@@ -1,5 +1,6 @@
 import { ApiError, api } from "@/api";
 import { DeleteJobDialog } from "@/components/jobs/DeleteJobDialog";
+import { PublicApplicationLinkCard } from "@/components/jobs/PublicApplicationLinkCard";
 import { JobStatusBadge } from "@/components/jobs/job-ui";
 import { fieldClasses, formatAbsoluteDate, panelClasses } from "@/components/jobs/job-utils";
 import { Button, Skeleton } from "@/components/ui";
@@ -26,6 +27,8 @@ export default function JobEditRoute() {
   const isEditMode = Boolean(jobId);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("active");
+  const [candidateMessage, setCandidateMessage] = useState("");
+  const [publicApplyEnabled, setPublicApplyEnabled] = useState(true);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const jobQuery = useQuery({
@@ -38,13 +41,25 @@ export default function JobEditRoute() {
     if (!jobQuery.data) return;
     setTitle(jobQuery.data.title);
     setStatus(jobQuery.data.status);
+    setCandidateMessage(jobQuery.data.candidate_message ?? "");
+    setPublicApplyEnabled(jobQuery.data.public_apply_enabled);
   }, [jobQuery.data]);
 
   const saveJob = useMutation({
     mutationFn: () =>
       isEditMode
-        ? api.jobs.update(jobId!, { title: title.trim(), status })
-        : api.jobs.create({ title: title.trim(), status }),
+        ? api.jobs.update(jobId!, {
+            title: title.trim(),
+            status,
+            candidate_message: candidateMessage.trim() || null,
+            public_apply_enabled: publicApplyEnabled,
+          })
+        : api.jobs.create({
+            title: title.trim(),
+            status,
+            candidate_message: candidateMessage.trim() || null,
+            public_apply_enabled: publicApplyEnabled,
+          }),
     onSuccess: (job) => {
       setSelectedJobId(job.id);
       qc.invalidateQueries({ queryKey: ["jobs"] });
@@ -170,6 +185,41 @@ export default function JobEditRoute() {
                 </div>
 
                 <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">
+                        Candidate upload link
+                      </p>
+                      <p className="mt-3 text-sm leading-6 text-fg-muted">
+                        This controls whether candidates can submit resumes through the public link
+                        and QR code for this job.
+                      </p>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-sm font-medium text-fg">
+                      <input
+                        type="checkbox"
+                        checked={publicApplyEnabled}
+                        onChange={(event) => setPublicApplyEnabled(event.target.checked)}
+                        className="h-4 w-4 rounded border-[color:var(--hairline-strong)] accent-[color:var(--accent)]"
+                      />
+                      Enabled
+                    </label>
+                  </div>
+
+                  <label htmlFor="candidate-message" className="mt-5 block text-sm font-medium text-fg-muted">
+                    Candidate message
+                  </label>
+                  <textarea
+                    id="candidate-message"
+                    value={candidateMessage}
+                    onChange={(event) => setCandidateMessage(event.target.value)}
+                    placeholder="Add instructions candidates will see before uploading their PDF."
+                    rows={5}
+                    className={cn(fieldClasses, "mt-2 resize-y leading-6")}
+                  />
+                </div>
+
+                <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
                   <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">
                     What belongs to a job?
                   </p>
@@ -199,6 +249,10 @@ export default function JobEditRoute() {
                 This workspace will define the data boundary for the rest of the recruiting pipeline.
               </p>
             </section>
+
+            {isEditMode && jobQuery.data && (
+              <PublicApplicationLinkCard job={jobQuery.data} showRotate />
+            )}
 
             {isEditMode && jobQuery.data && (
               <section className={cn(panelClasses, "p-6")}>

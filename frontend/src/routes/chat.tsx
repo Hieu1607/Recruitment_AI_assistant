@@ -1,5 +1,6 @@
 import type { ChatResponse, ResumeResponse } from "@/api";
 import { api } from "@/api";
+import { parseAxiosError } from "@/api/errors";
 import { Avatar } from "@/components/ui/avatar";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -20,6 +21,7 @@ import { toast } from "sonner";
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = "recruit-ai-chat-sessions";
+const PENDING_CHAT_SESSION_ID = "__pending__";
 
 const PROMPT_SUGGESTIONS = [
   "Who has 5+ years of Python experience?",
@@ -354,7 +356,7 @@ export default function ChatRoute() {
 
   useEffect(() => {
     setHistoryLoading(false);
-    if (!activeSession?.chatSessionId) {
+    if (!activeSession) {
       setMessages([]);
     }
   }, [activeSession?.id, activeSession?.chatSessionId]);
@@ -372,7 +374,11 @@ export default function ChatRoute() {
     mutationFn: (text: string) =>
       api.jobs.chat.send(selectedJobId!, {
         message: text,
-        session_id: activeSession?.chatSessionId ?? undefined,
+        session_id:
+          activeSession?.chatSessionId &&
+          activeSession.chatSessionId !== PENDING_CHAT_SESSION_ID
+            ? activeSession.chatSessionId
+            : undefined,
         candidate_limit: 500,
       }),
     onSuccess: (res: ChatResponse, text: string) => {
@@ -402,8 +408,9 @@ export default function ChatRoute() {
         });
       }
     },
-    onError: (err: any) => {
-      if (err?.response?.status === 404) {
+    onError: (err: unknown) => {
+      const apiError = parseAxiosError(err);
+      if (apiError.status === 404) {
         toast.info("Session expired — started new conversation");
         if (activeSession) {
           setSessions((prev) => {
@@ -416,7 +423,7 @@ export default function ChatRoute() {
         }
         setMessages((prev) => prev.slice(0, -1));
       } else {
-        toast.error("Failed to send message — please try again");
+        toast.error(apiError.detail || "Failed to send message — please try again");
         setMessages((prev) => prev.slice(0, -1));
       }
     },
@@ -437,7 +444,7 @@ export default function ChatRoute() {
       const newSession: LocalSession = {
         id: newSessionId(),
         title: msg.slice(0, 48) + (msg.length > 48 ? "…" : ""),
-        chatSessionId: null,
+        chatSessionId: PENDING_CHAT_SESSION_ID,
         createdAt: new Date().toISOString(),
       };
       const updated = [newSession, ...sessions];
@@ -477,7 +484,7 @@ export default function ChatRoute() {
   }
 
   function handleDeleteSession(session: LocalSession) {
-    if (session.chatSessionId) {
+    if (session.chatSessionId && session.chatSessionId !== PENDING_CHAT_SESSION_ID) {
       api.chat.deleteSession(session.chatSessionId).catch(() => {});
     }
     setSessions((prev) => {

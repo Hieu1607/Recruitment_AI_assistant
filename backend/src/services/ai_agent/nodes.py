@@ -112,6 +112,44 @@ def _fetch_candidates(
         db.close()
 
 
+def _normalize_candidate_dict(candidate: Dict[str, Any], fields: List[str]) -> Dict[str, Any]:
+    keep = list(_ALWAYS_INCLUDE | (set(fields) & _ALL_CANDIDATE_FIELDS))
+    normalized: Dict[str, Any] = {}
+    for field in keep:
+        value = candidate.get(field)
+        if value is None:
+            normalized[field] = None
+        elif field == "id":
+            normalized[field] = str(value)
+        elif field == "experience_years":
+            try:
+                normalized[field] = float(value)
+            except (TypeError, ValueError):
+                normalized[field] = value
+        else:
+            normalized[field] = value
+    return normalized
+
+
+def _resolve_candidates(
+    state: Dict[str, Any],
+    fields: List[str],
+    candidate_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    scoped_candidates = state.get("current_candidates")
+    if scoped_candidates is None:
+        return _fetch_candidates(fields, candidate_ids)
+
+    allowed_ids = {str(candidate_id) for candidate_id in candidate_ids} if candidate_ids is not None else None
+    result: List[Dict[str, Any]] = []
+    for candidate in scoped_candidates:
+        candidate_id = candidate.get("id")
+        if allowed_ids is not None and str(candidate_id) not in allowed_ids:
+            continue
+        result.append(_normalize_candidate_dict(candidate, fields))
+    return result
+
+
 def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
     """Apply DSL filters/must/should clauses to a candidate list."""
     results = list(candidates)
@@ -245,7 +283,7 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info("[dsl_node] question=%r | fields=%s", dsl_question, dsl_relevant_fields)
 
-    candidates = _fetch_candidates(dsl_relevant_fields)
+    candidates = _resolve_candidates(state, dsl_relevant_fields)
     logger.info("[dsl_node] fetched %d candidate(s) from DB", len(candidates))
 
     prompt = build_prompts.build_dsl_query_prompt(dsl_question)
@@ -300,7 +338,7 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
         f"{len(candidate_ids)} IDs" if candidate_ids is not None else "all",
     )
 
-    candidates = _fetch_candidates(llm_relevant_fields, candidate_ids)
+    candidates = _resolve_candidates(state, llm_relevant_fields, candidate_ids)
     logger.info("[llm_node] fetched %d candidate(s) for LLM analysis", len(candidates))
 
     prompt = build_prompts.build_llm_query_prompt(llm_question, candidates)
@@ -373,7 +411,7 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"{len(final_ids)} IDs" if final_ids is not None else "all")
 
     # --- Fetch candidate data from DB ---
-    candidates = _fetch_candidates(all_relevant_fields, final_ids)
+    candidates = _resolve_candidates(state, all_relevant_fields, final_ids)
     logger.info("[answer_node] fetched %d candidate(s) from DB", len(candidates))
 
     if not candidates:

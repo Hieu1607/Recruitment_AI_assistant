@@ -54,6 +54,47 @@ export interface ResumeListResponse {
   items: ResumeResponse[];
 }
 
+export interface StructuredLink {
+  url: string;
+  label: string | null;
+}
+
+export interface StructuredEntry {
+  title: string | null;
+  subtitle: string | null;
+  role: string | null;
+  location: string | null;
+  dateRange: string | null;
+  description: string | null;
+  bullets: string[];
+  links: StructuredLink[];
+  metadata: string[];
+}
+
+export interface StructuredSection {
+  entries: StructuredEntry[];
+  rawText: string | null;
+}
+
+export interface StructuredSummary {
+  text: string | null;
+  links: StructuredLink[];
+}
+
+export interface StructuredProfile {
+  summary?: StructuredSummary | null;
+  experience?: StructuredSection | null;
+  education?: StructuredSection | null;
+  projects?: StructuredSection | null;
+  skills?: StructuredSection | null;
+  languages?: StructuredSection | null;
+  achievements?: StructuredSection | null;
+  publications?: StructuredSection | null;
+  certifications?: StructuredSection | null;
+  references?: StructuredSection | null;
+  other?: StructuredSection | null;
+}
+
 export interface CandidateProfileResponse {
   id: string;
   resume_document_id: string;
@@ -82,6 +123,7 @@ export interface CandidateProfileResponse {
   certifications_text: string | null;
   references_text: string | null;
   other_text: string | null;
+  structured_profile: StructuredProfile | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +132,10 @@ export interface CandidateProfileResponse {
 
 export interface JobDescriptionResponse {
   id: string;                              // UUID
-  job_id?: string;                         // UUID
+  job_id?: string;                         // UUID of the owning job/workspace
   title: string | null;
   jd_text: string;
+  hidden_text: string;
   created_by_user_id: string;             // UUID
   created_at: string;                     // ISO 8601 datetime
   is_active: boolean;
@@ -106,12 +149,14 @@ export interface JobDescriptionListResponse {
 export interface JobDescriptionCreateRequest {
   title?: string;
   jd_text: string;
+  hidden_text?: string;
   created_by_user_id: string;             // UUID
 }
 
 export interface JobDescriptionUpdateRequest {
   title?: string;
   jd_text?: string;
+  hidden_text?: string;
   is_active?: boolean;
 }
 

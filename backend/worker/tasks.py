@@ -46,7 +46,11 @@ def process_resume(
                 result.get("error"),
             )
         else:
-            logger.info("process_resume succeeded for %s", resume_document_id)
+            logger.info(
+                "process_resume succeeded for %s via %s",
+                resume_document_id,
+                result.get("extraction_mode", "unknown"),
+            )
         return result
     except Exception as exc:
         logger.exception("process_resume crashed for %s", resume_document_id)

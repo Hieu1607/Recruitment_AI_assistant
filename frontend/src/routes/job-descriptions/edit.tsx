@@ -1,5 +1,6 @@
-import { api } from "@/api";
+import { ApiError, api } from "@/api";
 import {
+    EmptyState,
     Badge,
     Button,
     Modal,
@@ -26,7 +27,7 @@ import {
     Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -38,7 +39,7 @@ export default function JobDescriptionEditRoute() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const selectedJobId = useSelectedJobId();
-  const isNew = !id;
+  const isCompatibilityEditRoute = Boolean(id);
 
   const titleRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -59,8 +60,15 @@ export default function JobDescriptionEditRoute() {
   // ── load existing JD ─────────────────────────────────────────────────────
 
   const { data: jd, isLoading } = useQuery({
-    queryKey: ["jobDescription", id],
-    queryFn: () => api.jobs.jobDescription.get(selectedJobId!),
+    queryKey: ["jobs", selectedJobId, "job-description", "editor"],
+    queryFn: async () => {
+      try {
+        return await api.jobs.jobDescription.get(selectedJobId!);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
     enabled: !!selectedJobId,
   });
 
@@ -83,11 +91,12 @@ export default function JobDescriptionEditRoute() {
         title: body.title || undefined,
         jd_text: body.jd_text,
       }),
-    onSuccess: (data) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "job-description"] });
       setSaveState("saved");
       setSavedAt(new Date());
-      navigate(routes.jobDescriptionEdit(data.id || "current"), { replace: true });
+      navigate(routes.jobDescriptionNew, { replace: true });
     },
     onError: () => {
       setSaveState("error");
@@ -100,7 +109,7 @@ export default function JobDescriptionEditRoute() {
       api.jobs.jobDescription.patch(selectedJobId!, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
-      qc.invalidateQueries({ queryKey: ["jobDescription", id] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "job-description"] });
       setSaveState("saved");
       setSavedAt(new Date());
     },
@@ -114,8 +123,9 @@ export default function JobDescriptionEditRoute() {
     mutationFn: () => api.jobs.jobDescription.patch(selectedJobId!, { is_active: false }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "job-description"] });
       toast.success("Job description deactivated");
-      navigate(routes.jobDescriptions);
+      navigate(routes.jobs);
     },
     onError: () => toast.error("Failed to delete job description"),
   });
@@ -133,7 +143,7 @@ export default function JobDescriptionEditRoute() {
     const { title, jd_text } = getCurrentValues();
     if (!jd_text && !title) return;
     setSaveState("saving");
-    if (isNew) {
+    if (!jd) {
       createMutation.mutate({ title, jd_text });
     } else {
       updateMutation.mutate({ title, jd_text, ...extra });
@@ -158,7 +168,6 @@ export default function JobDescriptionEditRoute() {
 
   function applyFormat(cmd: string, value?: string) {
     editorRef.current?.focus();
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
     document.execCommand(cmd, false, value);
   }
 
@@ -167,7 +176,7 @@ export default function JobDescriptionEditRoute() {
   function toggleActive() {
     const next = !localIsActive;
     setLocalIsActive(next);
-    if (!isNew) {
+    if (jd) {
       updateMutation.mutate({ is_active: next });
     }
   }
@@ -187,6 +196,22 @@ export default function JobDescriptionEditRoute() {
   }
 
   // ── render ────────────────────────────────────────────────────────────────
+
+  if (isCompatibilityEditRoute) {
+    return <Navigate to={routes.jobDescriptionNew} replace />;
+  }
+
+  if (!selectedJobId) {
+    return (
+      <div className="px-12 py-10">
+        <EmptyState
+          heading="No workspace selected"
+          body="Select a job workspace first. This editor now follows the currently selected workspace."
+          action={{ label: "Open jobs", onClick: () => navigate(routes.jobs) }}
+        />
+      </div>
+    );
+  }
 
   if (selectedJobId && isLoading) {
     return (
@@ -212,14 +237,17 @@ export default function JobDescriptionEditRoute() {
       >
         <button
           type="button"
-          onClick={() => navigate(routes.jobDescriptions)}
+          onClick={() => navigate(routes.jobs)}
           className="inline-flex items-center gap-1.5 text-sm font-sans text-fg-muted hover:text-fg transition-colors"
         >
           <ArrowLeft size={15} strokeWidth={1.75} />
-          Job Descriptions
+          Back to workspace
         </button>
 
         <div className="flex items-center gap-3">
+          <span className="hidden text-xs font-sans text-fg-muted sm:inline">
+            This editor follows the currently selected workspace.
+          </span>
           {savedLabel() && (
             <span
               className={cn(
@@ -237,7 +265,7 @@ export default function JobDescriptionEditRoute() {
             loading={isSaving}
             onClick={() => saveNow()}
           >
-            {isNew ? "Create" : "Save"}
+            {jd ? "Save" : "Create"}
           </Button>
         </div>
       </div>
@@ -379,7 +407,7 @@ export default function JobDescriptionEditRoute() {
           )}
 
           {/* Delete */}
-          {!isNew && (
+          {jd && (
             <div className="mt-auto pt-4 border-t border-[color:var(--hairline)]">
               <Button
                 variant="danger"

@@ -1,291 +1,158 @@
-import { api, type JobDescriptionResponse } from "@/api";
+import { ApiError, api, type JobResponse } from "@/api";
 import {
-    Badge,
-    Button,
-    EmptyState,
-    FilterChip,
-    Modal,
-    ModalContent,
-    ModalDescription,
-    ModalFooter,
-    ModalHeader,
-    ModalTitle,
-    Skeleton,
+  Badge,
+  Button,
+  EmptyState,
+  Skeleton,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { useSelectedJobId } from "@/lib/auth";
 import { routes } from "@/routes";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart2, Eye, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
-import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowUpRight, BarChart2, PencilLine } from "lucide-react";
+import { useNavigate } from "react-router";
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+const EMPTY_JOBS: JobResponse[] = [];
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-function truncateBody(text: string, max = 120): string {
+function truncateBody(text: string, max = 320): string {
   const flat = text.replace(/\n+/g, " ").trim();
-  return flat.length > max ? flat.slice(0, max) + "…" : flat;
+  return flat.length > max ? `${flat.slice(0, max)}...` : flat;
 }
-
-// ─── main component ──────────────────────────────────────────────────────────
 
 export default function JobDescriptionsListRoute() {
-  const qc = useQueryClient();
   const navigate = useNavigate();
   const selectedJobId = useSelectedJobId();
-  const [params, setParams] = useSearchParams();
 
-  const activeFilter = params.get("active"); // "true" | "false" | null
-  const [deleteTarget, setDeleteTarget] = useState<JobDescriptionResponse | null>(null);
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => api.jobs.list(),
+    staleTime: 60_000,
+  });
 
-  function setParam(key: string, value: string) {
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (value) next.set(key, value);
-      else next.delete(key);
-      return next;
-    });
-  }
+  const selectedJob = (jobsQuery.data?.items ?? EMPTY_JOBS).find((job) => job.id === selectedJobId) ?? null;
 
-  // ── data ──────────────────────────────────────────────────────────────────
-
-  const isActiveParam =
-    activeFilter === "true" ? true : activeFilter === "false" ? false : undefined;
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["jobDescriptions", isActiveParam],
+  const jdQuery = useQuery({
+    queryKey: ["jobs", selectedJobId, "job-description", "workspace-alias"],
+    enabled: !!selectedJobId,
     queryFn: async () => {
-      if (!selectedJobId) return { items: [], total: 0 };
       try {
-        const jd = await api.jobs.jobDescription.get(selectedJobId);
-        if (isActiveParam !== undefined && jd.is_active !== isActiveParam) {
-          return { items: [], total: 0 };
-        }
-        return { items: [jd], total: 1 };
-      } catch {
-        return { items: [], total: 0 };
+        return await api.jobs.jobDescription.get(selectedJobId!);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
       }
     },
   });
 
-  const items: JobDescriptionResponse[] = data?.items ?? [];
+  if (!selectedJobId) {
+    return (
+      <div className="px-8 py-8 min-h-full">
+        <EmptyState
+          heading="No workspace selected"
+          body="Select a job workspace first. Job description management now follows the active workspace."
+          action={{ label: "Open jobs", onClick: () => navigate(routes.jobs) }}
+        />
+      </div>
+    );
+  }
 
-  // ── mutations ─────────────────────────────────────────────────────────────
+  if (jobsQuery.isLoading || jdQuery.isLoading) {
+    return (
+      <div className="px-8 py-8 min-h-full space-y-6">
+        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-24 w-full rounded-[var(--radius-lg)]" />
+        <Skeleton className="h-80 w-full rounded-[var(--radius-lg)]" />
+      </div>
+    );
+  }
 
-  const deleteMutation = useMutation({
-    mutationFn: async (_id: string) => {
-      if (!selectedJobId) throw new Error("No job selected");
-      return api.jobs.jobDescription.patch(selectedJobId, { is_active: false });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
-      toast.success("Job description deactivated");
-      setDeleteTarget(null);
-    },
-    onError: () => toast.error("Failed to delete job description"),
-  });
-
-  // ── render ────────────────────────────────────────────────────────────────
-
-  const FILTERS = [
-    { label: "All", value: "" },
-    { label: "Active", value: "true" },
-    { label: "Inactive", value: "false" },
-  ];
+  const jd = jdQuery.data;
 
   return (
     <div className="px-8 py-8 min-h-full">
-
-      {/* Page header */}
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <h1 className="font-display text-[2rem] font-medium text-fg leading-tight">
-            Job Descriptions
+      <div className="flex flex-col gap-4 border-b border-[color:var(--hairline)] pb-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="max-w-3xl">
+          <h1 className="font-display text-[2rem] font-medium leading-tight text-fg">
+            Workspace job description
           </h1>
-          <p className="text-sm text-fg-muted mt-1 font-sans">
-            Create and manage positions to score candidates against
+          <p className="mt-2 text-sm leading-6 text-fg-muted">
+            This page follows the selected workspace. Manage the current job description from the active job context instead of treating it as a standalone resource.
           </p>
         </div>
-        <Button
-          variant="primary"
-          icon={<Plus size={15} strokeWidth={2} />}
-          onClick={() => navigate(routes.jobDescriptionNew)}
-        >
-          Create JD
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="ghost"
+            icon={<ArrowUpRight size={15} strokeWidth={1.75} />}
+            onClick={() => navigate(routes.jobs)}
+          >
+            Open workspace
+          </Button>
+          <Button
+            variant="primary"
+            icon={<PencilLine size={15} strokeWidth={1.75} />}
+            onClick={() => navigate(routes.jobDescriptionNew)}
+          >
+            {jd ? "Edit job description" : "Create job description"}
+          </Button>
+        </div>
       </div>
 
-      {/* Filter chips */}
-      <div className="flex items-center gap-1.5 mb-6">
-        {FILTERS.map((f) => (
-          <FilterChip
-            key={f.value}
-            selected={(activeFilter ?? "") === f.value}
-            onClick={() => setParam("active", f.value)}
-          >
-            {f.label}
-          </FilterChip>
-        ))}
-        {!isLoading && (
-          <span className="ml-2 text-xs text-fg-muted tabular-nums">
-            {items.length} {items.length === 1 ? "result" : "results"}
-          </span>
+      <section
+        className={cn(
+          "mt-8 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6",
         )}
-      </div>
-
-      {/* Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-48 rounded-[var(--radius-lg)]" />
-          ))}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">Selected workspace</p>
+            <h2 className="mt-3 font-display text-3xl leading-tight text-fg">
+              {selectedJob?.title ?? "Current workspace"}
+            </h2>
+          </div>
+          {jd && (
+            <Badge variant={jd.is_active ? "success" : "neutral"} size="sm" dot>
+              {jd.is_active ? "Active" : "Inactive"}
+            </Badge>
+          )}
         </div>
-      ) : items.length === 0 ? (
-        <EmptyState
-          heading="No job descriptions yet"
-          body="Create a JD to start scoring candidates against positions."
-          action={{ label: "Create JD", onClick: () => navigate(routes.jobDescriptionNew) }}
-        />
-      ) : (
-        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-          {items.map((jd) => (
-            <JDCard
-              key={jd.id}
-              jd={jd}
-              onDelete={() => setDeleteTarget(jd)}
-            />
-          ))}
-        </div>
-      )}
 
-      {/* Delete confirmation */}
-      <Modal open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <ModalContent>
-          <ModalHeader>
-            <ModalTitle>Delete job description</ModalTitle>
-            <ModalDescription>
-              Are you sure you want to delete{" "}
-              <span className="font-medium text-fg">
-                {deleteTarget?.title ?? "Untitled position"}
-              </span>
-              ? This cannot be undone.
-            </ModalDescription>
-          </ModalHeader>
-          <ModalFooter>
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              loading={deleteMutation.isPending}
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
-            >
-              Delete
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
-    </div>
-  );
-}
+        {!jd ? (
+          <EmptyState
+            heading="No job description yet"
+            body="This workspace does not have a current JD yet. Create one here, then continue to scoring and interview preparation."
+            action={{ label: "Create job description", onClick: () => navigate(routes.jobDescriptionNew) }}
+          />
+        ) : (
+          <div className="mt-6 space-y-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">Current JD</p>
+              <h3 className="mt-3 font-display text-2xl leading-tight text-fg">
+                {jd.title ?? "Untitled position"}
+              </h3>
+              <p className="mt-4 max-w-3xl text-sm leading-7 text-fg-muted">
+                {truncateBody(jd.jd_text)}
+              </p>
+            </div>
 
-// ─── JD card ─────────────────────────────────────────────────────────────────
-
-function JDCard({
-  jd,
-  onDelete,
-}: {
-  jd: JobDescriptionResponse;
-  onDelete: () => void;
-}) {
-  const navigate = useNavigate();
-
-  return (
-    <div
-      className={cn(
-        "group relative rounded-[var(--radius-lg)] border border-[color:var(--hairline)]",
-        "bg-bg-elevated p-5 flex flex-col gap-3",
-        "hover:shadow-[var(--shadow-md)] transition-all duration-200",
-      )}
-    >
-      {/* Top row: title + active badge */}
-      <div className="flex items-start justify-between gap-2">
-        <Link
-          to={routes.jobDescriptionEdit(jd.id)}
-          className="font-display text-[0.9375rem] font-medium text-fg hover:text-accent transition-colors line-clamp-2 flex-1 min-w-0 leading-snug"
-        >
-          {jd.title ?? "Untitled position"}
-        </Link>
-        <Badge variant={jd.is_active ? "success" : "neutral"} size="sm" dot>
-          {jd.is_active ? "Active" : "Inactive"}
-        </Badge>
-      </div>
-
-      {/* Body preview */}
-      <p className="text-sm text-fg-muted font-sans leading-relaxed line-clamp-3 flex-1">
-        {truncateBody(jd.jd_text)}
-      </p>
-
-      {/* Footer row: timestamp + hover actions */}
-      <div className="flex items-center justify-between pt-1 border-t border-[color:var(--hairline)]">
-        <span
-          className="text-xs text-fg-muted tabular-nums"
-          title={new Date(jd.created_at).toUTCString()}
-        >
-          Created {relativeTime(jd.created_at)}
-        </span>
-
-        {/* Hover-reveal CTAs */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-          <button
-            type="button"
-            onClick={() => navigate(routes.jobDescriptionEdit(jd.id))}
-            className={cn(
-              "inline-flex items-center gap-1.5 h-7 px-2.5 text-xs font-sans font-medium rounded-[var(--radius-sm)]",
-              "text-fg-muted hover:text-fg hover:bg-[color:var(--hairline)] transition-colors",
-            )}
-          >
-            <Eye size={12} strokeWidth={1.75} />
-            View
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(`${routes.scoring}?jd=${jd.id}`)}
-            className={cn(
-              "inline-flex items-center gap-1.5 h-7 px-2.5 text-xs font-sans font-medium rounded-[var(--radius-sm)]",
-              "text-accent hover:bg-[rgba(31,58,46,0.08)] transition-colors",
-            )}
-          >
-            <BarChart2 size={12} strokeWidth={1.75} />
-            Score candidates
-          </button>
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className={cn(
-              "inline-flex items-center justify-center h-7 w-7 rounded-[var(--radius-sm)]",
-              "text-fg-muted hover:text-danger hover:bg-[rgba(184,68,46,0.08)] transition-colors",
-            )}
-            aria-label="Delete JD"
-          >
-            <Trash2 size={12} strokeWidth={1.75} />
-          </button>
-        </div>
-      </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                icon={<PencilLine size={15} strokeWidth={1.75} />}
+                onClick={() => navigate(routes.jobDescriptionNew)}
+              >
+                Edit job description
+              </Button>
+              <Button
+                variant="ghost"
+                icon={<BarChart2 size={15} strokeWidth={1.75} />}
+                onClick={() => navigate(`${routes.scoring}?jd=${jd.id}`)}
+              >
+                Score candidates
+              </Button>
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

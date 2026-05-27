@@ -3,6 +3,9 @@ import type {
   InterviewInvitationResponse,
   OutreachResponse,
   ResumeResponse,
+  StructuredLink,
+  StructuredSection,
+  StructuredSummary,
 } from "@/api";
 import { api } from "@/api";
 import { InvitationSendDialog } from "@/components/interviews/InvitationSendDialog";
@@ -54,6 +57,101 @@ function displayValue(value: string | number | boolean | null | undefined) {
   return normalized || "No infomation";
 }
 
+function renderLinks(links: StructuredLink[]) {
+  if (links.length === 0) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {links.map((link, index) => (
+        <a
+          key={`${link.url}-${index}`}
+          href={link.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 rounded-full border border-[color:var(--hairline)] px-3 py-1 text-xs text-accent hover:bg-[rgba(31,58,46,0.05)]"
+        >
+          {link.label || link.url}
+          <ExternalLink size={11} strokeWidth={1.75} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function hasStructuredSection(section: StructuredSection | null | undefined) {
+  return !!section && (section.entries.length > 0 || !!section.rawText);
+}
+
+function StructuredSummaryBlock({ summary, fallbackText }: { summary?: StructuredSummary | null; fallbackText?: string | null }) {
+  const text = summary?.text || fallbackText;
+  const links = summary?.links ?? [];
+  return (
+    <>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(text)}</p>
+      {renderLinks(links)}
+    </>
+  );
+}
+
+function StructuredSectionBlock({
+  section,
+  fallbackText,
+}: {
+  section?: StructuredSection | null;
+  fallbackText?: string | null;
+}) {
+  if (!hasStructuredSection(section)) {
+    return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(fallbackText)}</p>;
+  }
+
+  return (
+    <div className="mt-4 space-y-4">
+      {section!.entries.map((entry, index) => (
+        <article
+          key={`${entry.title || entry.subtitle || "entry"}-${index}`}
+          className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg px-4 py-3"
+        >
+          <div className="space-y-2">
+            {(entry.title || entry.subtitle) && (
+              <div>
+                {entry.title && <h3 className="text-sm font-medium text-fg">{entry.title}</h3>}
+                {entry.subtitle && <p className="text-sm text-fg-muted">{entry.subtitle}</p>}
+              </div>
+            )}
+            {(entry.role || entry.location || entry.dateRange) && (
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted">
+                {entry.role && <span>{entry.role}</span>}
+                {entry.location && <span>{entry.location}</span>}
+                {entry.dateRange && <span>{entry.dateRange}</span>}
+              </div>
+            )}
+            {entry.description && (
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{entry.description}</p>
+            )}
+            {entry.metadata.length > 0 && (
+              <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-fg">
+                {entry.metadata.map((item, metaIndex) => (
+                  <li key={`${item}-${metaIndex}`}>{item}</li>
+                ))}
+              </ul>
+            )}
+            {entry.bullets.length > 0 && (
+              <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-fg">
+                {entry.bullets.map((item, bulletIndex) => (
+                  <li key={`${item}-${bulletIndex}`}>{item}</li>
+                ))}
+              </ul>
+            )}
+            {renderLinks(entry.links)}
+          </div>
+        </article>
+      ))}
+      {section?.rawText && section.entries.length === 0 && (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{section.rawText}</p>
+      )}
+    </div>
+  );
+}
+
 function TabButton({
   active,
   children,
@@ -87,19 +185,19 @@ function OverviewTab({
   const displayName = profile?.full_name || profile?.submitted_full_name;
   const displayEmail = profile?.email || profile?.submitted_email;
   const sectionFields = [
-    { title: "Name", content: displayName },
-    { title: "Current Role", content: profile?.current_job_title },
-    { title: "Summary", content: profile?.summary_text },
-    { title: "Skills", content: profile?.skills_text },
-    { title: "Experience", content: profile?.experience_text },
-    { title: "Education", content: profile?.education_text },
-    { title: "Projects", content: profile?.projects_text },
-    { title: "Languages", content: profile?.languages_text },
-    { title: "Achievements", content: profile?.achievements_text },
-    { title: "Publications", content: profile?.publications_text },
-    { title: "Certifications", content: profile?.certifications_text },
-    { title: "References", content: profile?.references_text },
-    { title: "Other", content: profile?.other_text },
+    { title: "Name", kind: "plain" as const, content: displayName },
+    { title: "Current Role", kind: "plain" as const, content: profile?.current_job_title },
+    { title: "Summary", kind: "summary" as const, content: profile?.summary_text, structured: profile?.structured_profile?.summary },
+    { title: "Skills", kind: "structured" as const, content: profile?.skills_text, structured: profile?.structured_profile?.skills },
+    { title: "Experience", kind: "structured" as const, content: profile?.experience_text, structured: profile?.structured_profile?.experience },
+    { title: "Education", kind: "structured" as const, content: profile?.education_text, structured: profile?.structured_profile?.education },
+    { title: "Projects", kind: "structured" as const, content: profile?.projects_text, structured: profile?.structured_profile?.projects },
+    { title: "Languages", kind: "structured" as const, content: profile?.languages_text, structured: profile?.structured_profile?.languages },
+    { title: "Achievements", kind: "structured" as const, content: profile?.achievements_text, structured: profile?.structured_profile?.achievements },
+    { title: "Publications", kind: "structured" as const, content: profile?.publications_text, structured: profile?.structured_profile?.publications },
+    { title: "Certifications", kind: "structured" as const, content: profile?.certifications_text, structured: profile?.structured_profile?.certifications },
+    { title: "References", kind: "structured" as const, content: profile?.references_text, structured: profile?.structured_profile?.references },
+    { title: "Other", kind: "structured" as const, content: profile?.other_text, structured: profile?.structured_profile?.other },
   ];
 
   const resumeInfoRows = [
@@ -136,9 +234,17 @@ function OverviewTab({
             className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5"
           >
             <h2 className="font-display text-xl font-medium text-fg">{section.title}</h2>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
-              {displayValue(section.content)}
-            </p>
+            {section.kind === "plain" && (
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
+                {displayValue(section.content)}
+              </p>
+            )}
+            {section.kind === "summary" && (
+              <StructuredSummaryBlock summary={section.structured} fallbackText={section.content} />
+            )}
+            {section.kind === "structured" && (
+              <StructuredSectionBlock section={section.structured} fallbackText={section.content} />
+            )}
           </section>
         ))}
       </div>

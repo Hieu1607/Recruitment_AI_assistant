@@ -228,6 +228,75 @@ def test_public_interview_start_events_and_complete_flow(
     assert session_record.completed_at is not None
 
 
+def test_public_interview_events_recovers_when_turn_index_conflict_happens_during_ingest(
+    api_client: TestClient,
+    db_session: Session,
+    interview_invitation: InterviewInvitation,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    start_response = api_client.post(
+        f"/api/v1/public/interview/{interview_invitation.public_token}/start",
+        json={"provider": "fake", "provider_session_id": "provider-session-1"},
+    )
+    assert start_response.status_code == 200
+
+    session_record = db_session.execute(select(InterviewSession)).scalar_one()
+    db_session.add(
+        InterviewTranscriptTurn(
+            interview_session_id=session_record.id,
+            speaker_role="assistant",
+            turn_index=0,
+            transcript_text="Tell me about yourself.",
+            payload={"question_key": "intro"},
+        )
+    )
+    db_session.commit()
+
+    original_execute = db_session.execute
+    execute_state = {"returned_stale_max": False}
+
+    class _FakeScalarResult:
+        def scalar_one(self):
+            return None
+
+    def execute_with_stale_turn_index(statement, *args, **kwargs):
+        statement_text = str(statement)
+        if (
+            not execute_state["returned_stale_max"]
+            and "max(interview_transcript_turns.turn_index)" in statement_text
+        ):
+            execute_state["returned_stale_max"] = True
+            return _FakeScalarResult()
+        return original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", execute_with_stale_turn_index)
+
+    events_response = api_client.post(
+        f"/api/v1/public/interview/{interview_invitation.public_token}/events",
+        json={
+            "provider": "fake",
+            "events": [
+                {
+                    "speaker": "user",
+                    "text": "I build APIs.",
+                    "question_key": "intro",
+                }
+            ],
+        },
+    )
+
+    assert events_response.status_code == 202
+    assert events_response.json() == {"accepted": True, "stored_turns": 1}
+
+    transcript_turns = db_session.execute(
+        select(InterviewTranscriptTurn).order_by(InterviewTranscriptTurn.turn_index.asc())
+    ).scalars().all()
+    assert [turn.turn_index for turn in transcript_turns] == [0, 1]
+    assert [turn.speaker_role for turn in transcript_turns] == ["assistant", "candidate"]
+    assert transcript_turns[1].transcript_text == "I build APIs."
+    assert transcript_turns[1].payload["question_key"] == "intro"
+
+
 @pytest.mark.parametrize(
     ("status", "expires_at", "attempt_count", "completed_at", "expected_status", "expected_detail"),
     [

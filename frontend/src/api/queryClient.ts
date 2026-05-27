@@ -16,7 +16,7 @@ import { ApiError } from "./errors";
  */
 function notifyOnError(error: unknown): void {
   if (!isApiError(error)) return;
-  if (error.kind === "validation") return;
+  if (error.kind === "validation" || error.kind === "auth") return;
 
   const message =
     error.kind === "network"

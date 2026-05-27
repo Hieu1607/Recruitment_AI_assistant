@@ -360,8 +360,11 @@ test("recruiter manages interview templates, sends an invitation, and completes 
   await page.getByLabel("Language code").fill("en-US");
   await page.getByLabel("Status").selectOption("active");
   await page
-    .getByLabel("Question payload")
-    .fill(JSON.stringify({ questions: [{ key: "intro", prompt: "Tell me about your hiring approach." }] }, null, 2));
+    .getByLabel("Question list import")
+    .fill("1. Tell me about your hiring approach.\n2. How do you keep interviews consistent?");
+  await page.getByRole("button", { name: "Import questions" }).click();
+  await expect(page.getByLabel("Question 1")).toHaveValue("Tell me about your hiring approach.");
+  await expect(page.getByLabel("Question 2")).toHaveValue("How do you keep interviews consistent?");
   await page
     .getByLabel("Report rubric")
     .fill(JSON.stringify({ score_bands: ["strong", "mixed", "weak"] }, null, 2));
@@ -389,6 +392,9 @@ test("recruiter manages interview templates, sends an invitation, and completes 
   await page.getByRole("button", { name: "Start interview" }).click();
   await expect(page.getByText(/Tell me about your hiring approach/i)).toBeVisible();
   await page.getByLabel("Answer transcript").fill("I build structured recruiting workflows.");
+  await page.getByRole("button", { name: "Next question" }).click();
+  await expect(page.getByText(/How do you keep interviews consistent/i)).toBeVisible();
+  await page.getByLabel("Answer transcript").fill("I use a shared scorecard and calibrated rubrics.");
   await page.getByRole("button", { name: "Finish interview" }).click();
 
   await expect(page.getByRole("heading", { name: "Interview completed" })).toBeVisible();
@@ -396,6 +402,11 @@ test("recruiter manages interview templates, sends an invitation, and completes 
   expect(
     transcriptEvents.some(
       (event) => event.speaker === "user" && /structured recruiting workflows/i.test(event.text),
+    ),
+  ).toBeTruthy();
+  expect(
+    transcriptEvents.some(
+      (event) => event.speaker === "user" && /shared scorecard and calibrated rubrics/i.test(event.text),
     ),
   ).toBeTruthy();
 

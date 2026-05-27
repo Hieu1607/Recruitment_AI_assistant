@@ -50,7 +50,7 @@ export function ModalContent({
           "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
           "w-[calc(100%-2rem)] bg-bg-elevated rounded-[var(--radius-lg)]",
           "shadow-[var(--shadow-lg)] border border-[color:var(--hairline)]",
-          "p-6 focus:outline-none",
+          "max-h-[calc(100vh-2rem)] overflow-y-auto p-6 focus:outline-none",
           "data-[state=open]:animate-in data-[state=closed]:animate-out",
           "data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           "data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",

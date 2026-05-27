@@ -1,7 +1,8 @@
-import type { ContentSource, OutreachResponse, ResumeResponse, SentStatus } from "@/api";
+import type { CandidateProfileResponse, ContentSource, OutreachResponse, SentStatus } from "@/api";
 import { api } from "@/api";
+import { parseAxiosError } from "@/api/errors";
 import { Badge, Button, EmptyState, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle, Skeleton } from "@/components/ui";
-import { useUserId } from "@/lib/auth";
+import { useSelectedJobId, useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, Mail } from "lucide-react";
@@ -88,7 +89,7 @@ function FolderSidebar({
   onFolderChange: (key: FolderKey) => void;
   onCandidateChange: (id: string | undefined) => void;
   onNewMessage: () => void;
-  candidates: ResumeResponse[];
+  candidates: CandidateProfileResponse[];
 }) {
   return (
     <div className="w-[200px] shrink-0 border-r border-[color:var(--hairline)] flex flex-col bg-bg-sidebar">
@@ -128,10 +129,10 @@ function FolderSidebar({
           className="w-full text-sm bg-bg border border-[color:var(--hairline)] rounded-[var(--radius-md)] px-2 py-1.5 outline-none focus:ring-2 focus:ring-accent/50"
         >
           <option value="">All candidates</option>
-          {candidates.map((r) => {
-            const label = r.original_file_name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim() || r.original_file_name;
+          {candidates.map((candidate) => {
+            const label = candidate.full_name || candidate.current_job_title || candidate.email || candidate.id;
             return (
-              <option key={r.id} value={r.id}>
+              <option key={candidate.id} value={candidate.id}>
                 {label}
               </option>
             );
@@ -264,7 +265,7 @@ function MessageDetailPanel({
       setBody(message.body);
       setDeleteConfirm(false);
     }
-  }, [message?.id, message?.subject, message?.body]);
+  }, [message]);
 
   const isDirty = message ? (subject !== message.subject || body !== message.body) : false;
 
@@ -276,9 +277,8 @@ function MessageDetailPanel({
       qc.invalidateQueries({ queryKey: ["outreach-message", messageId] });
       toast.success("Message saved");
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    onError: (err: any) => {
-      if (err?.response?.status === 404) {
+    onError: (err: unknown) => {
+      if (parseAxiosError(err).status === 404) {
         toast.error("Message no longer exists");
         onClose();
       } else {
@@ -296,9 +296,8 @@ function MessageDetailPanel({
       qc.invalidateQueries({ queryKey: ["outreach-message", messageId] });
       toast.success("Message marked as sent");
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    onError: (err: any) => {
-      if (err?.response?.status === 404) {
+    onError: (err: unknown) => {
+      if (parseAxiosError(err).status === 404) {
         toast.error("Message no longer exists");
         onClose();
       } else {
@@ -492,7 +491,7 @@ function ComposeModal({
   candidates,
   onClose,
 }: {
-  candidates: ResumeResponse[];
+  candidates: CandidateProfileResponse[];
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -522,9 +521,8 @@ function ComposeModal({
       toast.success("Message saved to drafts");
       onClose();
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    onError: (err: any) => {
-      if (err?.response?.status === 404) {
+    onError: (err: unknown) => {
+      if (parseAxiosError(err).status === 404) {
         setCandidateError(true);
       } else {
         toast.error("Something went wrong. Please try again.");
@@ -540,8 +538,8 @@ function ComposeModal({
     }
   }
 
-  function candidateLabel(r: ResumeResponse): string {
-    return r.original_file_name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim() || r.original_file_name;
+  function candidateLabel(candidate: CandidateProfileResponse): string {
+    return candidate.full_name || candidate.current_job_title || candidate.email || candidate.id;
   }
 
   return (
@@ -677,14 +675,19 @@ function ComposeModal({
 export default function OutreachRoute() {
   const { folder, candidate, messageId, setFolder, setCandidate, setMessage } = useOutreachParams();
   const [composeOpen, setComposeOpen] = useState(false);
+  const selectedJobId = useSelectedJobId();
 
   // Fetch candidates for the filter combobox
-  const { data: resumeData } = useQuery({
-    queryKey: ["resumes-outreach"],
-    queryFn: () => api.upload.list({ limit: 200 }),
+  const { data: candidateData } = useQuery({
+    queryKey: ["outreach-candidates", selectedJobId],
+    queryFn: () =>
+      selectedJobId
+        ? api.jobs.listCandidates(selectedJobId)
+        : Promise.resolve({ items: [], total: 0 }),
+    enabled: !!selectedJobId,
     staleTime: 60_000,
   });
-  const candidates = resumeData?.items ?? [];
+  const candidates = candidateData?.items ?? [];
 
   // Derive sent_status filter from folder
   const folderDef = FOLDERS.find((f) => f.key === folder) ?? FOLDERS[0];

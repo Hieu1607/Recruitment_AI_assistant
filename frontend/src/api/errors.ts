@@ -1,6 +1,7 @@
 import axios from "axios";
 
 export type ApiErrorKind =
+  | "auth"
   | "network"
   | "validation"
   | "not_found"
@@ -63,6 +64,11 @@ export function parseAxiosError(err: unknown): ApiError {
     status: number;
     data: unknown;
   };
+
+  if (status === 401) {
+    const detail = extractDetail(data) ?? "Your session has expired. Please sign in again.";
+    return new ApiError({ status, kind: "auth", detail });
+  }
 
   // 422 or 400 with FastAPI-style array detail (field validation errors)
   if (status === 422 || status === 400) {

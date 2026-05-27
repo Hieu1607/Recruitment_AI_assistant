@@ -3,6 +3,7 @@ import type {
   CandidateProfileResponse,
   ChatResponse,
   JobDescriptionResponse,
+  JobApplicationLinkResponse,
   JobListResponse,
   JobResponse,
   ResumeBatchParseResponse,
@@ -17,7 +18,12 @@ export const jobsApi = {
     return data;
   },
 
-  async create(body: { title: string; status?: string }): Promise<JobResponse> {
+  async create(body: {
+    title: string;
+    status?: string;
+    candidate_message?: string | null;
+    public_apply_enabled?: boolean;
+  }): Promise<JobResponse> {
     const { data } = await client.post<JobResponse>("/jobs/", body);
     return data;
   },
@@ -27,7 +33,12 @@ export const jobsApi = {
     return data;
   },
 
-  async update(jobId: string, body: { title?: string; status?: string }): Promise<JobResponse> {
+  async update(jobId: string, body: {
+    title?: string;
+    status?: string;
+    candidate_message?: string | null;
+    public_apply_enabled?: boolean;
+  }): Promise<JobResponse> {
     const { data } = await client.patch<JobResponse>(`/jobs/${jobId}`, body);
     return data;
   },
@@ -37,6 +48,17 @@ export const jobsApi = {
     return data;
   },
 
+  applicationLink: {
+    async get(jobId: string): Promise<JobApplicationLinkResponse> {
+      const { data } = await client.get<JobApplicationLinkResponse>(`/jobs/${jobId}/application-link`);
+      return data;
+    },
+    async rotate(jobId: string): Promise<JobApplicationLinkResponse> {
+      const { data } = await client.post<JobApplicationLinkResponse>(`/jobs/${jobId}/application-link/rotate`);
+      return data;
+    },
+  },
+
   jobDescription: {
     async get(jobId: string): Promise<JobDescriptionResponse> {
       const { data } = await client.get<JobDescriptionResponse>(`/jobs/${jobId}/job-description`);
@@ -44,14 +66,14 @@ export const jobsApi = {
     },
     async upsert(
       jobId: string,
-      body: { title?: string; jd_text: string; is_active?: boolean },
+      body: { title?: string; jd_text: string; hidden_text?: string; is_active?: boolean },
     ): Promise<JobDescriptionResponse> {
       const { data } = await client.post<JobDescriptionResponse>(`/jobs/${jobId}/job-description`, body);
       return data;
     },
     async patch(
       jobId: string,
-      body: { title?: string; jd_text?: string; is_active?: boolean },
+      body: { title?: string; jd_text?: string; hidden_text?: string; is_active?: boolean },
     ): Promise<JobDescriptionResponse> {
       const { data } = await client.patch<JobDescriptionResponse>(`/jobs/${jobId}/job-description`, body);
       return data;

@@ -1,4 +1,10 @@
 import { client } from "../client";
+import {
+  clearAuthenticatedSession,
+  getAccessToken,
+  isAuthenticatedSession,
+  storeAccessToken,
+} from "@/lib/session";
 
 export interface UserProfile {
   id: string;
@@ -27,8 +33,6 @@ export interface TokenResponse {
   token_type: string;
 }
 
-const TOKEN_KEY = "recruitai.token";
-
 export const authApi = {
   async login(body: LoginRequest): Promise<TokenResponse> {
     const { data } = await client.post<TokenResponse>("/auth/login", body);
@@ -41,19 +45,19 @@ export const authApi = {
   },
 
   storeToken(token: string): void {
-    localStorage.setItem(TOKEN_KEY, token);
+    storeAccessToken(token);
   },
 
   getToken(): string | null {
-    return localStorage.getItem(TOKEN_KEY);
+    return getAccessToken();
   },
 
   clearToken(): void {
-    localStorage.removeItem(TOKEN_KEY);
+    clearAuthenticatedSession();
   },
 
   isAuthenticated(): boolean {
-    return localStorage.getItem(TOKEN_KEY) !== null;
+    return isAuthenticatedSession();
   },
 
   async me(): Promise<UserProfile> {

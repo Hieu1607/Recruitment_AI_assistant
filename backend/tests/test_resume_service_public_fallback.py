@@ -64,6 +64,21 @@ def test_build_profile_prefers_usable_parsed_name_and_email():
             "name": " Parsed Candidate ",
             "email": " parsed@example.com ",
             "phone": " 123 ",
+            "structured_profile": {
+                "summary": {
+                    "text": "Profile overview",
+                    "links": ["https://example.com/portfolio"],
+                },
+                "projects": {
+                    "entries": [
+                        {
+                            "title": "Project A",
+                            "links": [{"url": "https://github.com/example/project-a"}],
+                            "bullets": ["Built feature A"],
+                        }
+                    ]
+                },
+            },
         },
         submitted_full_name="Submitted Candidate",
         submitted_email="submitted@example.com",
@@ -74,6 +89,8 @@ def test_build_profile_prefers_usable_parsed_name_and_email():
     assert profile.phone == "123"
     assert profile.submitted_full_name == "Submitted Candidate"
     assert profile.submitted_email == "submitted@example.com"
+    assert profile.structured_profile["summary"]["links"][0]["url"] == "https://example.com/portfolio"
+    assert profile.structured_profile["projects"]["entries"][0]["title"] == "Project A"
 
 
 def test_build_profile_falls_back_to_submitted_name_and_email_when_parse_is_sparse():

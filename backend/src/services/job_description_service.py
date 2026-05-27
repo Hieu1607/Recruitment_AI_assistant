@@ -22,6 +22,7 @@ def _jd_to_dict(jd: JobDescription) -> Dict[str, Any]:
         "job_id": str(jd.job_id),
         "title": jd.title,
         "jd_text": jd.jd_text,
+        "hidden_text": getattr(jd, "hidden_text", "") or "",
         "created_by_user_id": str(jd.created_by_user_id),
         "created_at": jd.created_at.isoformat(),
         "is_active": jd.is_active,
@@ -39,12 +40,14 @@ def create_job_description(
     jd_text: str,
     created_by_user_id: uuid.UUID,
     title: Optional[str] = None,
+    hidden_text: str = "",
 ) -> Dict[str, Any]:
     """Persist a new JobDescription and return its dict representation."""
     jd = JobDescription(
         job_id=job_id,
         title=title,
         jd_text=jd_text.strip() if jd_text else "",
+        hidden_text=hidden_text.strip() if hidden_text else "",
         created_by_user_id=created_by_user_id,
         is_active=True,
     )
@@ -108,6 +111,7 @@ def update_job_description(
     jd_id: uuid.UUID,
     title: Optional[str] = None,
     jd_text: Optional[str] = None,
+    hidden_text: Optional[str] = None,
     is_active: Optional[bool] = None,
 ) -> Optional[Dict[str, Any]]:
     """Partially update a JobDescription.
@@ -129,6 +133,9 @@ def update_job_description(
         if not jd_text.strip():
             raise ValueError("jd_text must not be empty")
         jd.jd_text = jd_text.strip()
+
+    if hidden_text is not None:
+        jd.hidden_text = hidden_text.strip()
 
     if is_active is not None:
         jd.is_active = is_active

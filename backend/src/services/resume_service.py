@@ -22,6 +22,18 @@ _HF_OCR_MAX_ATTEMPTS = 3
 _HF_OCR_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 _VISION_FALLBACK_MAX_PAGES = 3
 _RESUME_PARSE_MAX_TOKENS = 2500
+_STRUCTURED_SECTION_TEXT_FIELDS = {
+    "experience": "experience",
+    "education": "education",
+    "projects": "projects",
+    "skills": "skills",
+    "languages": "languages",
+    "achievements": "achievements",
+    "publications": "publications",
+    "certifications": "certifications",
+    "references": "references",
+    "other": "other",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +48,149 @@ def _normalize_text(value: Any) -> Optional[str]:
 
 def _resume_llm_provider() -> LLMProvider:
     return LLMProvider(max_tokens=max(settings.LLM_MAX_TOKENS, _RESUME_PARSE_MAX_TOKENS))
+
+
+def _normalize_string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    items: List[str] = []
+    for item in value:
+        normalized = _normalize_text(item)
+        if normalized:
+            items.append(normalized)
+    return items
+
+
+def _normalize_structured_link(value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(value, str):
+        normalized_url = _normalize_text(value)
+        if normalized_url:
+            return {"url": normalized_url, "label": None}
+        return None
+    if not isinstance(value, dict):
+        return None
+    normalized_url = _normalize_text(value.get("url"))
+    if not normalized_url:
+        return None
+    return {
+        "url": normalized_url,
+        "label": _normalize_text(value.get("label")),
+    }
+
+
+def _normalize_structured_links(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    links: List[Dict[str, Any]] = []
+    for item in value:
+        normalized = _normalize_structured_link(item)
+        if normalized is not None:
+            links.append(normalized)
+    return links
+
+
+def _normalize_structured_entry(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+
+    entry = {
+        "title": _normalize_text(value.get("title")),
+        "subtitle": _normalize_text(value.get("subtitle")),
+        "role": _normalize_text(value.get("role")),
+        "location": _normalize_text(value.get("location")),
+        "dateRange": _normalize_text(value.get("dateRange")),
+        "description": _normalize_text(value.get("description")),
+        "bullets": _normalize_string_list(value.get("bullets")),
+        "links": _normalize_structured_links(value.get("links")),
+        "metadata": _normalize_string_list(value.get("metadata")),
+    }
+
+    if any(
+        [
+            entry["title"],
+            entry["subtitle"],
+            entry["role"],
+            entry["location"],
+            entry["dateRange"],
+            entry["description"],
+            entry["bullets"],
+            entry["links"],
+            entry["metadata"],
+        ]
+    ):
+        return entry
+    return None
+
+
+def _normalize_structured_section(
+    value: Any,
+    *,
+    fallback_text: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    raw_text = _normalize_text(fallback_text)
+
+    if isinstance(value, dict):
+        if isinstance(value.get("entries"), list):
+            for item in value.get("entries", []):
+                normalized_item = _normalize_structured_entry(item)
+                if normalized_item is not None:
+                    entries.append(normalized_item)
+        raw_text = _normalize_text(value.get("rawText")) or raw_text
+
+    if not entries and raw_text is None:
+        return None
+
+    return {
+        "entries": entries,
+        "rawText": raw_text,
+    }
+
+
+def _normalize_structured_summary(
+    value: Any,
+    *,
+    fallback_text: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    text = _normalize_text(fallback_text)
+    links: List[Dict[str, Any]] = []
+
+    if isinstance(value, dict):
+        text = _normalize_text(value.get("text")) or text
+        links = _normalize_structured_links(value.get("links"))
+
+    if text is None and not links:
+        return None
+
+    return {
+        "text": text,
+        "links": links,
+    }
+
+
+def _normalize_structured_profile(
+    value: Any,
+    parsed: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    payload = value if isinstance(value, dict) else {}
+    structured: Dict[str, Any] = {}
+
+    summary = _normalize_structured_summary(
+        payload.get("summary"),
+        fallback_text=_normalize_text(parsed.get("summary")),
+    )
+    if summary is not None:
+        structured["summary"] = summary
+
+    for section_name, parsed_key in _STRUCTURED_SECTION_TEXT_FIELDS.items():
+        section = _normalize_structured_section(
+            payload.get(section_name),
+            fallback_text=_normalize_text(parsed.get(parsed_key)),
+        )
+        if section is not None:
+            structured[section_name] = section
+
+    return structured or None
 
 
 def extract_text_from_pdf(pdf_source: bytes | str) -> str:
@@ -306,6 +461,10 @@ def _build_profile_from_parsed(
 ) -> CandidateProfile:
     normalized_submitted_full_name = _normalize_text(submitted_full_name)
     normalized_submitted_email = _normalize_text(submitted_email)
+    structured_profile = _normalize_structured_profile(
+        parsed.get("structured_profile"),
+        parsed,
+    )
 
     return CandidateProfile(
         resume_document_id=resume_document_id,
@@ -335,6 +494,7 @@ def _build_profile_from_parsed(
         certifications_text=_normalize_text(parsed.get("certifications")),
         references_text=_normalize_text(parsed.get("references")),
         other_text=_normalize_text(parsed.get("other")),
+        structured_profile=structured_profile,
         profile_status=ProfileStatus.REVIEWED.value,
     )
 

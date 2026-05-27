@@ -172,9 +172,18 @@ export default function CandidatesListRoute() {
             offset: (page - 1) * pageSize,
           })
         : Promise.resolve({ items: [], total: 0 }),
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some(
+        (resume) =>
+          resume.upload_status === "uploaded" || resume.upload_status === "processing",
+      )
+        ? 3000
+        : false;
+    },
   });
 
-  const allItems: ResumeResponse[] = data?.items ?? [];
+  const allItems: ResumeResponse[] = useMemo(() => data?.items ?? [], [data?.items]);
   const serverTotal: number = data?.total ?? 0;
 
   const filteredItems = useMemo(() => {

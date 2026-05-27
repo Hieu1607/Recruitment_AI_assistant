@@ -6,6 +6,7 @@ from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from src.models.interview_invitation import InterviewInvitation
@@ -113,32 +114,8 @@ def ingest_public_interview_events(
         raise HTTPException(status_code=409, detail="Interview session has not been started")
 
     provider = _resolve_session_provider(body.provider, session_record)
-    next_turn_index = (
-        db.execute(
-            select(func.max(InterviewTranscriptTurn.turn_index)).where(
-                InterviewTranscriptTurn.interview_session_id == session_record.id
-            )
-        ).scalar_one()
-        or -1
-    ) + 1
-
     normalized_events = provider.normalize_events([event.model_dump() for event in body.events])
-    for normalized_event in normalized_events:
-        transcript_payload = dict(normalized_event.payload or {})
-        if normalized_event.question_key is not None:
-            transcript_payload["question_key"] = normalized_event.question_key
-        db.add(
-            InterviewTranscriptTurn(
-                interview_session_id=session_record.id,
-                speaker_role=normalized_event.speaker_role,
-                turn_index=next_turn_index + normalized_event.turn_index,
-                transcript_text=normalized_event.transcript_text,
-                time_offset_ms=normalized_event.time_offset_ms,
-                payload=transcript_payload or None,
-            )
-        )
-
-    db.commit()
+    _append_transcript_turns_with_retry(db, session_record.id, normalized_events)
     return PublicInterviewEventsResponse(accepted=True, stored_turns=len(normalized_events))
 
 
@@ -282,6 +259,65 @@ def _get_active_session(invitation: InterviewInvitation) -> InterviewSession | N
     if not active_sessions:
         return None
     return max(active_sessions, key=lambda session_record: session_record.created_at or datetime.min.replace(tzinfo=timezone.utc))
+
+
+def _append_transcript_turns_with_retry(
+    db: Session,
+    interview_session_id,
+    normalized_events,
+) -> None:
+    for attempt in range(2):
+        try:
+            _lock_interview_session_for_update(db, interview_session_id)
+            next_turn_index = _get_next_transcript_turn_index(db, interview_session_id)
+            for normalized_event in normalized_events:
+                transcript_payload = dict(normalized_event.payload or {})
+                if normalized_event.question_key is not None:
+                    transcript_payload["question_key"] = normalized_event.question_key
+                db.add(
+                    InterviewTranscriptTurn(
+                        interview_session_id=interview_session_id,
+                        speaker_role=normalized_event.speaker_role,
+                        turn_index=next_turn_index + normalized_event.turn_index,
+                        transcript_text=normalized_event.transcript_text,
+                        time_offset_ms=normalized_event.time_offset_ms,
+                        payload=transcript_payload or None,
+                    )
+                )
+            db.commit()
+            return
+        except IntegrityError as exc:
+            db.rollback()
+            if attempt == 1 or not _is_turn_index_conflict(exc):
+                raise
+            logger.warning(
+                "Retrying transcript ingest after turn_index conflict for interview session %s",
+                interview_session_id,
+            )
+
+
+def _lock_interview_session_for_update(db: Session, interview_session_id) -> None:
+    db.execute(
+        select(InterviewSession.id)
+        .where(InterviewSession.id == interview_session_id)
+        .with_for_update()
+    ).scalar_one()
+
+
+def _get_next_transcript_turn_index(db: Session, interview_session_id) -> int:
+    max_turn_index = db.execute(
+        select(func.max(InterviewTranscriptTurn.turn_index)).where(
+            InterviewTranscriptTurn.interview_session_id == interview_session_id
+        )
+    ).scalar_one()
+    return (max_turn_index if max_turn_index is not None else -1) + 1
+
+
+def _is_turn_index_conflict(exc: IntegrityError) -> bool:
+    message = str(exc.orig) if getattr(exc, "orig", None) is not None else str(exc)
+    return "uq_interview_transcript_turns_session_turn_index" in message or (
+        "interview_transcript_turns.interview_session_id" in message and "turn_index" in message
+    )
 
 
 def _utc_now() -> datetime:

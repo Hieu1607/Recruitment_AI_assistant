@@ -71,6 +71,47 @@ class DeleteResumeResponse(BaseModel):
     resume_id: str
 
 
+class StructuredLinkResponse(BaseModel):
+    url: str
+    label: Optional[str] = None
+
+
+class StructuredEntryResponse(BaseModel):
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    role: Optional[str] = None
+    location: Optional[str] = None
+    dateRange: Optional[str] = None
+    description: Optional[str] = None
+    bullets: List[str] = Field(default_factory=list)
+    links: List[StructuredLinkResponse] = Field(default_factory=list)
+    metadata: List[str] = Field(default_factory=list)
+
+
+class StructuredSectionResponse(BaseModel):
+    entries: List[StructuredEntryResponse] = Field(default_factory=list)
+    rawText: Optional[str] = None
+
+
+class StructuredSummaryResponse(BaseModel):
+    text: Optional[str] = None
+    links: List[StructuredLinkResponse] = Field(default_factory=list)
+
+
+class StructuredProfileResponse(BaseModel):
+    summary: Optional[StructuredSummaryResponse] = None
+    experience: Optional[StructuredSectionResponse] = None
+    education: Optional[StructuredSectionResponse] = None
+    projects: Optional[StructuredSectionResponse] = None
+    skills: Optional[StructuredSectionResponse] = None
+    languages: Optional[StructuredSectionResponse] = None
+    achievements: Optional[StructuredSectionResponse] = None
+    publications: Optional[StructuredSectionResponse] = None
+    certifications: Optional[StructuredSectionResponse] = None
+    references: Optional[StructuredSectionResponse] = None
+    other: Optional[StructuredSectionResponse] = None
+
+
 class CandidateProfileResponse(BaseModel):
     id: str
     resume_document_id: str
@@ -99,6 +140,7 @@ class CandidateProfileResponse(BaseModel):
     certifications_text: Optional[str]
     references_text: Optional[str]
     other_text: Optional[str]
+    structured_profile: Optional[StructuredProfileResponse] = None
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +198,7 @@ def get_candidate_profile_by_id(
         certifications_text=profile.certifications_text,
         references_text=profile.references_text,
         other_text=profile.other_text,
+        structured_profile=profile.structured_profile,
     )
 
 
@@ -214,6 +257,7 @@ def get_candidate_profile(
         certifications_text=profile.certifications_text,
         references_text=profile.references_text,
         other_text=profile.other_text,
+        structured_profile=profile.structured_profile,
     )
 
 

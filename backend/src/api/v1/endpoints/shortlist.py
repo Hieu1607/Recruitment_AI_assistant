@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from src.models.query_shortlist import (
     QuerySession,
     QueryTurn,
@@ -55,6 +56,11 @@ def _get_or_404(db, model, record_id: uuid.UUID, label: str):
     if obj is None:
         raise HTTPException(status_code=404, detail=f"{label} '{record_id}' not found")
     return obj
+
+
+def _is_unique_violation(exc: Exception, *markers: str) -> bool:
+    message = str(exc).lower()
+    return any(marker.lower() in message for marker in markers)
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +393,11 @@ def create_collection(body: CollectionCreateRequest):
         return _ser_collection(collection)
     except Exception as exc:
         db.rollback()
-        if "uq_shortlist_creator_name" in str(exc):
+        if isinstance(exc, IntegrityError) and _is_unique_violation(
+            exc,
+            "uq_shortlist_creator_name",
+            "unique constraint failed: shortlist_collections.created_by_user_id, shortlist_collections.name",
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=f"Collection named '{body.name}' already exists for this user",
@@ -457,7 +467,11 @@ def update_collection(collection_id: uuid.UUID, body: CollectionUpdateRequest):
         return _ser_collection(collection)
     except Exception as exc:
         db.rollback()
-        if "uq_shortlist_creator_name" in str(exc):
+        if isinstance(exc, IntegrityError) and _is_unique_violation(
+            exc,
+            "uq_shortlist_creator_name",
+            "unique constraint failed: shortlist_collections.created_by_user_id, shortlist_collections.name",
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=f"Collection named '{body.name}' already exists for this user",
@@ -503,7 +517,11 @@ def add_item(collection_id: uuid.UUID, body: ItemAddRequest):
         return _ser_item(item)
     except Exception as exc:
         db.rollback()
-        if "uq_shortlist_item_unique" in str(exc):
+        if isinstance(exc, IntegrityError) and _is_unique_violation(
+            exc,
+            "uq_shortlist_item_unique",
+            "unique constraint failed: shortlist_items.shortlist_collection_id, shortlist_items.candidate_profile_id",
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=f"Candidate '{body.candidate_profile_id}' is already in this collection",
