@@ -35,6 +35,10 @@ The backend allows cross-origin requests only from origins listed in the `BACKEN
 
 JWT infrastructure exists on the backend (`SECRET_KEY`, `HS256`, 30-minute expiry) but **no endpoints currently enforce authentication**. You can call all endpoints without an `Authorization` header. This will likely change before production -- plan for a `Bearer <token>` header on protected routes.
 
+## Candidate Email Sending
+
+Candidate email uses Google OAuth and Gmail API. Recruiters sign in with Google and grant `gmail.send`. The backend stores encrypted OAuth tokens in `oauth_identities`, sends mail from Celery tasks, and updates `interview_invitations.sent_at` or `outreach_messages.sent_status` only after Gmail API accepts the message.
+
 ## Pagination
 
 All list endpoints accept these query parameters:
