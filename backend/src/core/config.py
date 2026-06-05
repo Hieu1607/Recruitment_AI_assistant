@@ -153,6 +153,20 @@ class Settings(BaseSettings):
         "GOOGLE_REDIRECT_URI",
         "http://localhost:8000/api/v1/auth/google/callback",
     )
+    GOOGLE_OAUTH_SCOPES: str = os.getenv(
+        "GOOGLE_OAUTH_SCOPES",
+        "openid email profile https://www.googleapis.com/auth/gmail.send",
+    )
+    GOOGLE_OAUTH_ACCESS_TYPE: str = os.getenv("GOOGLE_OAUTH_ACCESS_TYPE", "offline")
+    GOOGLE_OAUTH_PROMPT: str = os.getenv("GOOGLE_OAUTH_PROMPT", "consent")
+    GOOGLE_TOKEN_ENCRYPTION_KEY: str = os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY", "")
+    GMAIL_SEND_ENABLED: bool = os.getenv("GMAIL_SEND_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    GMAIL_SEND_TIMEOUT_SECONDS: int = int(os.getenv("GMAIL_SEND_TIMEOUT_SECONDS", "20"))
     FRONTEND_BASE_URL: str = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
     OAUTH_STATE_TTL_SECONDS: int = 600  # 10 minutes
 

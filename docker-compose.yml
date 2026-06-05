@@ -63,6 +63,12 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      - GOOGLE_OAUTH_SCOPES=${GOOGLE_OAUTH_SCOPES:-openid email profile https://www.googleapis.com/auth/gmail.send}
+      - GOOGLE_OAUTH_ACCESS_TYPE=${GOOGLE_OAUTH_ACCESS_TYPE:-offline}
+      - GOOGLE_OAUTH_PROMPT=${GOOGLE_OAUTH_PROMPT:-consent}
+      - GOOGLE_TOKEN_ENCRYPTION_KEY=${GOOGLE_TOKEN_ENCRYPTION_KEY:-}
+      - GMAIL_SEND_ENABLED=${GMAIL_SEND_ENABLED:-false}
+      - GMAIL_SEND_TIMEOUT_SECONDS=${GMAIL_SEND_TIMEOUT_SECONDS:-20}
       - LANGGRAPH_TRACE_LOG_DIR=/logs
       - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
       - WATCHFILES_FORCE_POLLING=true
@@ -109,6 +115,12 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      - GOOGLE_OAUTH_SCOPES=${GOOGLE_OAUTH_SCOPES:-openid email profile https://www.googleapis.com/auth/gmail.send}
+      - GOOGLE_OAUTH_ACCESS_TYPE=${GOOGLE_OAUTH_ACCESS_TYPE:-offline}
+      - GOOGLE_OAUTH_PROMPT=${GOOGLE_OAUTH_PROMPT:-consent}
+      - GOOGLE_TOKEN_ENCRYPTION_KEY=${GOOGLE_TOKEN_ENCRYPTION_KEY:-}
+      - GMAIL_SEND_ENABLED=${GMAIL_SEND_ENABLED:-false}
+      - GMAIL_SEND_TIMEOUT_SECONDS=${GMAIL_SEND_TIMEOUT_SECONDS:-20}
       - LANGGRAPH_TRACE_LOG_DIR=/logs
     depends_on:
       db:
