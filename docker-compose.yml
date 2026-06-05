@@ -56,12 +56,14 @@ services:
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1024}
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+      - APP_UI_LANGUAGE=${APP_UI_LANGUAGE:-en}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-llama-3.1-8b-instant}
       - GROQ_VISION_MODEL_NAME=${GROQ_VISION_MODEL_NAME:-meta-llama/llama-4-scout-17b-16e-instruct}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      - LANGGRAPH_TRACE_LOG_DIR=/logs
       - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
       - WATCHFILES_FORCE_POLLING=true
     depends_on:
@@ -76,6 +78,7 @@ services:
              uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src --reload-dir /app/migrations"
     volumes:
       - ./backend:/app
+      - ./logs:/logs
 
   worker:
     build:
@@ -99,12 +102,14 @@ services:
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1024}
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+      - APP_UI_LANGUAGE=${APP_UI_LANGUAGE:-en}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-llama-3.1-8b-instant}
       - GROQ_VISION_MODEL_NAME=${GROQ_VISION_MODEL_NAME:-meta-llama/llama-4-scout-17b-16e-instruct}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      - LANGGRAPH_TRACE_LOG_DIR=/logs
     depends_on:
       db:
         condition: service_healthy
@@ -116,6 +121,7 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app
+      - ./logs:/logs
 
   frontend:
     build:
@@ -128,6 +134,8 @@ services:
              npm run dev"
     ports:
       - "5173:5173"
+    environment:
+      - VITE_UI_LANGUAGE=${VITE_UI_LANGUAGE:-en}
     volumes:
       - ./frontend:/app
       - /app/node_modules

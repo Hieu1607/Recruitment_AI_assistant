@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -9,13 +10,68 @@ from urllib.request import Request, urlopen
 
 from src.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+PROVIDER_LIMIT_ERROR_MARKERS = (
+    "429",
+    "quota",
+    "rate limit",
+    "rate_limit_exceeded",
+    "tokens per day",
+    "requests per day",
+    "too many requests",
+)
+
 
 class LLMProviderError(Exception):
     pass
 
 
+class LLMProviderLimitError(LLMProviderError):
+    """Raised when an upstream LLM provider is blocked by quota or rate limiting."""
+
+
 class LLMConfigurationError(LLMProviderError):
     pass
+
+
+def _flatten_exception_messages(exc: BaseException) -> str:
+    parts: List[str] = []
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        if message:
+            parts.append(message.lower())
+        current = current.__cause__ or current.__context__
+    return " | ".join(parts)
+
+
+def is_provider_limit_error(exc: BaseException) -> bool:
+    if isinstance(exc, LLMProviderLimitError):
+        return True
+    flattened = _flatten_exception_messages(exc)
+    return any(marker in flattened for marker in PROVIDER_LIMIT_ERROR_MARKERS)
+
+
+def _raise_provider_limit_error(
+    *,
+    provider: str,
+    model: str,
+    operation: str,
+    exc: BaseException,
+) -> None:
+    logger.error(
+        "LLM provider quota or rate limit reached. provider=%s model=%s operation=%s error=%s",
+        provider,
+        model,
+        operation,
+        exc,
+    )
+    raise LLMProviderLimitError(
+        f"{provider} {operation} hit quota or rate limit for model {model}: {exc}"
+    ) from exc
 
 
 class ProviderType(str, Enum):
@@ -105,6 +161,13 @@ class _GroqAdapter(_BaseAdapter):
                 )
             except Exception as exc:
                 last_error = exc
+                if is_provider_limit_error(exc):
+                    _raise_provider_limit_error(
+                        provider=ProviderType.GROQ.value,
+                        model=self.model,
+                        operation="chat request",
+                        exc=exc,
+                    )
                 if attempt < self.max_retries:
                     time.sleep(min(2 ** attempt, 3))
                     continue
@@ -136,6 +199,13 @@ class _GroqAdapter(_BaseAdapter):
                 return LLMResponse(text=text, provider=ProviderType.GROQ.value, model=vision_model)
             except Exception as exc:
                 last_error = exc
+                if is_provider_limit_error(exc):
+                    _raise_provider_limit_error(
+                        provider=ProviderType.GROQ.value,
+                        model=vision_model,
+                        operation="vision request",
+                        exc=exc,
+                    )
                 if attempt < self.max_retries:
                     time.sleep(min(2 ** attempt, 3))
                     continue
@@ -204,12 +274,26 @@ class _OllamaAdapter(_BaseAdapter):
                 )
             except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = exc
+                if is_provider_limit_error(exc):
+                    _raise_provider_limit_error(
+                        provider=ProviderType.OLLAMA.value,
+                        model=self.model,
+                        operation="chat request",
+                        exc=exc,
+                    )
                 if attempt < self.max_retries:
                     time.sleep(min(2 ** attempt, 3))
                     continue
                 break
             except Exception as exc:
                 last_error = exc
+                if is_provider_limit_error(exc):
+                    _raise_provider_limit_error(
+                        provider=ProviderType.OLLAMA.value,
+                        model=self.model,
+                        operation="chat request",
+                        exc=exc,
+                    )
                 break
         raise LLMProviderError(f"Ollama request failed: {last_error}") from last_error
 
@@ -223,6 +307,7 @@ class LLMProvider:
     def __init__(
         self,
         provider: Optional[str] = None,
+        model_name: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
@@ -239,20 +324,29 @@ class LLMProvider:
             else timeout_seconds
         )
         max_retries = settings.LLM_MAX_RETRIES if max_retries is None else max_retries
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.model_name = model_name
 
         if self.provider == ProviderType.GROQ:
+            selected_model = model_name or settings.GROQ_MODEL_NAME
+            self.model_name = selected_model
             self._adapter = _GroqAdapter(
                 api_key=settings.GROQ_API_KEY,
-                model=settings.GROQ_MODEL_NAME,
+                model=selected_model,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,
                 max_retries=max_retries,
             )
         else:
+            selected_model = model_name or settings.OLLAMA_MODEL_NAME
+            self.model_name = selected_model
             self._adapter = _OllamaAdapter(
                 base_url=settings.OLLAMA_BASE_URL,
-                model=settings.OLLAMA_MODEL_NAME,
+                model=selected_model,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,
@@ -295,3 +389,18 @@ class LLMProvider:
             messages.append({"role": "system", "content": system_prompt.strip()})
         messages.append({"role": "user", "content": prompt.strip()})
         return await self.achat(messages)
+
+    def clone_with_model(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> "LLMProvider":
+        return LLMProvider(
+            provider=provider or self.provider.value,
+            model_name=model_name or self.model_name,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            timeout_seconds=self.timeout_seconds,
+            max_retries=self.max_retries,
+        )

@@ -18,7 +18,12 @@ from src.schemas.interview_report import (
     InterviewReportSummary,
     InterviewReportTaskState,
 )
+from src.core.config import settings
 from src.services.llm_service import LLMProvider
+
+
+def _ui_language() -> str:
+    return "en" if str(settings.APP_UI_LANGUAGE or "").strip().lower().startswith("en") else "vi"
 
 
 REPORT_SYSTEM_PROMPT = """
@@ -196,6 +201,7 @@ def _build_report_prompt(
 
     rubric = template.report_rubric if template is not None else {}
     question_payload = template.question_payload if template is not None else {}
+    language_name = "English" if _ui_language() == "en" else "Vietnamese"
     return (
         "Summarize this completed interview as structured JSON.\n"
         "Required JSON shape:\n"
@@ -226,6 +232,7 @@ def _build_report_prompt(
         "- Every competency must include at least one evidence item copied from the transcript metadata above.\n"
         "- Do not provide hiring recommendations or accept/reject language.\n"
         "- Use only details supported by the transcript.\n"
+        f"- Write every summary field in {language_name}.\n"
         f"Candidate: {candidate_name}\n"
         f"Template rubric: {json.dumps(rubric, ensure_ascii=True)}\n"
         f"Template questions: {json.dumps(question_payload, ensure_ascii=True)}\n"
@@ -249,36 +256,42 @@ def _parse_json_response(raw_text: str) -> dict:
 
 
 def _render_markdown_summary(report_summary: InterviewReportSummary) -> str:
+    vi = _ui_language() == "vi"
     lines = [
-        "# Interview Report",
+        "# Báo cáo phỏng vấn" if vi else "# Interview Report",
         "",
-        "## Candidate Overview",
+        "## Tổng quan ứng viên" if vi else "## Candidate Overview",
         report_summary.candidate_overview,
         "",
-        "## Competencies",
+        "## Năng lực" if vi else "## Competencies",
     ]
     for competency in report_summary.competencies:
-        lines.extend([f"### {competency.name}", competency.summary, "Evidence:"])
+        lines.extend([f"### {competency.name}", competency.summary, "Bằng chứng:" if vi else "Evidence:"])
         for evidence_item in competency.evidence:
-            context_parts = [f"turn {evidence_item.turn_index}", evidence_item.speaker_role]
+            context_parts = [
+                f"lượt {evidence_item.turn_index}" if vi else f"turn {evidence_item.turn_index}",
+                evidence_item.speaker_role,
+            ]
             if evidence_item.question_key:
-                context_parts.append(f"question {evidence_item.question_key}")
+                context_parts.append(
+                    f"câu hỏi {evidence_item.question_key}" if vi else f"question {evidence_item.question_key}"
+                )
             lines.append(f"- ({', '.join(context_parts)}) {evidence_item.transcript_text}")
         lines.append("")
 
     lines.extend(
         [
-            "## Communication Summary",
+            "## Đánh giá giao tiếp" if vi else "## Communication Summary",
             report_summary.communication_summary,
             "",
-            "## Follow-Up Topics",
+            "## Các chủ đề cần theo dõi" if vi else "## Follow-Up Topics",
         ]
     )
     if report_summary.follow_up_topics:
         lines.extend(f"- {topic}" for topic in report_summary.follow_up_topics)
     else:
-        lines.append("- None noted")
-    lines.extend(["", "## Overall Summary", report_summary.overall_summary])
+        lines.append("- Không có" if vi else "- None noted")
+    lines.extend(["", "## Tổng kết chung" if vi else "## Overall Summary", report_summary.overall_summary])
     return "\n".join(lines).strip()
 
 

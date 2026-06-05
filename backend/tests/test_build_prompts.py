@@ -99,3 +99,87 @@ def test_locked_rubric_semantic_prompt_includes_rubric_and_evidence_requirements
     assert '"criteria"' in prompt
     assert '"projects": "Led backend rewrite"' in prompt
     assert "evidence" in prompt.lower()
+    assert "Scores must be numbers from 0 to 100" in prompt
+    assert "Do not return binary 0/1 scores or probabilities" in prompt
+
+
+def test_jd_rubric_prompt_restricts_measurable_fields_to_supported_candidateprofile_fields():
+    prompt = BuildPrompts().build_jd_rubric_extraction_prompt(
+        job_description_text="Need Python, Docker, and 5 years of experience.",
+        section_weights={"skills": 50, "experience": 50},
+    )
+
+    assert "experience_years" in prompt
+    assert "educated" in prompt
+    assert "ever_studied_abroad" in prompt
+    assert "Do not create custom measurable keys like python_skill, docker_skill, backend_experience, or cloud_platforms_skill." in prompt
+    assert "Skills and technologies such as Python, TensorFlow, Docker, AWS, or cloud platforms must stay semantic" in prompt
+
+
+def test_jd_rubric_prompt_does_not_seed_a_concrete_years_requirement_example():
+    prompt = BuildPrompts().build_jd_rubric_extraction_prompt(
+        job_description_text="Need Python, Docker, and AI model deployment.",
+        section_weights={"skills": 100},
+    )
+
+    assert "5+ years of backend experience" not in prompt
+    assert "Do not infer years of experience from seniority words such as Senior, Lead, or Principal." in prompt
+
+
+def test_router_prompt_guides_name_lookup_count_and_comparison_queries():
+    prompt = BuildPrompts().build_router_prompt("How many people named Hieu?")
+
+    assert "Questions that mention explicit candidate names should use DSL with full_name." in prompt
+    assert "If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible." in prompt
+
+
+def test_answer_prompt_uses_question_language_and_adds_follow_up_guidance():
+    prompt = BuildPrompts().build_answer_prompt(
+        "Ứng viên nào đã từng học Đại Học Bách Khoa Hà Nội?",
+        [{"id": "cand-1", "full_name": "Taylor"}],
+    )
+
+    assert "Write the answer in the SAME language as the question" in prompt
+    assert "If the data is empty or no candidates match, reply with a warm, helpful no-match message" in prompt
+    assert "End with 1 or 2 short follow-up suggestions" in prompt
+    assert "Bạn có muốn biết thêm về ứng viên" in prompt
+    assert "Bạn có muốn tìm ứng viên thỏa mãn" in prompt
+
+
+def test_router_prompt_requires_friendly_same_language_refusal():
+    prompt = BuildPrompts().build_router_prompt("What is the weather today?")
+
+    assert "If false: set refusal_message to a short, warm, friendly reply in the SAME language as the question" in prompt
+    assert "Offer 1 short follow-up suggestion that redirects the user back to recruitment help" in prompt
+
+
+def test_chat_prompts_include_current_job_context_when_available():
+    job_context = {
+        "job_title": "Senior AI Engineer",
+        "job_description_title": "AI Platform",
+        "job_description_text": "Build LLM features and evaluate candidate fit.",
+        "job_hidden_text": "Prefer hands-on production AI deployment experience.",
+    }
+
+    router_prompt = BuildPrompts().build_router_prompt(
+        "Compare two candidates for this job",
+        job_context=job_context,
+    )
+    llm_prompt = BuildPrompts().build_llm_query_prompt(
+        "Who is a better fit for this job?",
+        [{"id": "cand-1", "full_name": "Taylor"}],
+        job_context=job_context,
+    )
+    answer_prompt = BuildPrompts().build_answer_prompt(
+        "Who is a better fit for this job?",
+        [{"id": "cand-1", "full_name": "Taylor"}],
+        job_context=job_context,
+    )
+
+    for prompt in (router_prompt, llm_prompt, answer_prompt):
+        assert "Current job context" in prompt
+        assert "Senior AI Engineer" in prompt
+        assert "Build LLM features and evaluate candidate fit." in prompt
+        assert "Prefer hands-on production AI deployment experience." in prompt
+        assert "Public job description" in prompt
+        assert "Special recruiter-only requirements" in prompt

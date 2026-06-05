@@ -2,11 +2,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.v1.api import api_router
 from src.core.config import settings
+from src.core.exception_handlers import llm_provider_limit_exception_handler
+from src.services.llm_service import LLMProviderLimitError
 
 app = FastAPI(
     title="Recruitment AI Assistant API",
     version="1.0.0",
     openapi_version="3.0.3",
+)
+
+app.add_exception_handler(
+    LLMProviderLimitError,
+    llm_provider_limit_exception_handler,
 )
 
 # Set all CORS enabled origins

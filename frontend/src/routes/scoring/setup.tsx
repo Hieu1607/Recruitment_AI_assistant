@@ -8,7 +8,8 @@ import {
 } from "@/components/ui";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useScoringStore } from "@/lib/scoring-store";
+import { useQuery } from "@tanstack/react-query";
 import {
     BarChart2,
     Check,
@@ -81,10 +82,76 @@ function scoreColor(n: number) {
   return "var(--danger)";
 }
 
+function formatCriterionLabel(
+  criterionKey: string,
+  requirementText?: string | null,
+) {
+  if (requirementText && requirementText.trim()) return requirementText.trim();
+
+  return criterionKey
+    .replace(/[._]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+function formatRadarCriterionLabel(
+  criterionKey: string,
+  requirementText?: string | null,
+) {
+  const fullLabel = formatCriterionLabel(criterionKey, requirementText);
+  const normalized = fullLabel.toLowerCase();
+
+  const keywordLabels: Array<[RegExp, string]> = [
+    [/\b(bachelor|master|degree|phd|final-year student)\b/, "Degree"],
+    [/\b(machine learning|deep learning|ml|dl)\b/, "ML / DL"],
+    [/\bpython\b/, "Python"],
+    [/\b(llms?|rag|embedding|semantic search)\b/, "LLMs / RAG"],
+    [/\b(pytorch|tensorflow|scikit-learn|frameworks?)\b/, "AI frameworks"],
+    [/\b(rest api|rest apis|backend)\b/, "REST / backend"],
+    [/\bgit\b/, "Git"],
+    [/\b(problem-solving|analytical thinking|analytical)\b/, "Problem-solving"],
+    [/\b(chatbots?|assistants?)\b/, "AI chatbots"],
+    [/\b(vector databases?|weaviate|pinecone|chromadb|faiss)\b/, "Vector DBs"],
+    [/\b(fastapi|docker|microservice)\b/, "FastAPI / Docker"],
+    [/\b(mlops|monitoring|observability)\b/, "MLOps"],
+    [/\b(aws|gcp|azure|cloud)\b/, "Cloud platforms"],
+    [/\b(research papers?|technical documentation)\b/, "Research implementation"],
+  ];
+
+  const keywordMatch = keywordLabels.find(([pattern]) => pattern.test(normalized));
+  if (keywordMatch) return keywordMatch[1];
+
+  const compact = fullLabel
+    .replace(/^[A-Za-z'()-]+\s+degree.*?\bin\b\s*/i, "")
+    .replace(/^(good knowledge of|strong|familiarity with|experience with|experience using|experience building|understanding of|knowledge of|ability to)\s+/i, "")
+    .replace(/\s+such as.*$/i, "")
+    .replace(/[.,;:()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const words = compact.split(" ").filter(Boolean).slice(0, 3);
+  return words.join(" ");
+}
+
+function candidateDisplayLabel(score: ScoreResponse["scores"][number]) {
+  const candidateName = score.candidateName?.trim();
+  if (candidateName) return candidateName;
+
+  const resumeFileName = score.resumeFileName?.trim();
+  if (resumeFileName) return fileToName(resumeFileName);
+
+  return score.candidateDisplayName?.trim() || truncateId(score.candidateId);
+}
+
 // ── main component ───────────────────────────────────────────────────────────
 
 export default function ScoringSetupRoute() {
   const selectedJobId = useSelectedJobId();
+  const scoringRun = useScoringStore((state) =>
+    selectedJobId ? state.runs[selectedJobId] ?? null : null
+  );
+  const startRun = useScoringStore((state) => state.startRun);
+  const clearRunError = useScoringStore((state) => state.clearError);
 
   // ── step state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>(1);
@@ -106,7 +173,6 @@ export default function ScoringSetupRoute() {
   const [elapsed, setElapsed] = useState(0);
 
   // ── step-3 state ──────────────────────────────────────────────────────────
-  const [scoreResult, setScoreResult] = useState<ScoreResponse | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
   const [resultSort, setResultSort] = useState<{
@@ -130,12 +196,12 @@ export default function ScoringSetupRoute() {
   });
 
   const { data: resumeData, isLoading: resumesLoading } = useQuery({
-    queryKey: ["resumes", 200],
+    queryKey: ["resumes", selectedJobId, 200],
     queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 200 }) : Promise.resolve({ items: [], total: 0 })),
-    enabled: candidateMode === "specific",
+    enabled: candidateMode === "specific" && !!selectedJobId,
   });
 
-  const resumes = resumeData?.items ?? [];
+  const resumes = useMemo(() => resumeData?.items ?? [], [resumeData?.items]);
 
   useEffect(() => {
     if (!workspaceJd) {
@@ -145,13 +211,38 @@ export default function ScoringSetupRoute() {
     }
     setHiddenText(workspaceJd.hidden_text ?? "");
     setHiddenDirty(false);
-  }, [workspaceJd?.id]);
+  }, [workspaceJd]);
 
   useEffect(() => {
     if (workspaceJd && !hiddenDirty) {
       setHiddenText(workspaceJd.hidden_text ?? "");
     }
-  }, [workspaceJd?.hidden_text, hiddenDirty]);
+  }, [workspaceJd, hiddenDirty]);
+
+  useEffect(() => {
+    if (!selectedJobId) {
+      setStep(1);
+      return;
+    }
+
+    if (scoringRun?.status === "running") {
+      setStep(2);
+      return;
+    }
+
+    if (scoringRun?.latestResult) {
+      setStep(3);
+      return;
+    }
+
+    setStep(1);
+  }, [selectedJobId, scoringRun?.latestResult, scoringRun?.status]);
+
+  useEffect(() => {
+    if (!selectedJobId || !scoringRun?.lastError) return;
+    toast.error(scoringRun.lastError);
+    clearRunError(selectedJobId);
+  }, [clearRunError, scoringRun?.lastError, selectedJobId]);
 
   // ── processing timers ─────────────────────────────────────────────────────
 
@@ -171,34 +262,6 @@ export default function ScoringSetupRoute() {
   }, [step]);
 
   // ── mutation ──────────────────────────────────────────────────────────────
-
-  const scoreMutation = useMutation({
-    mutationFn: async () => {
-      await saveHiddenInformation();
-      const sw: Record<string, number> = {};
-      sections.forEach((s) => {
-        sw[s.key] = s.value;
-      });
-      return api.jobs.score(selectedJobId!, {
-        score_threshold: threshold,
-        batch_size: batchSize,
-        section_weights: sw,
-        candidate_profile_ids:
-          candidateMode === "specific" && selectedCandIds.size > 0
-            ? [...selectedCandIds]
-            : undefined,
-      });
-    },
-    onSuccess: (data) => {
-      setScoreResult(data);
-      setStep(3);
-      localStorage.setItem("recruiter_onboarding_scored", "true");
-    },
-    onError: () => {
-      toast.error("Scoring failed — please try again");
-      setStep(1);
-    },
-  });
 
   // ── weight helpers ────────────────────────────────────────────────────────
 
@@ -237,6 +300,7 @@ export default function ScoringSetupRoute() {
   // ── result helpers ────────────────────────────────────────────────────────
 
   const sortedScores = useMemo(() => {
+    const scoreResult = scoringRun?.latestResult;
     if (!scoreResult) return [];
     return [...scoreResult.scores].sort((a, b) => {
       const av =
@@ -245,7 +309,9 @@ export default function ScoringSetupRoute() {
         resultSort.key === "totalScore" ? b.totalScore : b.passedThreshold ? 1 : 0;
       return resultSort.dir === "desc" ? bv - av : av - bv;
     });
-  }, [scoreResult, resultSort]);
+  }, [resultSort, scoringRun?.latestResult]);
+
+  const scoreResult = scoringRun?.latestResult ?? null;
 
   const avgScore =
     scoreResult && scoreResult.scores.length > 0
@@ -271,7 +337,8 @@ export default function ScoringSetupRoute() {
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
       const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   }
@@ -279,7 +346,8 @@ export default function ScoringSetupRoute() {
   function toggleSel(id: string) {
     setSelIds((prev) => {
       const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   }
@@ -298,12 +366,31 @@ export default function ScoringSetupRoute() {
       return;
     }
     setStep(2);
-    scoreMutation.mutate();
+    void saveHiddenInformation()
+      .then(() => {
+        const sectionWeights: Record<string, number> = {};
+        sections.forEach((s) => {
+          sectionWeights[s.key] = s.value;
+        });
+
+        return startRun(selectedJobId, {
+          scoreThreshold: threshold,
+          batchSize,
+          sectionWeights,
+          candidateProfileIds:
+            candidateMode === "specific" && selectedCandIds.size > 0
+              ? [...selectedCandIds]
+              : undefined,
+          hiddenTextSnapshot: hiddenText,
+        });
+      })
+      .catch(() => {
+        setStep(scoreResult ? 3 : 1);
+      });
   }
 
   function resetToSetup() {
     setStep(1);
-    setScoreResult(null);
     setExpandedIds(new Set());
     setSelIds(new Set());
   }
@@ -473,7 +560,8 @@ export default function ScoringSetupRoute() {
                             onChange={() =>
                               setSelectedCandIds((prev) => {
                                 const n = new Set(prev);
-                                n.has(r.id) ? n.delete(r.id) : n.add(r.id);
+                                if (n.has(r.id)) n.delete(r.id);
+                                else n.add(r.id);
                                 return n;
                               })
                             }
@@ -678,7 +766,7 @@ export default function ScoringSetupRoute() {
               size="lg"
               className="w-full justify-center"
               icon={<BarChart2 size={16} strokeWidth={2} />}
-              loading={scoreMutation.isPending || savingHidden}
+              loading={scoringRun?.status === "running" || savingHidden}
               disabled={!selectedJobId || !workspaceJd}
               onClick={startScoring}
             >
@@ -720,8 +808,8 @@ export default function ScoringSetupRoute() {
           </p>
 
           <p className="text-xs text-fg-muted font-sans text-center max-w-xs">
-            Do not navigate away — the LLM is actively evaluating candidates.
-            This may take several minutes.
+            Scoring keeps running in the background, so you can switch tabs and
+            come back when the results are ready.
           </p>
 
           <Button variant="secondary" size="sm" disabled className="opacity-40 cursor-not-allowed">
@@ -789,6 +877,22 @@ export default function ScoringSetupRoute() {
               Score again
             </Button>
           </div>
+
+          {(scoringRun?.hiddenTextSnapshot || hiddenText.trim()) && (
+            <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+              <div className="flex items-center justify-between gap-4 mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted font-sans">
+                  Recruiter-only hidden information
+                </p>
+                <span className="text-[11px] text-fg-subtle font-sans">
+                  Snapshot used for this run
+                </span>
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg font-sans">
+                {scoringRun?.hiddenTextSnapshot || hiddenText.trim()}
+              </p>
+            </div>
+          )}
 
           {/* Results table */}
           <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] overflow-hidden">
@@ -878,9 +982,12 @@ export default function ScoringSetupRoute() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
-                          <Avatar name={score.candidateId} size="sm" />
-                          <span className="font-mono text-xs text-fg tabular-nums">
-                            {truncateId(score.candidateId)}
+                          <Avatar name={candidateDisplayLabel(score)} size="sm" />
+                          <span
+                            className="max-w-[220px] truncate text-sm font-medium text-fg"
+                            title={score.resumeFileName || score.candidateId}
+                          >
+                            {candidateDisplayLabel(score)}
                           </span>
                         </div>
                       </td>
@@ -940,7 +1047,7 @@ export default function ScoringSetupRoute() {
                     {expandedIds.has(score.candidateId) && (
                       <tr className="bg-bg-elevated">
                         <td colSpan={8} className="px-8 py-6">
-                          <div className="grid grid-cols-2 gap-8">
+                          <div className="grid gap-8 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
                             <div className="space-y-5">
                               <div>
                                 <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
@@ -974,8 +1081,20 @@ export default function ScoringSetupRoute() {
                                   <tbody>
                                     {score.componentScores.map((cs) => (
                                       <tr key={cs.criterionKey} className="hairline-b">
-                                        <td className="py-2 pr-3 text-fg font-medium capitalize">
-                                          {cs.criterionKey}
+                                        <td className="py-2 pr-3 text-fg">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-medium">
+                                              {formatCriterionLabel(cs.criterionKey, cs.requirementText)}
+                                            </span>
+                                            {cs.evaluationMode && (
+                                              <Badge
+                                                variant={cs.evaluationMode === "semantic" ? "neutral" : "success"}
+                                                size="sm"
+                                              >
+                                                {cs.evaluationMode === "semantic" ? "Semantic" : "Rule-based"}
+                                              </Badge>
+                                            )}
+                                          </div>
                                         </td>
                                         <td className="py-2 pr-3 text-right text-fg-muted tabular-nums">
                                           {cs.weight}
@@ -999,8 +1118,8 @@ export default function ScoringSetupRoute() {
                                           key={cs.criterionKey}
                                           className="text-[11px] text-fg-muted italic font-sans"
                                         >
-                                          <span className="not-italic font-medium text-fg-subtle capitalize">
-                                            {cs.criterionKey}:
+                                          <span className="not-italic font-medium text-fg-subtle">
+                                            {formatCriterionLabel(cs.criterionKey, cs.requirementText)}:
                                           </span>{" "}
                                           {cs.evidenceSummary}
                                         </p>
@@ -1009,17 +1128,21 @@ export default function ScoringSetupRoute() {
                                 )}
                               </div>
                             </div>
-                            <div>
+                            <div className="min-w-0">
                               <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
                                 Score Radar
                               </p>
+                              <p className="mb-4 max-w-[42rem] text-[11px] leading-relaxed text-fg-subtle font-sans">
+                                Radar labels are shortened for readability. The full requirement text stays in
+                                Component Scores.
+                              </p>
                               <ScoreRadar
                                 data={score.componentScores.map((cs) => ({
-                                  subject: cs.criterionKey,
+                                  subject: formatRadarCriterionLabel(cs.criterionKey, cs.requirementText),
                                   value: cs.score,
                                   fullMark: 100,
                                 }))}
-                                size={280}
+                                size={420}
                               />
                             </div>
                           </div>

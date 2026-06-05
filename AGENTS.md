@@ -15,3 +15,6 @@ This repo uses the default triage label vocabulary: `needs-triage`, `needs-info`
 ### Domain docs
 
 This repo is configured as single-context. See `docs/agents/domain.md`.
+
+### MCP
+Use `code-review-graph` mcp to explore codebase first before use grep, find .etc

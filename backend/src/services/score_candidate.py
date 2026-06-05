@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections import Counter
@@ -8,19 +9,92 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from src.models.candidate_profile import CandidateProfile
 from src.models.enums import MatchRunStatus
 from src.models.job_matching import JobDescription, MatchResult, MatchRun
 from src.models.resume_document import ResumeDocument
 from src.prompts.build_prompts import build_prompts
-from src.services.llm_service import LLMProvider
+from src.services.llm_service import (
+    LLMProvider,
+    LLMProviderError,
+    LLMProviderLimitError,
+    is_provider_limit_error as is_llm_provider_limit_error,
+)
+from src.services.scoring_errors import ScoringProviderLimitError
+from src.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_SCORING_SECTIONS = tuple(build_prompts.SUPPORTED_SCORING_SECTIONS)
 SUPPORTED_CRITERION_TYPES = {"must_have", "semantic", "upper_bound"}
+SCORING_LLM_MAX_TOKENS = 4096
+PROVIDER_LIMIT_ERROR_MARKERS = (
+    "429",
+    "quota",
+    "rate limit",
+    "rate_limit_exceeded",
+    "tokens per day",
+    "requests per day",
+    "too many requests",
+)
 NUMERIC_OPERATORS = {">=", ">", "<=", "<", "==", "="}
+BOOLEAN_OPERATORS = {"==", "="}
+SUPPORTED_MEASURABLE_FIELDS: Dict[str, Dict[str, Any]] = {
+    "experience_years": {
+        "value_type": "number",
+        "operators": NUMERIC_OPERATORS,
+    },
+    "educated": {
+        "value_type": "boolean",
+        "operators": BOOLEAN_OPERATORS,
+    },
+    "ever_studied_abroad": {
+        "value_type": "boolean",
+        "operators": BOOLEAN_OPERATORS,
+    },
+}
+
+
+def _ui_language() -> str:
+    return "en" if str(settings.APP_UI_LANGUAGE or "").strip().lower().startswith("en") else "vi"
+
+
+def _flatten_exception_messages(exc: Exception) -> str:
+    parts: List[str] = []
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        if message:
+            parts.append(message.lower())
+        current = current.__cause__ or current.__context__
+    return " | ".join(parts)
+
+
+def _is_provider_limit_error(exc: Exception) -> bool:
+    if isinstance(exc, ScoringProviderLimitError):
+        return True
+    if isinstance(exc, LLMProviderLimitError):
+        return True
+    if not isinstance(exc, LLMProviderError):
+        return False
+    if is_llm_provider_limit_error(exc):
+        return True
+    flattened = _flatten_exception_messages(exc)
+    return any(marker in flattened for marker in PROVIDER_LIMIT_ERROR_MARKERS)
+
+
+def _mark_match_run_failed(db: Session, match_run_id: uuid.UUID) -> None:
+    match_run_db = db.get(MatchRun, match_run_id)
+    if match_run_db is None:
+        return
+    match_run_db.run_status = MatchRunStatus.FAILED.value
+    match_run_db.completed_at = datetime.now(timezone.utc)
+    db.commit()
 
 
 def _clamp_score(value: Any) -> float:
@@ -31,34 +105,87 @@ def _clamp_score(value: Any) -> float:
     return round(max(0.0, min(100.0, numeric)), 2)
 
 
+def _normalize_llm_score(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    if 0.0 <= numeric <= 1.0:
+        numeric *= 100.0
+    return _clamp_score(numeric)
+
+
 def _parse_json_object(raw_text: str) -> Dict[str, Any]:
-    content = (raw_text or "").strip()
+    last_error: Optional[Exception] = None
+    for candidate in _json_parse_candidates(raw_text):
+        try:
+            parsed = json.loads(candidate)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM response is not a JSON object")
+            return parsed
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise ValueError(str(last_error) if last_error else "LLM did not return a valid JSON object")
+
+
+def _strip_markdown_fences(text: str) -> str:
+    content = (text or "").strip()
     if content.startswith("```"):
         lines = content.splitlines()
         if len(lines) >= 3 and lines[-1].strip() == "```":
             content = "\n".join(lines[1:-1]).strip()
             if content.lower().startswith("json"):
                 content = content[4:].strip()
+    return content
 
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        start, end = content.find("{"), content.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("LLM did not return a valid JSON object")
-        parsed = json.loads(content[start : end + 1])
 
-    if not isinstance(parsed, dict):
-        raise ValueError("LLM response is not a JSON object")
-    return parsed
+def _extract_json_slice(text: str) -> str:
+    start_obj = text.find("{")
+    end_obj = text.rfind("}")
+    if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
+        return text[start_obj : end_obj + 1]
+    return text
+
+
+def _repair_common_json_issues(text: str) -> str:
+    repaired = text.strip()
+    repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+    opens = repaired.count("{")
+    closes = repaired.count("}")
+    if opens > closes:
+        repaired += "}" * (opens - closes)
+    opens = repaired.count("[")
+    closes = repaired.count("]")
+    if opens > closes:
+        repaired += "]" * (opens - closes)
+    return repaired
+
+
+def _json_parse_candidates(raw_text: str) -> List[str]:
+    stripped = _strip_markdown_fences(raw_text)
+    sliced = _extract_json_slice(stripped)
+    repaired = _repair_common_json_issues(sliced)
+    candidates = []
+    for item in [stripped, sliced, repaired]:
+        if item and item not in candidates:
+            candidates.append(item)
+    return candidates
 
 
 def _profile_to_candidate_dict(profile: CandidateProfile) -> Dict[str, Any]:
     """Convert a CandidateProfile ORM row to the dict shape expected by the scoring pipeline."""
+    candidate_name = str(profile.full_name or "").strip()
+    resume_file_name = str(getattr(getattr(profile, "resume_document", None), "original_file_name", "") or "").strip()
+    display_name = candidate_name or resume_file_name
     return {
         "id": str(profile.id),
-        "full_name": profile.full_name,
+        "full_name": candidate_name,
+        "resume_file_name": resume_file_name,
+        "display_name": display_name,
         "current_job_title": profile.current_job_title,
+        "educated": bool(profile.educated),
+        "ever_studied_abroad": bool(profile.ever_studied_abroad),
         "experience_years": float(profile.experience_years) if profile.experience_years is not None else None,
         "education_text": profile.education_text,
         "experience_text": profile.experience_text,
@@ -71,6 +198,20 @@ def _profile_to_candidate_dict(profile: CandidateProfile) -> Dict[str, Any]:
         "publications_text": profile.publications_text,
         "other_text": profile.other_text,
     }
+
+
+def _attach_candidate_metadata(score_data: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(score_data)
+    candidate_name = str(candidate.get("full_name") or "").strip()
+    resume_file_name = str(candidate.get("resume_file_name") or "").strip()
+    normalized["candidateName"] = candidate_name
+    normalized["resumeFileName"] = resume_file_name
+    normalized["candidateDisplayName"] = str(candidate.get("display_name") or candidate_name or resume_file_name).strip()
+    return normalized
+
+
+def _scoring_llm_provider() -> LLMProvider:
+    return LLMProvider(max_tokens=max(settings.LLM_MAX_TOKENS, SCORING_LLM_MAX_TOKENS))
 
 
 def _parse_llm_scores(raw_text: str) -> List[Dict[str, Any]]:
@@ -139,6 +280,21 @@ def _normalize_measurable(measurable: Any) -> Optional[Dict[str, Any]]:
     value = measurable.get("value")
     if not field or not operator or value in (None, ""):
         return None
+    spec = SUPPORTED_MEASURABLE_FIELDS.get(field)
+    if spec is None or operator not in spec["operators"]:
+        return None
+    if spec["value_type"] == "number":
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+    elif spec["value_type"] == "boolean":
+        if isinstance(value, bool):
+            pass
+        elif isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            value = value.strip().lower() == "true"
+        else:
+            return None
     return {
         "field": field,
         "operator": operator,
@@ -146,9 +302,68 @@ def _normalize_measurable(measurable: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _format_threshold_number(value: Any) -> str:
+    numeric = float(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return str(numeric).rstrip("0").rstrip(".")
+
+
+def _source_has_explicit_year_threshold(source_text: str, value: Any) -> bool:
+    if not source_text:
+        return False
+    number = re.escape(_format_threshold_number(value))
+    decimal_suffix = r"(?:\.0)?"
+    numeric_pattern = rf"{number}{decimal_suffix}"
+    year_terms = r"(?:years?|yrs?|yoe|năm)"
+    patterns = [
+        rf"\b{numeric_pattern}\s*\+?\s*{year_terms}\b",
+        rf"\b{year_terms}\s*(?:of\s+)?(?:experience\s*)?[:>=+\-\s]{{0,12}}{numeric_pattern}\b",
+        rf"\b(?:at\s+least|minimum|min\.?|from|over|more\s+than|trên|hơn|tối\s+thiểu|ít\s+nhất)\s+{numeric_pattern}\s*{year_terms}\b",
+    ]
+    return any(re.search(pattern, source_text, re.IGNORECASE) for pattern in patterns)
+
+
+def _source_has_boolean_requirement(source_text: str, field: str, expected_value: bool) -> bool:
+    if not source_text:
+        return False
+    if field == "educated":
+        positive_pattern = (
+            r"\b(degree|bachelor|master|phd|doctorate|graduate|graduated|university|college|education|educated)\b"
+            r"|bằng cấp|tốt nghiệp|đại học|cao đẳng|cử nhân|thạc sĩ|tiến sĩ"
+        )
+        negative_pattern = r"\b(no degree|required no degree|degree not required|không cần bằng|không yêu cầu bằng)\b"
+    elif field == "ever_studied_abroad":
+        positive_pattern = r"\b(stud(?:y|ied) abroad|overseas education|international education)\b|du học|học ở nước ngoài"
+        negative_pattern = r"\b(no study abroad|studied abroad not required)\b|không yêu cầu du học"
+    else:
+        return False
+
+    pattern = positive_pattern if expected_value else negative_pattern
+    return re.search(pattern, source_text, re.IGNORECASE) is not None
+
+
+def _measurable_supported_by_source(measurable: Dict[str, Any], source_text: Optional[str]) -> bool:
+    if source_text is None:
+        return True
+
+    field = str(measurable.get("field") or "")
+    value = measurable.get("value")
+    if field == "experience_years":
+        return _source_has_explicit_year_threshold(source_text, value)
+    if field in {"educated", "ever_studied_abroad"} and isinstance(value, bool):
+        return _source_has_boolean_requirement(source_text, field, value)
+    return False
+
+
+def _looks_like_year_threshold(requirement_text: str) -> bool:
+    return re.search(r"\b\d+(?:\.\d+)?\s*\+?\s*(?:years?|yrs?|yoe|năm)\b", requirement_text, re.IGNORECASE) is not None
+
+
 def _normalize_rubric(
     rubric: Dict[str, Any],
     section_weights: Optional[Dict[str, float]] = None,
+    source_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     raw_criteria = rubric.get("criteria", [])
     normalized_criteria: List[Dict[str, Any]] = []
@@ -164,13 +379,20 @@ def _normalize_rubric(
         if criterion_type not in SUPPORTED_CRITERION_TYPES:
             criterion_type = "semantic"
         key = str(criterion.get("key") or f"{section}.{idx + 1}").strip() or f"{section}.{idx + 1}"
+        measurable = _normalize_measurable(criterion.get("measurable"))
+        if measurable is not None and not _measurable_supported_by_source(measurable, source_text):
+            continue
+        if measurable is None and source_text is not None and _looks_like_year_threshold(requirement_text):
+            continue
+        if criterion_type != "upper_bound" and measurable is None:
+            criterion_type = "semantic"
         normalized_criteria.append(
             {
                 "key": key,
                 "section": section,
                 "requirementText": requirement_text,
                 "type": criterion_type,
-                "measurable": _normalize_measurable(criterion.get("measurable")),
+                "measurable": measurable,
             }
         )
 
@@ -192,26 +414,6 @@ def _normalize_rubric(
 
 
 def _extract_candidate_field(candidate: Dict[str, Any], field: str) -> Any:
-    if field == "experience_years":
-        return candidate.get("experience_years")
-
-    if field.startswith("languages."):
-        languages_text = str(candidate.get("languages_text") or candidate.get("languages") or "")
-        exam = field.split(".", 1)[1].lower()
-        if exam == "ielts":
-            match = re.search(r"ielts[^0-9]{0,8}(\d(?:\.\d)?)", languages_text, re.IGNORECASE)
-            return float(match.group(1)) if match else None
-        if exam == "toeic":
-            match = re.search(r"toeic[^0-9]{0,8}(\d{3,4})", languages_text, re.IGNORECASE)
-            return float(match.group(1)) if match else None
-        if exam == "toefl":
-            match = re.search(r"toefl[^0-9]{0,8}(\d{2,3})", languages_text, re.IGNORECASE)
-            return float(match.group(1)) if match else None
-        return languages_text
-
-    if field in SUPPORTED_SCORING_SECTIONS:
-        return candidate.get(f"{field}_text") or candidate.get(field)
-
     return candidate.get(field)
 
 
@@ -252,7 +454,30 @@ def _score_measurable_criterion(
     actual_value = _extract_candidate_field(candidate, field)
     matched = _compare_measurable(actual_value, operator, expected_value)
     score = 100.0 if matched else 0.0
-    evidence = f"{field} {operator} {expected_value}; candidate value: {actual_value!s}"
+    if isinstance(expected_value, bool):
+        expected_label = "true" if expected_value else "false"
+        actual_label = "true" if actual_value else "false"
+        if _ui_language() == "vi":
+            if matched:
+                evidence = f"Đáp ứng điều kiện logic cho {field}: kỳ vọng {expected_label}, ứng viên là {actual_label}."
+            else:
+                evidence = f"Chưa đáp ứng điều kiện logic cho {field}: kỳ vọng {expected_label}, ứng viên là {actual_label}."
+        else:
+            if matched:
+                evidence = f"Matched boolean requirement for {field}: expected {expected_label}, candidate is {actual_label}."
+            else:
+                evidence = f"Did not match boolean requirement for {field}: expected {expected_label}, candidate is {actual_label}."
+    else:
+        if _ui_language() == "vi":
+            if matched:
+                evidence = f"Đáp ứng yêu cầu cho {field}: ứng viên có {actual_value} và điều kiện là {operator} {expected_value}."
+            else:
+                evidence = f"Chưa đáp ứng yêu cầu cho {field}: ứng viên có {actual_value} và điều kiện là {operator} {expected_value}."
+        else:
+            if matched:
+                evidence = f"Matched requirement for {field}: candidate has {actual_value} and requirement is {operator} {expected_value}."
+            else:
+                evidence = f"Did not match requirement for {field}: candidate has {actual_value} and requirement is {operator} {expected_value}."
     return score, evidence
 
 
@@ -275,7 +500,7 @@ def _parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
                 if not criterion_key:
                     continue
                 mapped_criteria[criterion_key] = {
-                    "score": _clamp_score(row.get("score", 0)),
+                    "score": _normalize_llm_score(row.get("score", 0)),
                     "evidenceSummary": str(row.get("evidenceSummary") or "").strip(),
                 }
         by_candidate[candidate_id] = {
@@ -283,6 +508,131 @@ def _parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
             "criteria": mapped_criteria,
         }
     return by_candidate
+
+
+def _safe_parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
+    try:
+        return _parse_semantic_scores(raw_text)
+    except Exception:
+        logger.warning("Semantic scoring response could not be parsed; continuing without semantic scores.")
+        return {}
+
+
+def _should_switch_from_llama(llm: LLMProvider) -> bool:
+    provider = str(getattr(llm, "provider", "")).lower()
+    model_name = str(getattr(llm, "model_name", "")).lower()
+    return "llama" in model_name and ("groq" in provider or provider.endswith(".groq"))
+
+
+def _generate_json_with_retries(
+    *,
+    llm: LLMProvider,
+    prompt: str,
+    parser,
+    operation_name: str,
+) -> Dict[str, Any]:
+    json_fix_suffix = (
+        "\n\nIMPORTANT: Return one valid JSON object only. "
+        "Do not include markdown fences, commentary, or trailing commas."
+    )
+    attempts: List[tuple[LLMProvider, str]] = [
+        (llm, prompt),
+        (llm, f"{prompt}{json_fix_suffix}"),
+    ]
+    if _should_switch_from_llama(llm):
+        attempts.append(
+            (
+                llm.clone_with_model(
+                    provider="groq",
+                    model_name=settings.GROQ_JSON_FALLBACK_MODEL,
+                ),
+                f"{prompt}{json_fix_suffix}",
+            )
+        )
+
+    last_error: Optional[Exception] = None
+    for idx, (attempt_llm, attempt_prompt) in enumerate(attempts, start=1):
+        response = attempt_llm.generate(attempt_prompt)
+        try:
+            return parser(response.text)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "%s JSON parse failed on attempt %s using model %s: %s",
+                operation_name,
+                idx,
+                getattr(attempt_llm, "model_name", "unknown"),
+                exc,
+            )
+            if idx == len(attempts):
+                break
+    raise ValueError(f"{operation_name} failed after retries: {last_error}") from last_error
+
+
+def _generate_semantic_scores_with_retries(
+    *,
+    llm: LLMProvider,
+    prompt: str,
+) -> Dict[str, Dict[str, Any]]:
+    try:
+        return _generate_json_with_retries(
+            llm=llm,
+            prompt=prompt,
+            parser=_parse_semantic_scores,
+            operation_name="semantic scoring",
+        )
+    except Exception as exc:
+        if _is_provider_limit_error(exc):
+            raise
+        logger.warning("Semantic scoring response could not be parsed after retries; continuing without semantic scores.")
+        return {}
+
+
+def _format_component_label(component: Dict[str, Any]) -> str:
+    return str(component.get("requirementText") or component.get("criterionKey") or "criterion").strip()
+
+
+def _format_rationale_item(component: Dict[str, Any]) -> str:
+    label = _format_component_label(component)
+    evidence = str(component.get("evidenceSummary") or "").strip().rstrip(".")
+    return f"{label} - {evidence}" if evidence else label
+
+
+def _build_rationale_summary(total_score: float, component_scores: List[Dict[str, Any]]) -> str:
+    vi = _ui_language() == "vi"
+    parts = [f"Điểm tổng {round(total_score, 2)}/100." if vi else f"Overall score {round(total_score, 2)}/100."]
+    scored_components = sorted(
+        component_scores,
+        key=lambda component: float(component.get("score") or 0),
+        reverse=True,
+    )
+    strong_matches = [
+        component
+        for component in scored_components
+        if float(component.get("score") or 0) >= 70 and str(component.get("evidenceSummary") or "").strip()
+    ]
+    gaps = [
+        component
+        for component in reversed(scored_components)
+        if float(component.get("score") or 0) < 40 and str(component.get("evidenceSummary") or "").strip()
+    ]
+    partial_matches = [
+        component
+        for component in scored_components
+        if 40 <= float(component.get("score") or 0) < 70 and str(component.get("evidenceSummary") or "").strip()
+    ]
+
+    if strong_matches:
+        prefix = "Điểm mạnh: " if vi else "Strong matches: "
+        parts.append(prefix + "; ".join(_format_rationale_item(component) for component in strong_matches[:2]) + ".")
+    if gaps:
+        prefix = "Khoảng trống: " if vi else "Gaps: "
+        parts.append(prefix + "; ".join(_format_rationale_item(component) for component in gaps[:2]) + ".")
+    elif partial_matches:
+        prefix = "Phù hợp một phần: " if vi else "Partial matches: "
+        parts.append(prefix + "; ".join(_format_rationale_item(component) for component in partial_matches[:2]) + ".")
+
+    return " ".join(parts)[:1000]
 
 
 def _build_candidate_score(
@@ -299,13 +649,18 @@ def _build_candidate_score(
         weight = float(criterion.get("weight", 0.0))
         if criterion.get("measurable"):
             score, evidence = _score_measurable_criterion(candidate, criterion)
+            evaluation_mode = "measurable"
         else:
             semantic_detail = semantic_criteria.get(criterion["key"], {})
-            score = _clamp_score(semantic_detail.get("score", 0))
+            score = _normalize_llm_score(semantic_detail.get("score", 0))
             evidence = str(semantic_detail.get("evidenceSummary") or "").strip()
+            evaluation_mode = "semantic"
         component_scores.append(
             {
                 "criterionKey": criterion["key"],
+                "criterionType": criterion["type"],
+                "evaluationMode": evaluation_mode,
+                "requirementText": criterion["requirementText"],
                 "weight": round(weight, 4),
                 "score": score,
                 "weightedScore": round(weight * score, 2),
@@ -314,16 +669,15 @@ def _build_candidate_score(
         )
 
     total_score = round(sum(component["weightedScore"] for component in component_scores), 2)
-    rationale = str(semantic_result.get("rationale") or "").strip()
-    if not rationale:
-        rationale = "; ".join(
-            component["evidenceSummary"]
-            for component in component_scores
-            if component["evidenceSummary"]
-        )[:1000]
+    rationale = _build_rationale_summary(total_score, component_scores)
 
     return {
         "candidateId": str(candidate.get("id") or candidate.get("candidateId") or ""),
+        "candidateName": str(candidate.get("full_name") or "").strip(),
+        "resumeFileName": str(candidate.get("resume_file_name") or "").strip(),
+        "candidateDisplayName": str(
+            candidate.get("display_name") or candidate.get("full_name") or candidate.get("resume_file_name") or ""
+        ).strip(),
         "totalScore": _clamp_score(total_score),
         "passedThreshold": _clamp_score(total_score) >= float(score_threshold),
         "rationale": rationale,
@@ -346,15 +700,20 @@ def _extract_locked_rubric(
     section_weights: Optional[Dict[str, float]],
 ) -> Optional[Dict[str, Any]]:
     try:
-        response = llm.generate(
-            build_prompts.build_jd_rubric_extraction_prompt(
+        rubric_payload = _generate_json_with_retries(
+            llm=llm,
+            prompt=build_prompts.build_jd_rubric_extraction_prompt(
                 job_description_text=job_description_text,
                 section_weights=section_weights,
-            )
+            ),
+            parser=_parse_rubric_response,
+            operation_name="rubric extraction",
         )
-        rubric = _normalize_rubric(_parse_rubric_response(response.text), section_weights)
+        rubric = _normalize_rubric(rubric_payload, section_weights, source_text=job_description_text)
         return rubric if rubric.get("criteria") else None
-    except Exception:
+    except Exception as exc:
+        if _is_provider_limit_error(exc):
+            raise
         return None
 
 
@@ -416,9 +775,12 @@ def score_candidates(
     if jd is None:
         raise ValueError(f"Job description {job_description_id} not found")
 
-    query = db.query(CandidateProfile).join(
-        ResumeDocument, ResumeDocument.id == CandidateProfile.resume_document_id
-    ).filter(ResumeDocument.job_id == jd.job_id)
+    query = (
+        db.query(CandidateProfile)
+        .options(joinedload(CandidateProfile.resume_document))
+        .join(ResumeDocument, ResumeDocument.id == CandidateProfile.resume_document_id)
+        .filter(ResumeDocument.job_id == jd.job_id)
+    )
     if candidate_profile_ids:
         query = query.filter(CandidateProfile.id.in_(candidate_profile_ids))
     profiles: List[CandidateProfile] = query.all()
@@ -442,43 +804,52 @@ def score_candidates(
     db.commit()
     db.refresh(match_run)
 
-    llm = LLMProvider()
-    rubric = _extract_locked_rubric(
-        llm=llm,
-        job_description_text=scoring_jd_text,
-        section_weights=section_weights,
-    )
-
     all_scores: List[Dict[str, Any]] = []
     batch_size = max(1, min(batch_size, 50))
     batches_run = 0
     passed_candidates_count = 0
 
     try:
+        llm = _scoring_llm_provider()
+        rubric = _extract_locked_rubric(
+            llm=llm,
+            job_description_text=scoring_jd_text,
+            section_weights=section_weights,
+        )
         global_idx = 0
         for i in range(0, len(candidate_dicts), batch_size):
             batch = candidate_dicts[i : i + batch_size]
 
             if rubric is None:
-                response = llm.generate(
-                    build_prompts.build_batch_scoring_prompt(
+                parsed_scores = _generate_json_with_retries(
+                    llm=llm,
+                    prompt=build_prompts.build_batch_scoring_prompt(
                         job_description_text=scoring_jd_text,
                         candidates=batch,
                         section_weights=section_weights,
-                    )
+                    ),
+                    parser=lambda text: {"scores": _parse_llm_scores(text)},
+                    operation_name="fallback batch scoring",
                 )
-                batch_scores = [_coerce_passed_threshold(score, score_threshold) for score in _parse_llm_scores(response.text)]
+                candidate_by_id = {str(candidate["id"]): candidate for candidate in batch}
+                batch_scores = [
+                    _attach_candidate_metadata(
+                        _coerce_passed_threshold(score, score_threshold),
+                        candidate_by_id.get(str(score.get("candidateId")), {}),
+                    )
+                    for score in parsed_scores["scores"]
+                ]
             else:
                 semantic_criteria = [criterion for criterion in rubric["criteria"] if criterion.get("measurable") is None]
                 semantic_by_candidate: Dict[str, Dict[str, Any]] = {}
                 if semantic_criteria:
-                    response = llm.generate(
-                        build_prompts.build_locked_rubric_semantic_scoring_prompt(
+                    semantic_by_candidate = _generate_semantic_scores_with_retries(
+                        llm=llm,
+                        prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
                             candidates=batch,
                             rubric={"criteria": semantic_criteria},
-                        )
+                        ),
                     )
-                    semantic_by_candidate = _parse_semantic_scores(response.text)
 
                 batch_scores = []
                 for candidate in batch:
@@ -512,11 +883,23 @@ def score_candidates(
 
     except Exception as exc:
         db.rollback()
-        match_run_db = db.get(MatchRun, match_run.id)
-        if match_run_db:
-            match_run_db.run_status = MatchRunStatus.FAILED.value
-            match_run_db.completed_at = datetime.now(timezone.utc)
-            db.commit()
+        _mark_match_run_failed(db, match_run.id)
+        if _is_provider_limit_error(exc):
+            logger.error(
+                "Candidate scoring failed because the configured LLM provider hit a quota or rate limit. "
+                "match_run_id=%s job_description_id=%s error=%s",
+                match_run.id,
+                job_description_id,
+                exc,
+            )
+            raise ScoringProviderLimitError(
+                "Scoring is temporarily unavailable because the configured LLM quota has been exhausted. Please retry later."
+            ) from exc
+        logger.exception(
+            "Candidate scoring failed. match_run_id=%s job_description_id=%s",
+            match_run.id,
+            job_description_id,
+        )
         raise ValueError(f"Matching failed: {exc}") from exc
 
     return {

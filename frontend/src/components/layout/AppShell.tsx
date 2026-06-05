@@ -1,6 +1,7 @@
 import { api, type JobResponse } from "@/api";
 import { JobWorkspaceGate } from "@/components/jobs/JobWorkspaceGate";
 import { useAuthStore } from "@/lib/auth";
+import { useResizableSidebar } from "@/lib/useResizableSidebar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Outlet } from "react-router";
@@ -46,13 +47,30 @@ export function AppShell() {
     (!selectedJobId && jobsQuery.isLoading) ||
     Boolean(jobsQuery.error) ||
     (jobsData !== undefined && !shouldAutoSelectSingleJob && (jobs.length === 0 || !hasValidSelection));
+  const navSidebar = useResizableSidebar({
+    storageKey: "recruitai.app-shell-sidebar",
+    defaultWidth: 240,
+    minWidth: 240,
+    maxWidth: 240,
+  });
 
   return (
     <>
       <div className="flex h-full">
-        <Sidebar />
+        <div
+          data-testid="app-sidebar"
+          className="relative shrink-0 overflow-hidden transition-[width] duration-[var(--duration-base)] ease-[var(--ease-out)]"
+          style={{ width: `${navSidebar.currentWidth}px` }}
+        >
+          <div className="h-full min-w-0 overflow-hidden">
+            <Sidebar onCollapse={navSidebar.collapse} />
+          </div>
+        </div>
         <div className="flex-1 flex flex-col min-w-0">
-          <TopBar />
+          <TopBar
+            navSidebarCollapsed={navSidebar.isCollapsed}
+            onExpandNavSidebar={navSidebar.expand}
+          />
           <div className="flex-1 overflow-y-auto">
             <div
               className="mx-auto w-full"

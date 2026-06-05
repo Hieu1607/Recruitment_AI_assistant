@@ -11,6 +11,7 @@ from src.models.job import Job
 from src.models.job_matching import JobDescription
 from src.models.user_account import UserAccount
 from src.services.score_candidate import score_candidates
+from src.services.scoring_errors import ScoringProviderLimitError
 
 router = APIRouter()
 
@@ -80,6 +81,9 @@ class ScoreRequest(BaseModel):
 
 class ComponentScore(BaseModel):
     criterionKey: str
+    criterionType: Optional[str] = None
+    evaluationMode: Optional[str] = None
+    requirementText: Optional[str] = None
     weight: float
     score: float
     weightedScore: float
@@ -153,7 +157,11 @@ def score_candidates_endpoint(
             section_weights=weights_dict,
             batch_size=body.batch_size,
         )
+    except ScoringProviderLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
     return result

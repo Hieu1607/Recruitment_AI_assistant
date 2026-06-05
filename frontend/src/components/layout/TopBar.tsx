@@ -2,7 +2,7 @@ import { api } from "@/api";
 import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Bell, Command, ChevronRight, BriefcaseBusiness, ChevronDown } from "lucide-react";
+import { Search, Bell, Command, ChevronRight, BriefcaseBusiness, ChevronDown, PanelLeftOpen } from "lucide-react";
 import { Link, useMatches, useLocation } from "react-router";
 import { UserMenu } from "./UserMenu";
 import { routes } from "@/routes";
@@ -35,7 +35,13 @@ function resolveBreadcrumb(pathname: string): string {
   return "";
 }
 
-export function TopBar() {
+export function TopBar({
+  navSidebarCollapsed,
+  onExpandNavSidebar,
+}: {
+  navSidebarCollapsed: boolean;
+  onExpandNavSidebar: () => void;
+}) {
   const { pathname } = useLocation();
   const selectedJobId = useAuthStore((s) => s.selectedJobId);
   const setSelectedJobId = useAuthStore((s) => s.setSelectedJobId);
@@ -56,6 +62,17 @@ export function TopBar() {
       className="hairline-b bg-bg flex items-center px-6 gap-6"
       style={{ height: "var(--topbar-height)" }}
     >
+      {navSidebarCollapsed && (
+        <button
+          type="button"
+          onClick={onExpandNavSidebar}
+          aria-label="Expand navigation sidebar"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-[color:var(--hairline)] hover:text-fg"
+        >
+          <PanelLeftOpen size={16} strokeWidth={1.75} />
+        </button>
+      )}
+
       {/* Wordmark — keeps brand visible above the content area even though
           the Sidebar already shows it (FOUND-09 / SC#2 require both). */}
       <Link

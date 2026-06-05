@@ -6,7 +6,9 @@ import { Toaster } from "sonner";
 import { router } from "./router";
 import { queryClient } from "./api";
 import { ThemeProvider } from "./components/ThemeProvider";
+import { UiLocalizer } from "./components/UiLocalizer";
 import "./styles/globals.css";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("Root element #root not found");
@@ -15,7 +17,10 @@ createRoot(rootEl).render(
   <StrictMode>
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <UiLocalizer />
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
         <Toaster position="top-right" duration={4000} closeButton richColors={false} />
       </QueryClientProvider>
     </ThemeProvider>

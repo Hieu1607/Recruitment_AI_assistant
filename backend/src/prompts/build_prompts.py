@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from src.core.config import settings
+
 
 class BuildPrompts:
     """Build prompt strings for CV parsing, scoring, and CV section retrieval."""
@@ -41,6 +43,37 @@ class BuildPrompts:
         head = cleaned[: int(limit * 0.7)]
         tail = cleaned[-int(limit * 0.3) :]
         return f"{head}\n\n...[TRUNCATED]...\n\n{tail}"
+
+    def _ui_language(self) -> str:
+        return "en" if str(settings.APP_UI_LANGUAGE or "").strip().lower().startswith("en") else "vi"
+
+    def _language_name(self) -> str:
+        return "English" if self._ui_language() == "en" else "Vietnamese"
+
+    def _format_job_context(self, job_context: Optional[Dict[str, Any]]) -> str:
+        if not job_context:
+            return ""
+
+        job_title = job_context.get("job_title")
+        jd_title = job_context.get("job_description_title")
+        public_jd = job_context.get("job_description_text")
+        hidden_requirements = job_context.get("job_hidden_text")
+
+        lines = ["Current job context:"]
+        if job_title:
+            lines.append(f"- Job title: {job_title}")
+        if jd_title:
+            lines.append(f"- Job description title: {jd_title}")
+        if public_jd:
+            lines.append("- Public job description:")
+            lines.append(str(public_jd))
+        if hidden_requirements:
+            lines.append("- Special recruiter-only requirements:")
+            lines.append(str(hidden_requirements))
+            lines.append(
+                "Treat these as confidential hiring preferences distinct from the public job description."
+            )
+        return "\n".join(lines) + "\n\n"
 
     def build_cv_parsing_prompt(self, cv_text: str) -> str:
         clipped = self._clip_text(cv_text)
@@ -257,6 +290,7 @@ Rules:
             "Use sectionWeights when calculating scores. "
             "Only score sections that are present in sectionWeights. "
             "Do not penalize candidates for sections not referenced by the job requirements. "
+            f"Write rationale and evidenceSummary in {self._language_name()}. "
             "Return valid JSON only with the shape shown in responseFormat.\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
         )
@@ -272,18 +306,32 @@ Rules:
             "jobDescription": self._clip_text(job_description_text, max_chars=12000),
             "sectionWeights": weights,
             "supportedSections": self.SUPPORTED_SCORING_SECTIONS,
+            "supportedMeasurableFields": {
+                "experience_years": {
+                    "type": "number",
+                    "allowedOperators": [">=", ">", "<=", "<", "==", "="],
+                },
+                "educated": {
+                    "type": "boolean",
+                    "allowedOperators": ["==", "="],
+                },
+                "ever_studied_abroad": {
+                    "type": "boolean",
+                    "allowedOperators": ["==", "="],
+                },
+            },
             "criterionTypes": ["must_have", "semantic", "upper_bound"],
             "responseFormat": {
                 "criteria": [
                     {
-                        "key": "experience_years",
-                        "section": "experience",
-                        "requirementText": "5+ years of backend experience",
-                        "type": "must_have",
+                        "key": "short_snake_case_key",
+                        "section": "one_supported_section",
+                        "requirementText": "exact explicit requirement copied or directly paraphrased from the job description",
+                        "type": "must_have|semantic|upper_bound",
                         "measurable": {
-                            "field": "experience_years",
-                            "operator": ">=",
-                            "value": 5,
+                            "field": "one_supported_measurable_field_or_omit",
+                            "operator": "allowed_operator_for_that_field",
+                            "value": "number_or_boolean_from_explicit_requirement",
                         },
                     }
                 ]
@@ -294,9 +342,17 @@ Rules:
             "Return JSON only, no markdown. "
             "Use only supportedSections. "
             "Drop empty or duplicate criteria. "
-            "Use measurable only when the requirement can be checked directly from structured candidate data. "
+            "Extract only requirements explicitly present in the public job description or recruiter-only hidden information. "
+            "Do not infer years of experience from seniority words such as Senior, Lead, or Principal. "
+            "Do not add generic education, degree, or years-of-experience criteria unless the source text explicitly says so. "
+            "Use measurable only when the requirement can be checked directly from supportedMeasurableFields. "
+            "If a requirement cannot be expressed using supportedMeasurableFields, emit it as semantic instead. "
+            "Skills and technologies such as Python, TensorFlow, Docker, AWS, or cloud platforms must stay semantic. "
+            "Do not create custom measurable keys like python_skill, docker_skill, backend_experience, or cloud_platforms_skill. "
+            "Use true/false measurable checks only for boolean CandidateProfile fields such as educated or ever_studied_abroad. "
             "For bonus-style thresholds such as IELTS 7.5+ being a plus, emit type upper_bound instead of must_have. "
-            "Do not invent sections outside supportedSections.\n\n"
+            "Do not invent sections outside supportedSections. "
+            f"Write requirementText in {self._language_name()}.\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
         )
 
@@ -317,7 +373,7 @@ Rules:
                         "criteria": [
                             {
                                 "criterionKey": "skills.python",
-                                "score": 0,
+                                "score": 85,
                                 "evidenceSummary": "string",
                             }
                         ],
@@ -330,6 +386,10 @@ Rules:
             "Score only the listed criteria. "
             "Do not add, remove, or reinterpret criteria. "
             "Use only evidence from the provided candidate sections. "
+            "Scores must be numbers from 0 to 100, where 100 is a clear full match, 70 is a strong partial match, "
+            "40 is weak or indirect evidence, and 0 is no evidence. "
+            "Do not return binary 0/1 scores or probabilities. "
+            f"Write rationale and evidenceSummary in {self._language_name()}. "
             "Return JSON only and include evidence for every scored criterion.\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
         )
@@ -504,8 +564,13 @@ Return a JSON object with the following structure:
 		Question: """
         return _template + question + "\n"
 
-    def build_llm_query_prompt(self, question: str, candidate_data: list) -> str:
-
+    def build_llm_query_prompt(
+        self,
+        question: str,
+        candidate_data: list,
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        job_context_block = self._format_job_context(job_context)
         return f"""You are a recruitment assistant. Answer the user's question based on the candidate data.
 		Return a Json list object with the following schema:
 		{{
@@ -513,30 +578,51 @@ Return a JSON object with the following structure:
 		  "qualified_candidates": {{candidate_id: string, reason: string}} // a dictionary of candidate id and reason for each candidate that meet the criteria
 		}}
 
-		Candidate data: {json.dumps(candidate_data, ensure_ascii=True)}
-		Provide a concise and relevant answer to the user's question using only the information available in the candidate data. Do not make assumptions or include information that is not present in the candidate data. 
+		{job_context_block}Candidate data: {json.dumps(candidate_data, ensure_ascii=True)}
+		Provide a concise and relevant answer to the user's question using only the information available in the candidate data. Do not make assumptions or include information that is not present in the candidate data.
+		When the question refers to "this job", "công việc này", or the current role, use the current job context above.
+		Write every reason field in {self._language_name()}.
 		If the question cannot be answered with the available data, respond with empty dictionary. Question: {question}
 		
 """
 
-    def build_answer_prompt(self, question: str, candidates: list) -> str:
+    def build_answer_prompt(
+        self,
+        question: str,
+        candidates: list,
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Build a RAG prompt to generate a natural-language answer from candidate data."""
         candidate_json = json.dumps(candidates, ensure_ascii=False, indent=2)
-        return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below with simple explaination. Answer nicely by Vietnamese.
+        job_context_block = self._format_job_context(job_context)
+        return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below with simple explanation.
 
 Rules:
 - Be concise and specific. Reference candidates by name when relevant.
 - Do not invent or assume information not present in the data.
-- If the data is empty or no candidates match, clearly state that no matching candidates were found.
+- Write the answer in the SAME language as the question, not the UI language.
+- If the data is empty or no candidates match, reply with a warm, helpful no-match message in the SAME language as the question.
+- For no-match replies, briefly suggest how the user could broaden or adjust the search.
+- When the question refers to "this job", "công việc này", or the current role, use the current job context below.
+- Keep the wording natural, friendly, and recruiter-focused.
+- End with 1 or 2 short follow-up suggestions in the SAME language as the question.
+- Example Vietnamese follow-up suggestions:
+  - "Bạn có muốn biết thêm về ứng viên phù hợp nhất không?"
+  - "Bạn có muốn tìm ứng viên thỏa mãn điều kiện gần nhất không?"
 
-Candidate data:
+{job_context_block}Candidate data:
 {candidate_json}
 
 Question: {question}
 
 Answer:"""
 
-    def build_router_prompt(self, question: str) -> str:
+    def build_router_prompt(
+        self,
+        question: str,
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        job_context_block = self._format_job_context(job_context)
         return f"""You are a recruitment assistant router. Given the user's question, do two things in one response:
 
 1. Decide if the question is related to recruitment, candidates, resumes, hiring, or HR topics.
@@ -557,7 +643,9 @@ Return ONLY a valid JSON object with this shape:
 Rules for is_recruitment_related:
 - true: question is about candidates, CVs, resumes, job titles, skills, experience, education, hiring, HR, interviews, shortlisting.
 - false: question is about unrelated topics (weather, cooking, math, general coding, etc.).
-- If false: set refusal_message to a short, friendly reply in the SAME language as the question explaining you only assist with recruitment topics. Set all other fields to null or [].
+- If false: set refusal_message to a short, warm, friendly reply in the SAME language as the question explaining you only assist with recruitment topics.
+- Offer 1 short follow-up suggestion that redirects the user back to recruitment help, still in the SAME language as the question.
+- Set all other fields to null or [] when is_recruitment_related is false.
 - If true: set refusal_message to null and fill in the routing fields below.
 
 Routing rules (only when is_recruitment_related is true):
@@ -566,6 +654,9 @@ Routing rules (only when is_recruitment_related is true):
 - dsl_relevant_fields / llm_relevant_fields: fields from the schema below relevant to each path.
 - Use DSL for: full_name, phone, email, location_normalized, contact, current_job_title, educated, ever_studied_abroad, major, cpa, experience_years.
 - Use LLM for: education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, other_text.
+- Questions that mention explicit candidate names should use DSL with full_name.
+- If the user asks to count candidates matching a name or other structured attribute, prefer DSL.
+- If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible.
 - Both paths can apply to the same question.
 
 Database schema:
@@ -574,6 +665,8 @@ Database schema:
   education_text, experience_text, experience_years (Number), skills_text,
   languages_text, projects_text, summary_text, achievements_text,
   publications_text, certifications_text, references_text, other_text
+
+{job_context_block}If the question says "this job", "công việc này", or otherwise refers to the current role, use the current job context above to interpret it.
 
 Question: {question}"""
 
@@ -614,6 +707,7 @@ Question: {question}"""
             "You are a recruitment assistant generating tailored interview questions. "
             "Based on the candidate profile and job description, generate 2-3 categories "
             "with 3-5 questions each. Tailor questions to the candidate's background. "
+            f"Write category names and question text in {self._language_name()}. "
             "Return valid JSON only matching the responseFormat shape exactly.\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
         )

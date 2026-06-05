@@ -4,7 +4,7 @@ import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
@@ -16,10 +16,18 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   access_denied: "Google sign-in was cancelled.",
 };
 
+type AuthFormState = {
+  email: string;
+  password: string;
+  name: string;
+};
+
 export default function LoginRoute() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const isSignUp = searchParams.get("mode") === "signup";
+  const routeState = location.state as { form?: Partial<AuthFormState> } | null;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -33,6 +41,38 @@ export default function LoginRoute() {
       toast.error(OAUTH_ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again.");
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const form = routeState?.form;
+    if (!form) return;
+
+    setEmail(form.email ?? "");
+    setPassword(form.password ?? "");
+    setName(form.name ?? "");
+  }, [routeState]);
+
+  const formState: AuthFormState = { email, password, name };
+
+  const handleModeSwitch = (mode: "signin" | "signup") => {
+    const nextParams = new URLSearchParams(searchParams);
+
+    if (mode === "signup") {
+      nextParams.set("mode", "signup");
+    } else {
+      nextParams.delete("mode");
+    }
+
+    const nextSearch = nextParams.toString();
+    navigate(
+      {
+        pathname: "/login",
+        search: nextSearch ? `?${nextSearch}` : "",
+      },
+      {
+        state: { form: formState },
+      }
+    );
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -213,14 +253,30 @@ export default function LoginRoute() {
             {isSignUp ? (
               <>
                 Already have an account?{" "}
-                <Link to="/login" className="font-medium text-forest-900 hover:underline">
+                <Link
+                  to="/login"
+                  state={{ form: formState }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    handleModeSwitch("signin");
+                  }}
+                  className="font-medium text-forest-900 hover:underline"
+                >
                   Sign in
                 </Link>
               </>
             ) : (
               <>
                 Don't have an account?{" "}
-                <Link to="/login?mode=signup" className="font-medium text-forest-900 hover:underline">
+                <Link
+                  to="/login?mode=signup"
+                  state={{ form: formState }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    handleModeSwitch("signup");
+                  }}
+                  className="font-medium text-forest-900 hover:underline"
+                >
                   Sign up
                 </Link>
               </>

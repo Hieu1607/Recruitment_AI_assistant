@@ -2,10 +2,14 @@ import { client } from "../client";
 import type {
   CandidateProfileResponse,
   ChatResponse,
+  ChatSessionListResponse,
+  ChatSessionResponse,
+  ChatTurnResponse,
   JobDescriptionResponse,
   JobApplicationLinkResponse,
   JobListResponse,
   JobResponse,
+  JobSetupStatusResponse,
   ResumeBatchParseResponse,
   ResumeListResponse,
   ResumeResponse,
@@ -124,6 +128,42 @@ export const jobsApi = {
   chat: {
     async send(jobId: string, body: { message: string; session_id?: string; candidate_limit?: number }): Promise<ChatResponse> {
       const { data } = await client.post<ChatResponse>(`/jobs/${jobId}/chat`, body);
+      return data;
+    },
+
+    sessions: {
+      async list(jobId: string, params?: { limit?: number; offset?: number }): Promise<ChatSessionListResponse> {
+        const { data } = await client.get<ChatSessionListResponse>(`/jobs/${jobId}/chat/sessions`, { params });
+        return data;
+      },
+      async create(jobId: string, body?: { session_title?: string | null }): Promise<ChatSessionResponse> {
+        const { data } = await client.post<ChatSessionResponse>(`/jobs/${jobId}/chat/sessions`, body ?? {});
+        return data;
+      },
+      async get(jobId: string, sessionId: string): Promise<ChatSessionResponse> {
+        const { data } = await client.get<ChatSessionResponse>(`/jobs/${jobId}/chat/sessions/${sessionId}`);
+        return data;
+      },
+      async update(jobId: string, sessionId: string, body: { session_title?: string | null }): Promise<ChatSessionResponse> {
+        const { data } = await client.patch<ChatSessionResponse>(`/jobs/${jobId}/chat/sessions/${sessionId}`, body);
+        return data;
+      },
+      async remove(jobId: string, sessionId: string): Promise<void> {
+        await client.delete(`/jobs/${jobId}/chat/sessions/${sessionId}`);
+      },
+    },
+
+    turns: {
+      async list(jobId: string, sessionId: string, params?: { limit?: number; offset?: number }): Promise<ChatTurnResponse[]> {
+        const { data } = await client.get<ChatTurnResponse[]>(`/jobs/${jobId}/chat/sessions/${sessionId}/turns`, { params });
+        return data;
+      },
+    },
+  },
+
+  setupStatus: {
+    async get(jobId: string): Promise<JobSetupStatusResponse> {
+      const { data } = await client.get<JobSetupStatusResponse>(`/jobs/${jobId}/setup-status`);
       return data;
     },
   },

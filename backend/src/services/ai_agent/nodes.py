@@ -12,11 +12,13 @@ Prompts used (from BuildPrompts):
 import json
 import logging
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage
 
 from src.prompts.build_prompts import build_prompts
+from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 from src.services.llm_service import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,38 @@ def _get_llm() -> LLMProvider:
     if _llm is None:
         _llm = LLMProvider()
     return _llm
+
+
+def _record_llm_trace(
+    *,
+    state: Dict[str, Any],
+    node_name: str,
+    prompt: str,
+    response=None,
+    error: Optional[BaseException] = None,
+) -> None:
+    trace_id = state.get("trace_id")
+    if not trace_id:
+        return
+
+    payload: Dict[str, Any] = {
+        "node_name": node_name,
+        "prompt": prompt,
+    }
+    if response is not None:
+        payload["response_text"] = response.text
+        payload["response_provider"] = response.provider
+        payload["response_model"] = response.model
+        payload["response_usage"] = response.usage
+        payload["response_raw"] = response.raw
+    if error is not None:
+        payload["error"] = format_exception_payload(error)
+
+    get_trace_logger().record_event(
+        trace_id=trace_id,
+        event_type="llm_call",
+        payload=payload,
+    )
 
 # All valid filterable/queryable fields on CandidateProfile (excludes id/full_name)
 _ALL_CANDIDATE_FIELDS: frozenset = frozenset({
@@ -61,6 +95,12 @@ def _parse_json(text: str) -> Any:
         if match:
             return json.loads(match.group())
         raise
+
+
+def _normalize_text_match(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
 def _fetch_candidates(
@@ -165,9 +205,11 @@ def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
             fv = c.get(field)
             if fv is None:
                 continue
-            if operator == "eq" and str(fv).lower() == str(value).lower():
+            normalized_fv = _normalize_text_match(fv)
+            normalized_value = _normalize_text_match(value)
+            if operator == "eq" and normalized_fv == normalized_value:
                 filtered.append(c)
-            elif operator == "contains" and str(value).lower() in str(fv).lower():
+            elif operator == "contains" and normalized_value in normalized_fv:
                 filtered.append(c)
             elif operator == "gte":
                 try:
@@ -187,7 +229,12 @@ def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
     for clause in dsl.get("must") or []:
         field, keyword = clause.get("field"), clause.get("contains", "")
         if field and keyword:
-            results = [c for c in results if keyword.lower() in str(c.get(field) or "").lower()]
+            normalized_keyword = _normalize_text_match(keyword)
+            results = [
+                c
+                for c in results
+                if normalized_keyword in _normalize_text_match(c.get(field) or "")
+            ]
 
     # Should clauses (OR contains) — keep any that match at least one
     should = dsl.get("should") or []
@@ -198,14 +245,59 @@ def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
             field, keyword = clause.get("field"), clause.get("contains", "")
             if not (field and keyword):
                 continue
+            normalized_keyword = _normalize_text_match(keyword)
             for c in results:
                 cid = str(c.get("id") or id(c))
-                if cid not in seen and keyword.lower() in str(c.get(field) or "").lower():
+                if cid not in seen and normalized_keyword in _normalize_text_match(c.get(field) or ""):
                     matched.append(c)
                     seen.add(cid)
         results = matched if matched else results
 
     return results
+
+
+def _match_candidates_by_name_in_question(
+    candidates: List[Dict[str, Any]],
+    question: str,
+) -> List[Dict[str, Any]]:
+    """Recover explicit name queries when generated DSL is too restrictive."""
+    normalized_question = _normalize_text_match(question)
+    if not normalized_question:
+        return []
+
+    matches: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        normalized_name = _normalize_text_match(candidate.get("full_name"))
+        if normalized_name and normalized_name in normalized_question:
+            matches.append(candidate)
+    return matches
+
+
+def _is_named_comparison_request(
+    *,
+    question: str,
+    router_output: Dict[str, Any],
+    dsl_candidates: Optional[List[Dict[str, Any]]],
+) -> bool:
+    if not dsl_candidates or len(dsl_candidates) < 2:
+        return False
+    dsl_fields = router_output.get("dsl_relevant_fields") or []
+    if "full_name" not in dsl_fields:
+        return False
+
+    normalized_question = _normalize_text_match(question)
+    comparison_markers = (
+        "so sanh",
+        "compare",
+        "versus",
+        "vs",
+        "tot hon",
+        "better fit",
+        "better",
+        "rank",
+        "xep hang",
+    )
+    return any(marker in normalized_question for marker in comparison_markers)
 
 
 # ---------------------------------------------------------------------------
@@ -221,11 +313,17 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Uses build_router_prompt.
     """
     question: str = state.get("question") or ""
+    job_context: Optional[Dict[str, Any]] = state.get("current_job")
 
     logger.info("[router_node] question=%r", question)
 
-    prompt = build_prompts.build_router_prompt(question)
-    response = _get_llm().generate(prompt)
+    prompt = build_prompts.build_router_prompt(question, job_context=job_context)
+    try:
+        response = _get_llm().generate(prompt)
+    except Exception as exc:
+        _record_llm_trace(state=state, node_name="router", prompt=prompt, error=exc)
+        raise
+    _record_llm_trace(state=state, node_name="router", prompt=prompt, response=response)
 
     try:
         router_output = _parse_json(response.text)
@@ -278,6 +376,7 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Uses build_dsl_query_prompt.
     """
     router_output: Dict = state.get("router_output") or {}
+    question: str = state.get("question") or ""
     dsl_question: str = router_output.get("dsl_question_query") or state.get("question") or ""
     dsl_relevant_fields: List[str] = router_output.get("dsl_relevant_fields") or []
 
@@ -287,7 +386,12 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[dsl_node] fetched %d candidate(s) from DB", len(candidates))
 
     prompt = build_prompts.build_dsl_query_prompt(dsl_question)
-    response = _get_llm().generate(prompt)
+    try:
+        response = _get_llm().generate(prompt)
+    except Exception as exc:
+        _record_llm_trace(state=state, node_name="dsl", prompt=prompt, error=exc)
+        raise
+    _record_llm_trace(state=state, node_name="dsl", prompt=prompt, response=response)
 
     try:
         dsl = _parse_json(response.text)
@@ -296,6 +400,15 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         logger.warning("[dsl_node] failed to parse/apply DSL, returning all candidates")
         dsl_candidates = candidates
+
+    if not dsl_candidates:
+        fallback_candidates = _match_candidates_by_name_in_question(candidates, question)
+        if fallback_candidates:
+            logger.info(
+                "[dsl_node] recovered %d candidate(s) by direct question-name matching fallback",
+                len(fallback_candidates),
+            )
+            dsl_candidates = fallback_candidates
 
     logger.info(
         "[dsl_node] %d → %d candidate(s) after DSL filter",
@@ -316,6 +429,7 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Uses build_llm_query_prompt.
     """
     router_output: Dict = state.get("router_output") or {}
+    job_context: Optional[Dict[str, Any]] = state.get("current_job")
     llm_question: str = router_output.get("llm_question_query") or state.get("question") or ""
     llm_relevant_fields: List[str] = (
         router_output.get("llm_relevant_fields")
@@ -341,8 +455,13 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
     candidates = _resolve_candidates(state, llm_relevant_fields, candidate_ids)
     logger.info("[llm_node] fetched %d candidate(s) for LLM analysis", len(candidates))
 
-    prompt = build_prompts.build_llm_query_prompt(llm_question, candidates)
-    response = _get_llm().generate(prompt)
+    prompt = build_prompts.build_llm_query_prompt(llm_question, candidates, job_context=job_context)
+    try:
+        response = _get_llm().generate(prompt)
+    except Exception as exc:
+        _record_llm_trace(state=state, node_name="llm", prompt=prompt, error=exc)
+        raise
+    _record_llm_trace(state=state, node_name="llm", prompt=prompt, response=response)
 
     try:
         llm_result = _parse_json(response.text)
@@ -368,23 +487,38 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Candidate pool resolution (in priority order):
       1. LLM qualified candidates (keyed by candidate_id in llm_result)
       2. DSL-filtered candidates
-      3. Empty → return a "no match" message without calling the LLM
+      3. Empty → ask the LLM to explain naturally that no candidates matched
     """
     router_output: Dict = state.get("router_output") or {}
     question: str = state.get("question") or ""
+    job_context: Optional[Dict[str, Any]] = state.get("current_job")
     dsl_candidates: Optional[List[Dict]] = state.get("dsl_candidates")
     llm_result: Optional[Dict] = state.get("llm_result")
+    named_comparison_request = _is_named_comparison_request(
+        question=question,
+        router_output=router_output,
+        dsl_candidates=dsl_candidates,
+    )
 
     logger.info("[answer_node] question=%r", question)
 
     # --- Determine final candidate IDs ---
     final_ids: Optional[List[str]] = None
 
-    if llm_result:
+    if named_comparison_request and dsl_candidates is not None:
+        final_ids = [str(c["id"]) for c in dsl_candidates if c.get("id")]
+        logger.info(
+            "[answer_node] source=named_comparison_dsl | %d candidate(s)",
+            len(final_ids),
+        )
+    elif llm_result:
         qualified = llm_result.get("qualified_candidates") or {}
         if isinstance(qualified, dict) and qualified:
             final_ids = list(qualified.keys())
             logger.info("[answer_node] source=llm | %d qualified candidate(s)", len(final_ids))
+        elif dsl_candidates is not None:
+            final_ids = [str(c["id"]) for c in dsl_candidates if c.get("id")]
+            logger.info("[answer_node] source=dsl_fallback | %d candidate(s)", len(final_ids))
         else:
             final_ids = []
             logger.info("[answer_node] source=llm | no qualified candidates")
@@ -393,14 +527,6 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("[answer_node] source=dsl | %d candidate(s)", len(final_ids))
     else:
         logger.info("[answer_node] source=none | no filter ran")
-
-    if final_ids is not None and len(final_ids) == 0:
-        no_match = "No candidates matched the query."
-        logger.info("[answer_node] result: no match")
-        return {
-            "messages": [AIMessage(content=no_match)],
-            "answer": no_match,
-        }
 
     # --- Collect all relevant fields from both stages ---
     all_relevant_fields: List[str] = list(set(
@@ -415,12 +541,7 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[answer_node] fetched %d candidate(s) from DB", len(candidates))
 
     if not candidates:
-        no_match = "No candidates matched the query."
-        logger.info("[answer_node] result: no candidates after DB fetch")
-        return {
-            "messages": [AIMessage(content=no_match)],
-            "answer": no_match,
-        }
+        logger.info("[answer_node] result: no candidates after DB fetch; asking LLM for natural no-match answer")
 
     # --- If too many candidates, trim to id + full_name only ---
     if len(candidates) > _MAX_CANDIDATES_FOR_RAG:
@@ -433,8 +554,13 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # --- RAG: ask LLM to answer using the retrieved candidate data ---
     logger.info("[answer_node] calling LLM with %d candidate(s)", len(candidates))
-    prompt = build_prompts.build_answer_prompt(question, candidates)
-    response = _get_llm().generate(prompt)
+    prompt = build_prompts.build_answer_prompt(question, candidates, job_context=job_context)
+    try:
+        response = _get_llm().generate(prompt)
+    except Exception as exc:
+        _record_llm_trace(state=state, node_name="answer", prompt=prompt, error=exc)
+        raise
+    _record_llm_trace(state=state, node_name="answer", prompt=prompt, response=response)
 
     answer = response.text.strip()
     logger.info("[answer_node] answer (first 200 chars): %r", answer[:200])

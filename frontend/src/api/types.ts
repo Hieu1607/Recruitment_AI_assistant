@@ -192,6 +192,9 @@ export interface ScoreRequest {
  */
 export interface ComponentScore {
   criterionKey: string;                  // e.g. "skills"
+  criterionType?: string | null;
+  evaluationMode?: string | null;
+  requirementText?: string | null;
   weight: number;
   score: number;
   weightedScore: number;
@@ -200,6 +203,9 @@ export interface ComponentScore {
 
 export interface CandidateScore {
   candidateId: string;                   // UUID — camelCase per BACKEND.md note 7
+  candidateName?: string | null;
+  resumeFileName?: string | null;
+  candidateDisplayName?: string | null;
   totalScore: number;                    // 0 - 100
   passedThreshold: boolean;
   rationale: string;
@@ -264,6 +270,53 @@ export interface ChatResponse {
   session_id: string;
   answer: string;
   candidates_in_scope: number;
+  session?: ChatSessionResponse | null;
+  turn?: ChatTurnResponse | null;
+}
+
+export interface ChatSessionResponse {
+  id: string;
+  user_id: string;
+  job_id: string;
+  session_title: string | null;
+  turn_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionListResponse {
+  items: ChatSessionResponse[];
+  total: number;
+}
+
+export interface ChatTurnResponse {
+  id: string;
+  query_session_id: string;
+  user_question: string;
+  answer_text: string;
+  matched_candidate_ids: string[] | null;
+  matched_count: number | null;
+  tool_trace_masked: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface JobSetupStatusResponse {
+  job_id: string;
+  resume_count: number;
+  processed_candidate_count: number;
+  has_uploaded_resumes: boolean;
+  has_processed_candidates: boolean;
+  has_active_job_description: boolean;
+  has_completed_score_run: boolean;
+  has_chat_turn: boolean;
+  completed_score_run_count: number;
+  chat_session_count: number;
+  chat_turn_count: number;
+  latest_job_description_id: string | null;
+  latest_score_run_id: string | null;
+  latest_score_run_at: string | null;
+  latest_chat_session_id: string | null;
+  latest_chat_turn_at: string | null;
 }
 
 export interface ChatMessage {

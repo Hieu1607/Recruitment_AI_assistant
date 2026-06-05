@@ -26,6 +26,7 @@ from src.services.job_description_service import (  # noqa: E402
     update_job_description,
 )
 from src.models.user_account import UserAccount  # noqa: E402
+from src.services.scoring_errors import ScoringProviderLimitError  # noqa: E402
 
 
 def _create_test_tables(engine):
@@ -161,6 +162,29 @@ def test_score_endpoint_passes_explicit_weights_and_filters(monkeypatch, db, own
     assert captured["candidate_profile_ids"] == candidate_ids
     assert captured["section_weights"] == {"skills": 40.0, "experience": 60.0}
     assert captured["batch_size"] == 7
+
+
+def test_score_endpoint_returns_429_when_scoring_provider_limit_is_hit(
+    monkeypatch, db, owner, job_description
+):
+    monkeypatch.setattr(
+        "src.api.v1.endpoints.score.score_candidates",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ScoringProviderLimitError(
+                "Scoring is temporarily unavailable because the configured LLM quota has been exhausted. Please retry later."
+            )
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        score_candidates_endpoint(
+            ScoreRequest(job_description_id=job_description.id),
+            db=db,
+            current_user=owner,
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "quota" in exc_info.value.detail.lower()
 
 
 def test_job_description_serialization_includes_hidden_text(job_description):

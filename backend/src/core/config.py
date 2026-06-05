@@ -92,6 +92,10 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL_NAME: str = os.getenv("GROQ_MODEL_NAME", "llama-3.1-8b-instant")
+    GROQ_JSON_FALLBACK_MODEL: str = os.getenv(
+        "GROQ_JSON_FALLBACK_MODEL",
+        "openai/gpt-oss-20b",
+    )
     GROQ_VISION_MODEL_NAME: str = os.getenv(
         "GROQ_VISION_MODEL_NAME", "meta-llama/llama-4-scout-17b-16e-instruct"
     )
@@ -117,6 +121,8 @@ class Settings(BaseSettings):
         "gpt-4o-mini-transcribe",
     )
     OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+
+    APP_UI_LANGUAGE: str = os.getenv("APP_UI_LANGUAGE", "en")
 
     HF_OCR_BASE_URL: str = os.getenv(
         "HF_OCR_BASE_URL", "https://hieuailearning-resume-ocr-tesseract.hf.space"
@@ -153,6 +159,7 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()
