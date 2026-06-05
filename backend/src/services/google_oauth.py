@@ -1,6 +1,7 @@
 import logging
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -16,6 +17,7 @@ from src.core.config import settings
 from src.models.oauth_identity import OAuthIdentity
 from src.models.user_account import UserAccount, RoleAssignment
 from src.models.enums import RoleName, UserStatus
+from src.services.token_crypto import encrypt_token
 
 GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -40,9 +42,11 @@ def build_authorize_url(redirect_path: str) -> tuple[str, str]:
         "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
         "response_type": "code",
-        "scope": "openid email profile",
+        "scope": settings.GOOGLE_OAUTH_SCOPES,
         "state": state,
-        "access_type": "online",
+        "access_type": settings.GOOGLE_OAUTH_ACCESS_TYPE,
+        "prompt": settings.GOOGLE_OAUTH_PROMPT,
+        "include_granted_scopes": "true",
     }
     query = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{GOOGLE_AUTH_URL}?{query}"
@@ -122,7 +126,26 @@ def verify_id_token(id_token: str) -> dict:
     return dict(claims)
 
 
-def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
+def _apply_google_tokens(identity: OAuthIdentity, tokens: dict | None) -> None:
+    if not tokens:
+        return
+
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    expires_in = tokens.get("expires_in")
+    scope = tokens.get("scope")
+
+    if access_token:
+        identity.access_token_encrypted = encrypt_token(access_token)
+    if refresh_token:
+        identity.refresh_token_encrypted = encrypt_token(refresh_token)
+    if expires_in:
+        identity.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    if scope:
+        identity.scope = str(scope)
+
+
+def upsert_user_from_google(db: Session, claims: dict, tokens: dict | None = None) -> UserAccount:
     """Implements email linking rule. Raises ValueError('google_email_not_verified') when appropriate."""
     google_sub = claims["sub"]
     email = claims["email"]
@@ -137,6 +160,8 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
     ).scalar_one_or_none()
 
     if identity is not None:
+        _apply_google_tokens(identity, tokens)
+        db.commit()
         return identity.user
 
     # 2. Look up by email
@@ -155,6 +180,7 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
             provider_subject=google_sub,
             email=email,
         )
+        _apply_google_tokens(new_identity, tokens)
         db.add(new_identity)
         db.commit()
         logger.info("Google OAuth: linked google identity to existing user_id=%s email=%s", user.id, email)
@@ -180,6 +206,7 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
         provider_subject=google_sub,
         email=email,
     )
+    _apply_google_tokens(identity, tokens)
     db.add(identity)
     db.commit()
     db.refresh(new_user)

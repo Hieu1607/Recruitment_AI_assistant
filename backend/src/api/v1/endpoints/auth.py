@@ -177,7 +177,7 @@ async def google_callback(
     try:
         tokens = await google_oauth.exchange_code_for_tokens(code)
         claims = google_oauth.verify_id_token(tokens["id_token"])
-        user = google_oauth.upsert_user_from_google(db, claims)
+        user = google_oauth.upsert_user_from_google(db, claims, tokens=tokens)
     except ValueError as exc:
         logger.warning("Google OAuth upsert failed: %s", exc)
         return RedirectResponse(f"{frontend}/login?error={exc}", status_code=302)
