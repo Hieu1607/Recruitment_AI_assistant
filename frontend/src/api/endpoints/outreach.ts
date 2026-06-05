@@ -62,6 +62,13 @@ export const outreachApi = {
     return data;
   },
 
+  async send(messageId: string): Promise<OutreachResponse> {
+    const { data } = await client.post<OutreachResponse>(
+      `/outreach/${messageId}/send`,
+    );
+    return data;
+  },
+
   /**
    * Delete an outreach message.
    * DELETE /outreach/{message_id} → 204 No Content

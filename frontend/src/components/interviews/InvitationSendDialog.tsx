@@ -48,7 +48,7 @@ export function InvitationSendDialog({
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["interview-invitations", jobId] });
-      toast.success("Interview invitation sent");
+      toast.success("Interview invitation email queued");
       onSent?.();
       onOpenChange(false);
     },

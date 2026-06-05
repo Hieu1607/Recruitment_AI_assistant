@@ -287,21 +287,21 @@ function MessageDetailPanel({
     },
   });
 
-  // Mark as sent mutation
-  const markSentMutation = useMutation({
-    mutationFn: () => api.outreach.update(messageId!, { sent_status: "sent" }),
+  // Send email mutation
+  const sendMutation = useMutation({
+    mutationFn: () => api.outreach.send(messageId!),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
       qc.invalidateQueries({ queryKey: ["outreach-count"] });
       qc.invalidateQueries({ queryKey: ["outreach-message", messageId] });
-      toast.success("Message marked as sent");
+      toast.success("Email queued for sending");
     },
     onError: (err: unknown) => {
       if (parseAxiosError(err).status === 404) {
         toast.error("Message no longer exists");
         onClose();
       } else {
-        toast.error("Something went wrong. Please try again.");
+        toast.error("Could not queue email. Check Google/Gmail setup and candidate email.");
       }
     },
   });
@@ -380,10 +380,10 @@ function MessageDetailPanel({
             <Button
               variant="secondary"
               size="sm"
-              loading={markSentMutation.isPending}
-              onClick={() => markSentMutation.mutate()}
+              loading={sendMutation.isPending}
+              onClick={() => sendMutation.mutate()}
             >
-              Mark as sent
+              Send email
             </Button>
           )}
           {!deleteConfirm ? (
