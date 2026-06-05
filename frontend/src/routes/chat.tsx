@@ -3,6 +3,7 @@ import { api } from "@/api";
 import { parseAxiosError } from "@/api/errors";
 import { Avatar } from "@/components/ui/avatar";
 import { SidebarResizeHandle } from "@/components/layout/SidebarResizeHandle";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useResizableSidebar } from "@/lib/useResizableSidebar";
@@ -198,9 +199,7 @@ function MessageBubble({
     <div className="flex gap-3 items-start">
       <AiAvatar />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-sans text-fg leading-relaxed whitespace-pre-wrap">
-          {msg.content}
-        </p>
+        <MarkdownRenderer text={msg.content} />
         {msg.candidatesInScope !== undefined && msg.candidatesInScope > 0 && (
           <CandidateCards count={msg.candidatesInScope} candidates={candidates} />
         )}

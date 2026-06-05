@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base
-from src.models.enums import ProfileStatus
+from src.models.enums import GraduationStatus, ProfileStatus
 
 
 _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
@@ -43,8 +43,13 @@ class CandidateProfile(Base):
     contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
     current_job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    educated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     ever_studied_abroad: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    graduation_status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default=GraduationStatus.UNKNOWN.value,
+        server_default=GraduationStatus.UNKNOWN.value,
+    )
     major: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cpa: Mapped[str | None] = mapped_column(String(100), nullable=True)
 

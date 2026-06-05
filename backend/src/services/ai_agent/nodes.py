@@ -67,12 +67,13 @@ def _record_llm_trace(
 # All valid filterable/queryable fields on CandidateProfile (excludes id/full_name)
 _ALL_CANDIDATE_FIELDS: frozenset = frozenset({
     "phone", "email", "location_normalized", "contact", "current_job_title",
-    "educated", "ever_studied_abroad", "major", "cpa",
+    "graduation_status", "ever_studied_abroad", "major", "cpa",
     "education_text", "experience_text", "experience_years", "skills_text",
     "languages_text", "projects_text", "summary_text", "achievements_text",
     "publications_text", "certifications_text", "references_text", "other_text",
 })
 _ALWAYS_INCLUDE: frozenset = frozenset({"id", "full_name"})
+_ALWAYS_SEMANTIC_FIELDS: frozenset = frozenset({"summary_text"})
 
 _MAX_CANDIDATES_FOR_RAG = 10
 
@@ -190,6 +191,10 @@ def _resolve_candidates(
     return result
 
 
+def _merge_semantic_fields(fields: List[str]) -> List[str]:
+    return list(_ALWAYS_SEMANTIC_FIELDS | set(fields or []))
+
+
 def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
     """Apply DSL filters/must/should clauses to a candidate list."""
     results = list(candidates)
@@ -300,6 +305,65 @@ def _is_named_comparison_request(
     return any(marker in normalized_question for marker in comparison_markers)
 
 
+def _question_uses_graduation_status_semantics(question: str) -> bool:
+    normalized_question = _normalize_text_match(question)
+    if not normalized_question:
+        return False
+
+    markers = (
+        "chua tot nghiep",
+        "chua ra truong",
+        "dang hoc",
+        "nam cuoi",
+        "sinh vien nam cuoi",
+        "final-year",
+        "final year",
+        "expected graduation",
+        "du kien tot nghiep",
+        "sap tot nghiep",
+        "undergraduate student",
+    )
+    return any(marker in normalized_question for marker in markers)
+
+
+def _override_router_output_for_graduation_status_semantics(
+    *,
+    question: str,
+    router_output: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not _question_uses_graduation_status_semantics(question):
+        return router_output
+
+    dsl_question = str(router_output.get("dsl_question_query") or "").strip().lower()
+    dsl_fields = set(router_output.get("dsl_relevant_fields") or [])
+    llm_fields = list(router_output.get("llm_relevant_fields") or [])
+
+    educated_only_route = (
+        dsl_question in {"educated = false", "graduation_status = studying", "graduation_status = final_year"}
+        or dsl_fields in ({"educated"}, {"graduation_status"})
+        or (router_output.get("relevant_fields") or []) in (["educated"], ["graduation_status"])
+    )
+    if not educated_only_route:
+        return router_output
+
+    updated = dict(router_output)
+    updated["relevant_fields"] = ["education_text", "summary_text"]
+    updated["dsl_question_query"] = None
+    updated["dsl_relevant_fields"] = []
+    updated["llm_question_query"] = question
+    updated["llm_relevant_fields"] = ["education_text", "summary_text"]
+    existing_reasoning = str(router_output.get("reasoning") or "").strip()
+    suffix = (
+        "Graduation-status semantics should use free-text education evidence rather than educated alone."
+    )
+    updated["reasoning"] = (
+        f"{existing_reasoning} graduation-status semantics override: {suffix}"
+        if existing_reasoning
+        else f"graduation-status semantics override: {suffix}"
+    )
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
@@ -339,6 +403,11 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "llm_relevant_fields": [],
             "reasoning": "Parse failure – fell back to LLM path",
         }
+
+    router_output = _override_router_output_for_graduation_status_semantics(
+        question=question,
+        router_output=router_output,
+    )
 
     is_related: bool = bool(router_output.get("is_recruitment_related", True))
 
@@ -436,6 +505,7 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
         or router_output.get("relevant_fields")
         or []
     )
+    llm_relevant_fields = _merge_semantic_fields(llm_relevant_fields)
 
     # If DSL ran, restrict to its surviving candidate IDs
     dsl_candidates: Optional[List[Dict]] = state.get("dsl_candidates")
@@ -531,7 +601,7 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # --- Collect all relevant fields from both stages ---
     all_relevant_fields: List[str] = list(set(
         (router_output.get("dsl_relevant_fields") or [])
-        + (router_output.get("llm_relevant_fields") or router_output.get("relevant_fields") or [])
+        + _merge_semantic_fields(router_output.get("llm_relevant_fields") or router_output.get("relevant_fields") or [])
     ))
     logger.info("[answer_node] fetching fields=%s for ids=%s", all_relevant_fields,
                 f"{len(final_ids)} IDs" if final_ids is not None else "all")

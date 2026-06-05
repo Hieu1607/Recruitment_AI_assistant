@@ -16,7 +16,7 @@ import { cn } from "@/lib/cn";
 import { routes } from "@/routes";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, BookOpen, Calendar, ExternalLink, Mail } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
 type Tab = "overview" | "resume" | "outreach" | "interview";
@@ -212,7 +212,7 @@ function OverviewTab({
     { label: "Experience years", value: profile?.experience_years },
     { label: "Major", value: profile?.major },
     { label: "CPA", value: profile?.cpa },
-    { label: "Educated", value: profile?.educated },
+    { label: "Graduation status", value: profile?.graduation_status },
     { label: "Studied abroad", value: profile?.ever_studied_abroad },
     { label: "Profile ID", value: profile?.id },
     { label: "Resume ID", value: profile?.resume_document_id ?? resume.id },
@@ -269,7 +269,41 @@ function OverviewTab({
 }
 
 function ResumeTab({ resume }: { resume: ResumeResponse }) {
-  const pdfUrl = `http://localhost:8000${resume.storage_uri}`;
+  const { data: pdfBlob, isLoading, isError } = useQuery({
+    queryKey: ["candidate-resume-file", resume.id],
+    queryFn: () => api.upload.getFile(resume.id),
+    enabled: resume.upload_status === "processed",
+    staleTime: 5 * 60 * 1000,
+  });
+  const pdfUrl = useMemo(() => (pdfBlob ? URL.createObjectURL(pdfBlob) : null), [pdfBlob]);
+
+  useEffect(() => {
+    return () => {
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    };
+  }, [pdfUrl]);
+
+  if (resume.upload_status !== "processed") {
+    return (
+      <EmptyState
+        heading="Resume preview unavailable"
+        body={`Preview will appear after processing finishes. Current status: ${resume.upload_status}.`}
+      />
+    );
+  }
+
+  if (isLoading) {
+    return <Skeleton className="h-[640px] w-full rounded-[var(--radius-lg)]" />;
+  }
+
+  if (isError || !pdfUrl) {
+    return (
+      <EmptyState
+        heading="Resume preview unavailable"
+        body="The PDF could not be loaded from storage right now."
+      />
+    );
+  }
 
   return (
     <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated overflow-hidden">

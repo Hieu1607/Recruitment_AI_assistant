@@ -107,7 +107,7 @@ export interface CandidateProfileResponse {
   location_normalized: string | null;
   contact: string | null;
   current_job_title: string | null;
-  educated: boolean;
+  graduation_status: string;
   ever_studied_abroad: boolean;
   major: string | null;
   cpa: string | null;

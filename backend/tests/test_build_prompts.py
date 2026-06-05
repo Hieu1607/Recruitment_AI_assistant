@@ -110,7 +110,7 @@ def test_jd_rubric_prompt_restricts_measurable_fields_to_supported_candidateprof
     )
 
     assert "experience_years" in prompt
-    assert "educated" in prompt
+    assert "graduation_status" in prompt
     assert "ever_studied_abroad" in prompt
     assert "Do not create custom measurable keys like python_skill, docker_skill, backend_experience, or cloud_platforms_skill." in prompt
     assert "Skills and technologies such as Python, TensorFlow, Docker, AWS, or cloud platforms must stay semantic" in prompt
@@ -131,6 +131,8 @@ def test_router_prompt_guides_name_lookup_count_and_comparison_queries():
 
     assert "Questions that mention explicit candidate names should use DSL with full_name." in prompt
     assert "If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible." in prompt
+    assert "Do not rely on graduation_status alone for broader concepts such as not yet graduating" in prompt
+    assert "final-year" in prompt
 
 
 def test_answer_prompt_uses_question_language_and_adds_follow_up_guidance():
@@ -142,8 +144,10 @@ def test_answer_prompt_uses_question_language_and_adds_follow_up_guidance():
     assert "Write the answer in the SAME language as the question" in prompt
     assert "If the data is empty or no candidates match, reply with a warm, helpful no-match message" in prompt
     assert "End with 1 or 2 short follow-up suggestions" in prompt
-    assert "Bạn có muốn biết thêm về ứng viên" in prompt
-    assert "Bạn có muốn tìm ứng viên thỏa mãn" in prompt
+    assert "Make the follow-up suggestions dynamic and grounded in the answer" in prompt
+    assert "Do not reuse the same fixed follow-up wording" in prompt
+    assert "best-matching candidate" in prompt
+    assert "closest matching candidates" in prompt
 
 
 def test_router_prompt_requires_friendly_same_language_refusal():
@@ -177,9 +181,16 @@ def test_chat_prompts_include_current_job_context_when_available():
     )
 
     for prompt in (router_prompt, llm_prompt, answer_prompt):
+        assert "Current time (UTC):" in prompt
         assert "Current job context" in prompt
         assert "Senior AI Engineer" in prompt
         assert "Build LLM features and evaluate candidate fit." in prompt
         assert "Prefer hands-on production AI deployment experience." in prompt
         assert "Public job description" in prompt
         assert "Special recruiter-only requirements" in prompt
+
+
+def test_dsl_prompt_includes_current_time_context():
+    prompt = BuildPrompts().build_dsl_query_prompt("Ai có 3 năm kinh nghiệm Python?")
+
+    assert "Current time (UTC):" in prompt

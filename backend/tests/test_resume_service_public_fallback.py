@@ -24,6 +24,21 @@ from src.models.resume_document import ExtractionTrace, ResumeDocument  # noqa: 
 from src.services import resume_service  # noqa: E402
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Sinh viên năm cuối Đại học Bách Khoa", "final_year"),
+        ("Đang học năm cuối ngành Kế toán", "final_year"),
+        ("Dự kiến tốt nghiệp năm 2026", "final_year"),
+        ("Sắp tốt nghiệp chương trình cử nhân", "final_year"),
+        ("Đang học tại Đại học Kinh tế", "studying"),
+        ("Chưa tốt nghiệp, đang là sinh viên năm ba", "studying"),
+    ],
+)
+def test_infer_graduation_status_supports_common_vietnamese_phrases(text, expected):
+    assert resume_service._infer_graduation_status_from_text(text) == expected
+
+
 class FakeSession:
     def __init__(self):
         self.objects: dict[type, dict[uuid.UUID, object]] = {}

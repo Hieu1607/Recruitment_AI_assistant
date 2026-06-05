@@ -47,9 +47,10 @@ SUPPORTED_MEASURABLE_FIELDS: Dict[str, Dict[str, Any]] = {
         "value_type": "number",
         "operators": NUMERIC_OPERATORS,
     },
-    "educated": {
-        "value_type": "boolean",
+    "graduation_status": {
+        "value_type": "string",
         "operators": BOOLEAN_OPERATORS,
+        "allowed_values": {"graduated", "final_year", "studying", "unknown"},
     },
     "ever_studied_abroad": {
         "value_type": "boolean",
@@ -184,7 +185,7 @@ def _profile_to_candidate_dict(profile: CandidateProfile) -> Dict[str, Any]:
         "resume_file_name": resume_file_name,
         "display_name": display_name,
         "current_job_title": profile.current_job_title,
-        "educated": bool(profile.educated),
+        "graduation_status": profile.graduation_status,
         "ever_studied_abroad": bool(profile.ever_studied_abroad),
         "experience_years": float(profile.experience_years) if profile.experience_years is not None else None,
         "education_text": profile.education_text,
@@ -295,6 +296,10 @@ def _normalize_measurable(measurable: Any) -> Optional[Dict[str, Any]]:
             value = value.strip().lower() == "true"
         else:
             return None
+    elif spec["value_type"] == "string":
+        value = str(value).strip().lower()
+        if value not in spec.get("allowed_values", set()):
+            return None
     return {
         "field": field,
         "operator": operator,
@@ -327,12 +332,27 @@ def _source_has_explicit_year_threshold(source_text: str, value: Any) -> bool:
 def _source_has_boolean_requirement(source_text: str, field: str, expected_value: bool) -> bool:
     if not source_text:
         return False
-    if field == "educated":
-        positive_pattern = (
-            r"\b(degree|bachelor|master|phd|doctorate|graduate|graduated|university|college|education|educated)\b"
-            r"|bằng cấp|tốt nghiệp|đại học|cao đẳng|cử nhân|thạc sĩ|tiến sĩ"
-        )
-        negative_pattern = r"\b(no degree|required no degree|degree not required|không cần bằng|không yêu cầu bằng)\b"
+    if field == "graduation_status":
+        if expected_value == "graduated":
+            pattern = (
+                r"\b(bachelor'?s degree|master'?s degree|phd|doctorate|graduated|graduate|degree required)\b"
+                r"|đã tốt nghiệp|tốt nghiệp|bằng cử nhân|bằng đại học|cử nhân|thạc sĩ|tiến sĩ"
+            )
+        elif expected_value == "final_year":
+            pattern = (
+                r"\b(final-year|final year|last-year student|expected graduation)\b"
+                r"|năm cuối|sinh viên năm cuối|dự kiến tốt nghiệp|sắp tốt nghiệp"
+            )
+        elif expected_value == "studying":
+            pattern = (
+                r"\b(currently studying|still studying|student)\b"
+                r"|đang học|sinh viên"
+            )
+        elif expected_value == "unknown":
+            return False
+        else:
+            return False
+        return re.search(pattern, source_text, re.IGNORECASE) is not None
     elif field == "ever_studied_abroad":
         positive_pattern = r"\b(stud(?:y|ied) abroad|overseas education|international education)\b|du học|học ở nước ngoài"
         negative_pattern = r"\b(no study abroad|studied abroad not required)\b|không yêu cầu du học"
@@ -351,7 +371,9 @@ def _measurable_supported_by_source(measurable: Dict[str, Any], source_text: Opt
     value = measurable.get("value")
     if field == "experience_years":
         return _source_has_explicit_year_threshold(source_text, value)
-    if field in {"educated", "ever_studied_abroad"} and isinstance(value, bool):
+    if field == "graduation_status" and isinstance(value, str):
+        return _source_has_boolean_requirement(source_text, field, value)
+    if field == "ever_studied_abroad" and isinstance(value, bool):
         return _source_has_boolean_requirement(source_text, field, value)
     return False
 

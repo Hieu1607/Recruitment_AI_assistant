@@ -15,6 +15,13 @@ class ProfileStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class GraduationStatus(str, Enum):
+    UNKNOWN = "unknown"
+    STUDYING = "studying"
+    FINAL_YEAR = "final_year"
+    GRADUATED = "graduated"
+
+
 class MatchRunStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"

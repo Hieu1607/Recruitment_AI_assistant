@@ -203,16 +203,16 @@ def test_normalize_rubric_keeps_explicit_experience_threshold_from_jd():
     }
 
 
-def test_normalize_rubric_drops_invented_education_boolean_when_jd_has_no_degree_requirement():
+def test_normalize_rubric_drops_invented_graduation_status_when_jd_has_no_degree_requirement():
     rubric = _normalize_rubric(
         {
             "criteria": [
                 {
-                    "key": "educated",
+                    "key": "graduation_status",
                     "section": "education",
-                    "requirementText": "educated",
+                    "requirementText": "final_year student",
                     "type": "must_have",
-                    "measurable": {"field": "educated", "operator": "=", "value": True},
+                    "measurable": {"field": "graduation_status", "operator": "=", "value": "final_year"},
                 }
             ]
         },

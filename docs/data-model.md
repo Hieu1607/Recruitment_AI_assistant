@@ -30,7 +30,7 @@
   - location_normalized (string, nullable)
   - contact (string, nullable, e.g Linkedin, Github)
   - current_job_title (string, nullable)
-  - educated (boolean, required)
+  - graduation_status (string enum: graduated, final_year, studying, unknown; required)
   - ever_studied_abroad (boolean, required)
   - major (string, nullable)
   - cpa (string, nullable)

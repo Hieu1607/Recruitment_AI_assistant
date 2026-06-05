@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -50,6 +51,10 @@ class BuildPrompts:
     def _language_name(self) -> str:
         return "English" if self._ui_language() == "en" else "Vietnamese"
 
+    def _current_time_block(self) -> str:
+        now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return f"Current time (UTC): {now_utc}\n\n"
+
     def _format_job_context(self, job_context: Optional[Dict[str, Any]]) -> str:
         if not job_context:
             return ""
@@ -88,7 +93,7 @@ class BuildPrompts:
 		"location": string|null,
 		"contact": string|null,
 		"current_job_title": string|null,
-		"educated": boolean,
+		"graduation_status": "graduated"|"final_year"|"studying"|"unknown",
 		"ever_studied_abroad": boolean,
 		"major": string|null,
 		"cpa": string|null,
@@ -153,6 +158,10 @@ class BuildPrompts:
 		- Preserve links wherever they appear, both in the raw text fields and in structured_profile.links.
 		- structured_profile must organize the same CV content into section objects with generic entries that work for any profession, not only software resumes.
 		- experience_years must be numeric (e.g., 3 or 4.5) or null.
+		- graduation_status must be one of: graduated, final_year, studying, unknown.
+		- Use final_year when the CV says the candidate is in the final year or has an expected graduation date but has not graduated yet.
+		- Use studying when the candidate is still studying but not clearly in the final year.
+		- Use graduated only when the CV clearly indicates the degree was completed.
 
 		CV text:
 		{clipped}
@@ -169,7 +178,7 @@ Required schema:
 "location": string|null,
 "contact": string|null,
 "current_job_title": string|null,
-"educated": boolean,
+"graduation_status": "graduated"|"final_year"|"studying"|"unknown",
 "ever_studied_abroad": boolean,
 "major": string|null,
 "cpa": string|null,
@@ -234,6 +243,10 @@ Rules:
 - Preserve links wherever they appear, both in the raw text fields and in structured_profile.links.
 - structured_profile must organize the same CV content into section objects with generic entries that work for any profession, not only software resumes.
 - experience_years must be numeric (e.g., 3 or 4.5) or null.
+- graduation_status must be one of: graduated, final_year, studying, unknown.
+- Use final_year when the CV says the candidate is in the final year or has an expected graduation date but has not graduated yet.
+- Use studying when the candidate is still studying but not clearly in the final year.
+- Use graduated only when the CV clearly indicates the degree was completed.
 - The CV may be in Vietnamese — extract text exactly as written.""".strip()
 
     def build_batch_scoring_prompt(
@@ -311,9 +324,10 @@ Rules:
                     "type": "number",
                     "allowedOperators": [">=", ">", "<=", "<", "==", "="],
                 },
-                "educated": {
-                    "type": "boolean",
+                "graduation_status": {
+                    "type": "string",
                     "allowedOperators": ["==", "="],
+                    "allowedValues": ["graduated", "final_year", "studying", "unknown"],
                 },
                 "ever_studied_abroad": {
                     "type": "boolean",
@@ -349,7 +363,7 @@ Rules:
             "If a requirement cannot be expressed using supportedMeasurableFields, emit it as semantic instead. "
             "Skills and technologies such as Python, TensorFlow, Docker, AWS, or cloud platforms must stay semantic. "
             "Do not create custom measurable keys like python_skill, docker_skill, backend_experience, or cloud_platforms_skill. "
-            "Use true/false measurable checks only for boolean CandidateProfile fields such as educated or ever_studied_abroad. "
+            "Use measurable checks only for supported CandidateProfile fields such as graduation_status, experience_years, or ever_studied_abroad. "
             "For bonus-style thresholds such as IELTS 7.5+ being a plus, emit type upper_bound instead of must_have. "
             "Do not invent sections outside supportedSections. "
             f"Write requirementText in {self._language_name()}.\n\n"
@@ -494,7 +508,7 @@ Rules:
 			contact: String, contact information of the candidate
 			current_job_title: String, current job title of the candidate
 
-			educated: Boolean, whether the candidate is educated
+			graduation_status: String, one of graduated, final_year, studying, unknown
 			ever_studied_abroad: Boolean, whether the candidate has ever studied abroad
 			major: String, major of the candidate
 			cpa: String, CPA status of the candidate
@@ -548,6 +562,7 @@ Return a JSON object with the following structure:
 - experience_years → numeric filters
 - location_normalized → exact match
 - current_job_title → contains
+- graduation_status → exact match
 
 4. Text fields:
 - skills_text, experience_text → use "contains"
@@ -560,9 +575,9 @@ Return a JSON object with the following structure:
 
 7. Return valid JSON only. No explanation.
 
----
+--- 
 		Question: """
-        return _template + question + "\n"
+        return self._current_time_block() + _template + question + "\n"
 
     def build_llm_query_prompt(
         self,
@@ -578,7 +593,7 @@ Return a JSON object with the following structure:
 		  "qualified_candidates": {{candidate_id: string, reason: string}} // a dictionary of candidate id and reason for each candidate that meet the criteria
 		}}
 
-		{job_context_block}Candidate data: {json.dumps(candidate_data, ensure_ascii=True)}
+		{self._current_time_block()}{job_context_block}Candidate data: {json.dumps(candidate_data, ensure_ascii=True)}
 		Provide a concise and relevant answer to the user's question using only the information available in the candidate data. Do not make assumptions or include information that is not present in the candidate data.
 		When the question refers to "this job", "công việc này", or the current role, use the current job context above.
 		Write every reason field in {self._language_name()}.
@@ -595,22 +610,39 @@ Return a JSON object with the following structure:
         """Build a RAG prompt to generate a natural-language answer from candidate data."""
         candidate_json = json.dumps(candidates, ensure_ascii=False, indent=2)
         job_context_block = self._format_job_context(job_context)
-        return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below with simple explanation.
+        return f"""You are a recruitment assistant. Answer the user's question based solely on the candidate data provided below.
 
 Rules:
-- Be concise and specific. Reference candidates by name when relevant.
+- Provide a detailed, comprehensive, and well-structured answer. Explain clearly why candidates match or do not match the criteria.
+- Reference candidates by name when relevant. For each matching candidate, present key details such as their qualifications, current job title, years of experience, key skills, projects, and education where relevant to the query.
+- Use bold formatting (e.g. **Candidate Name**) to highlight candidate names, key technologies, or major credentials.
+- Use bullet points or numbered lists to organize candidate profiles clearly and make the response highly scannable.
 - Do not invent or assume information not present in the data.
+- NEVER expose internal database field names, schema details, or raw technical metadata in your answer. For example, do NOT write "graduation_status: graduated", "experience_years", "skills_text", "location_normalized", or any JSON key names from the candidate data. Instead, rephrase naturally — e.g. say "đã tốt nghiệp" or "đang học năm cuối" instead of raw status values, say "5 năm kinh nghiệm" instead of "experience_years: 5".
 - Write the answer in the SAME language as the question, not the UI language.
 - If the data is empty or no candidates match, reply with a warm, helpful no-match message in the SAME language as the question.
 - For no-match replies, briefly suggest how the user could broaden or adjust the search.
 - When the question refers to "this job", "công việc này", or the current role, use the current job context below.
 - Keep the wording natural, friendly, and recruiter-focused.
 - End with 1 or 2 short follow-up suggestions in the SAME language as the question.
-- Example Vietnamese follow-up suggestions:
-  - "Bạn có muốn biết thêm về ứng viên phù hợp nhất không?"
-  - "Bạn có muốn tìm ứng viên thỏa mãn điều kiện gần nhất không?"
+- Make the follow-up suggestions dynamic and grounded in the answer, not generic or repetitive.
+- Do not reuse the same fixed follow-up wording across responses.
+- Base each follow-up on the most useful next step from the candidate data, such as:
+  - learning more about the best-matching candidate,
+  - reviewing the closest matching candidates who nearly meet the criteria,
+  - comparing 2 promising candidates,
+  - broadening or narrowing a filter,
+  - focusing on a specific skill, experience level, education background, location, or language.
+- Phrase follow-ups as natural conversational suggestions, not rigid templates.
+- If there is a strong top match, one follow-up can invite the user to explore that candidate in more detail.
+- If there are near matches or no exact matches, one follow-up can suggest reviewing the closest matching candidates or relaxing a constraint.
+- Keep each follow-up short, specific, and directly relevant to the answer that was just given.
+- Example styles in Vietnamese (do not copy verbatim; adapt them to the actual answer):
+  - "Bạn có muốn mình phân tích kỹ hơn ứng viên phù hợp nhất cho vị trí này không?"
+  - "Bạn có muốn xem những ứng viên gần đạt nhất nếu mình nới điều kiện một chút không?"
+  - "Bạn có muốn mình so sánh nhanh 2 ứng viên nổi bật nhất theo yêu cầu này không?"
 
-{job_context_block}Candidate data:
+{self._current_time_block()}{job_context_block}Candidate data:
 {candidate_json}
 
 Question: {question}
@@ -652,21 +684,23 @@ Routing rules (only when is_recruitment_related is true):
 - dsl_question_query: rephrase the question for structured DB filtering. Set null if not applicable.
 - llm_question_query: rephrase the question for semantic LLM analysis. Set null if not applicable.
 - dsl_relevant_fields / llm_relevant_fields: fields from the schema below relevant to each path.
-- Use DSL for: full_name, phone, email, location_normalized, contact, current_job_title, educated, ever_studied_abroad, major, cpa, experience_years.
+- Use DSL for: full_name, phone, email, location_normalized, contact, current_job_title, graduation_status, ever_studied_abroad, major, cpa, experience_years.
 - Use LLM for: education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, other_text.
 - Questions that mention explicit candidate names should use DSL with full_name.
 - If the user asks to count candidates matching a name or other structured attribute, prefer DSL.
 - If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible.
+- Do not rely on graduation_status alone for broader concepts such as not yet graduating, still studying, final-year students, expected graduation, or "chưa tốt nghiệp".
+- For those graduation-status semantics, prefer LLM routing with education_text and summary_text, because the relevant evidence may be described in free text and may span multiple statuses.
 - Both paths can apply to the same question.
 
 Database schema:
   full_name, phone, email, location_normalized, contact, current_job_title,
-  educated (Boolean), ever_studied_abroad (Boolean), major, cpa,
+  graduation_status (String), ever_studied_abroad (Boolean), major, cpa,
   education_text, experience_text, experience_years (Number), skills_text,
   languages_text, projects_text, summary_text, achievements_text,
   publications_text, certifications_text, references_text, other_text
 
-{job_context_block}If the question says "this job", "công việc này", or otherwise refers to the current role, use the current job context above to interpret it.
+{self._current_time_block()}{job_context_block}If the question says "this job", "công việc này", or otherwise refers to the current role, use the current job context above to interpret it.
 
 Question: {question}"""
 

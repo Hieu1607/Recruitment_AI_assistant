@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -12,7 +13,7 @@ import requests
 from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.models.candidate_profile import CandidateProfile
-from src.models.enums import ProfileStatus, UploadStatus
+from src.models.enums import GraduationStatus, ProfileStatus, UploadStatus
 from src.models.resume_document import ExtractionTrace, ResumeDocument
 from src.prompts.build_prompts import build_prompts
 from src.services.llm_service import LLMProvider
@@ -36,6 +37,13 @@ _STRUCTURED_SECTION_TEXT_FIELDS = {
 }
 logger = logging.getLogger(__name__)
 
+_GRADUATION_STATUS_VALUES = {
+    GraduationStatus.UNKNOWN.value,
+    GraduationStatus.STUDYING.value,
+    GraduationStatus.FINAL_YEAR.value,
+    GraduationStatus.GRADUATED.value,
+}
+
 
 def _normalize_text(value: Any) -> Optional[str]:
     if value is None:
@@ -44,6 +52,106 @@ def _normalize_text(value: Any) -> Optional[str]:
         value = str(value)
     normalized = value.strip()
     return normalized or None
+
+
+def _normalize_search_text(value: Any) -> str:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return ""
+    text = normalized.lower().replace("đ", "d")
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _infer_graduation_status_from_text(*values: Any) -> Optional[str]:
+    text = "\n".join(part for part in (_normalize_search_text(value) for value in values) if part)
+    if not text:
+        return None
+
+    final_year_markers = (
+        "final-year",
+        "final year",
+        "last-year student",
+        "sinh vien nam cuoi",
+        "hoc nam cuoi",
+        "nam cuoi",
+        "expected graduation",
+        "expected to graduate",
+        "du kien tot nghiep",
+        "sap tot nghiep",
+    )
+    if any(marker in text for marker in final_year_markers):
+        return GraduationStatus.FINAL_YEAR.value
+
+    studying_markers = (
+        "currently studying",
+        "still studying",
+        "undergraduate student",
+        "master student",
+        "phd student",
+        "chua tot nghiep",
+        "chua ra truong",
+        "dang hoc",
+        "dang hoc tai",
+        "dang la sinh vien",
+        "sinh vien",
+        "student at",
+    )
+    if any(marker in text for marker in studying_markers):
+        return GraduationStatus.STUDYING.value
+
+    graduated_markers = (
+        "graduated",
+        "bachelor of",
+        "master of",
+        "doctor of philosophy",
+        "phd",
+        "degree awarded",
+        "cử nhân",
+        "thạc sĩ",
+        "tiến sĩ",
+        "đã tốt nghiệp",
+        "tot nghiep",
+    )
+    if any(marker in text for marker in graduated_markers):
+        return GraduationStatus.GRADUATED.value
+
+    return None
+
+
+def _normalize_graduation_status(value: Any, parsed: Optional[Dict[str, Any]] = None) -> str:
+    normalized = _normalize_search_text(value).replace("-", "_").replace(" ", "_")
+    alias_map = {
+        "graduated": GraduationStatus.GRADUATED.value,
+        "graduate": GraduationStatus.GRADUATED.value,
+        "final_year": GraduationStatus.FINAL_YEAR.value,
+        "finalyear": GraduationStatus.FINAL_YEAR.value,
+        "studying": GraduationStatus.STUDYING.value,
+        "in_progress": GraduationStatus.STUDYING.value,
+        "current_student": GraduationStatus.STUDYING.value,
+        "unknown": GraduationStatus.UNKNOWN.value,
+    }
+    if normalized in alias_map:
+        return alias_map[normalized]
+
+    if isinstance(value, bool):
+        return GraduationStatus.GRADUATED.value if value else GraduationStatus.UNKNOWN.value
+
+    parsed = parsed or {}
+    inferred = _infer_graduation_status_from_text(
+        parsed.get("graduation_status"),
+        parsed.get("education"),
+        parsed.get("summary"),
+        parsed.get("current_job_title"),
+    )
+    if inferred:
+        return inferred
+
+    legacy_educated = parsed.get("educated")
+    if isinstance(legacy_educated, bool):
+        return GraduationStatus.GRADUATED.value if legacy_educated else GraduationStatus.UNKNOWN.value
+
+    return GraduationStatus.UNKNOWN.value
 
 
 def _resume_llm_provider() -> LLMProvider:
@@ -478,8 +586,8 @@ def _build_profile_from_parsed(
         location_normalized=_normalize_text(parsed.get("location")),
         contact=_normalize_text(parsed.get("contact")),
         current_job_title=_normalize_text(parsed.get("current_job_title")),
-        educated=_normalize_bool(parsed.get("educated")),
         ever_studied_abroad=_normalize_bool(parsed.get("ever_studied_abroad")),
+        graduation_status=_normalize_graduation_status(parsed.get("graduation_status"), parsed),
         major=_normalize_text(parsed.get("major")),
         cpa=_normalize_text(parsed.get("cpa")),
         education_text=_normalize_text(parsed.get("education")),

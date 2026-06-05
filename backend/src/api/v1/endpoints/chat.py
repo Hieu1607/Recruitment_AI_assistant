@@ -86,7 +86,7 @@ def _load_candidates(db, limit: int) -> List[Dict[str, Any]]:
             "location_normalized": r.location_normalized,
             "contact": r.contact,
             "current_job_title": r.current_job_title,
-            "educated": r.educated,
+            "graduation_status": r.graduation_status,
             "ever_studied_abroad": r.ever_studied_abroad,
             "major": r.major,
             "cpa": r.cpa,

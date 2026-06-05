@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.services.ai_agent.nodes import _apply_dsl, _resolve_candidates, answer_node, dsl_node  # noqa: E402
+from src.services.ai_agent.nodes import _apply_dsl, _resolve_candidates, answer_node, dsl_node, llm_node, router_node  # noqa: E402
 
 
 def test_resolve_candidates_uses_scoped_current_candidates(monkeypatch):
@@ -121,8 +121,8 @@ def test_answer_node_falls_back_to_dsl_candidates_when_llm_result_is_empty(monke
     )
 
     assert seen["call"]["candidates"] == [
-        {"id": "cand-1", "full_name": "Nguyễn Minh Hiếu", "skills_text": "Python"},
-        {"id": "cand-2", "full_name": "Hoàng Lê Quân", "skills_text": "Java"},
+        {"id": "cand-1", "full_name": "Nguyễn Minh Hiếu", "skills_text": "Python", "summary_text": None},
+        {"id": "cand-2", "full_name": "Hoàng Lê Quân", "skills_text": "Java", "summary_text": None},
     ]
     assert result["answer"] == "Nguyễn Minh Hiếu và Hoàng Lê Quân là hai ứng viên cần so sánh."
 
@@ -206,8 +206,8 @@ def test_answer_node_keeps_all_named_candidates_for_comparison_even_if_llm_quali
     )
 
     assert seen["call"]["candidates"] == [
-        {"id": "cand-1", "full_name": "Nguyễn Minh Hiếu", "skills_text": "Python"},
-        {"id": "cand-2", "full_name": "AN NGUYEN", "skills_text": "Java"},
+        {"id": "cand-1", "full_name": "Nguyễn Minh Hiếu", "skills_text": "Python", "summary_text": None},
+        {"id": "cand-2", "full_name": "AN NGUYEN", "skills_text": "Java", "summary_text": None},
     ]
     assert result["answer"] == "So sánh hai ứng viên hoàn tất."
 
@@ -242,3 +242,75 @@ def test_dsl_node_recovers_named_candidates_when_generated_dsl_filters_everythin
         {"id": "cand-1", "full_name": "Nguyen Minh Hieu"},
         {"id": "cand-2", "full_name": "AN NGUYEN"},
     ]
+
+
+def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatch):
+    seen = {}
+
+    def fake_build_llm_query_prompt(question, candidates, job_context=None):
+        seen["call"] = {"question": question, "candidates": candidates, "job_context": job_context}
+        return "prompt"
+
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"total_qualified_candidates": 1, "qualified_candidates": {"cand-1": "summary match"}}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes.build_prompts.build_llm_query_prompt",
+        fake_build_llm_query_prompt,
+    )
+
+    result = llm_node(
+        {
+            "question": "Ai phù hợp với vị trí thiên về product mindset?",
+            "router_output": {"llm_relevant_fields": ["skills_text"]},
+            "current_candidates": [
+                {
+                    "id": "cand-1",
+                    "full_name": "Candidate One",
+                    "skills_text": "Python",
+                    "summary_text": "Strong product sense and customer discovery background.",
+                }
+            ],
+        }
+    )
+
+    assert seen["call"]["candidates"] == [
+        {
+            "id": "cand-1",
+            "full_name": "Candidate One",
+            "skills_text": "Python",
+            "summary_text": "Strong product sense and customer discovery background.",
+        }
+    ]
+    assert result["llm_result"]["qualified_candidates"] == {"cand-1": "summary match"}
+
+
+def test_router_node_overrides_educated_only_route_for_not_graduated_queries(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["graduation_status"], "dsl_question_query": "graduation_status = final_year", "llm_question_query": null, "dsl_relevant_fields": ["graduation_status"], "llm_relevant_fields": [], "reasoning": "Structured graduation status filter"}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = router_node({"question": "Tìm các ứng viên chưa tốt nghiệp đại học"})
+
+    assert result["router_output"]["dsl_question_query"] is None
+    assert result["router_output"]["llm_question_query"] == "Tìm các ứng viên chưa tốt nghiệp đại học"
+    assert result["router_output"]["llm_relevant_fields"] == ["education_text", "summary_text"]
+    assert "graduation-status semantics" in result["router_output"]["reasoning"]

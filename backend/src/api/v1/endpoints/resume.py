@@ -2,7 +2,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from src.models.candidate_profile import CandidateProfile
@@ -124,7 +124,7 @@ class CandidateProfileResponse(BaseModel):
     location_normalized: Optional[str]
     contact: Optional[str]
     current_job_title: Optional[str]
-    educated: bool
+    graduation_status: str
     ever_studied_abroad: bool
     major: Optional[str]
     cpa: Optional[str]
@@ -178,7 +178,7 @@ def get_candidate_profile_by_id(
         location_normalized=profile.location_normalized,
         contact=profile.contact,
         current_job_title=profile.current_job_title,
-        educated=profile.educated,
+        graduation_status=profile.graduation_status,
         ever_studied_abroad=profile.ever_studied_abroad,
         major=profile.major,
         cpa=profile.cpa,
@@ -237,7 +237,7 @@ def get_candidate_profile(
         location_normalized=profile.location_normalized,
         contact=profile.contact,
         current_job_title=profile.current_job_title,
-        educated=profile.educated,
+        graduation_status=profile.graduation_status,
         ever_studied_abroad=profile.ever_studied_abroad,
         major=profile.major,
         cpa=profile.cpa,
@@ -329,6 +329,49 @@ def get_resume_document(
     if result is None:
         raise HTTPException(status_code=404, detail=f"Resume {resume_id} not found")
     return result
+
+
+@router.get(
+    "/{resume_id}/file",
+    summary="Download or preview a resume PDF",
+)
+def get_resume_document_file(
+    resume_id: uuid.UUID,
+    db=Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    resume = (
+        db.execute(
+            select(ResumeDocument)
+            .join(Job, Job.id == ResumeDocument.job_id)
+            .where(ResumeDocument.id == resume_id, Job.owner_user_id == current_user.id)
+        )
+        .scalars()
+        .first()
+    )
+    if resume is None:
+        raise HTTPException(status_code=404, detail=f"Resume {resume_id} not found")
+
+    storage_uri = str(resume.storage_uri or "").strip()
+    if not storage_uri:
+        raise HTTPException(status_code=404, detail="Resume file is unavailable")
+
+    try:
+        if storage_uri.startswith("s3://"):
+            pdf_bytes = get_object_storage().download_bytes(storage_uri)
+        else:
+            pdf_bytes = Path(storage_uri).read_bytes()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Resume file not found") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail="Failed to load resume file") from exc
+
+    filename = Path(resume.original_file_name or "resume.pdf").name or "resume.pdf"
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "no-store",
+    }
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
 # ---------------------------------------------------------------------------
