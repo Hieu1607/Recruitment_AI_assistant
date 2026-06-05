@@ -289,7 +289,19 @@ def test_interview_template_endpoints_enforce_recruiter_job_ownership(
 def test_recruiter_can_create_and_list_interview_invitations(
     api_client: TestClient,
     seeded_interview_domain,
+    monkeypatch,
 ):
+    import worker.tasks as tasks_module
+
+    queued = []
+
+    class FakeTask:
+        @staticmethod
+        def delay(invitation_id):
+            queued.append(invitation_id)
+
+    monkeypatch.setattr(tasks_module, "send_interview_invitation_email", FakeTask, raising=False)
+
     job_id = seeded_interview_domain["primary_job_id"]
     template_id = seeded_interview_domain["template_id"]
     candidate_id = seeded_interview_domain["candidate_id"]
@@ -322,6 +334,29 @@ def test_recruiter_can_create_and_list_interview_invitations(
     assert listed["total"] == 1
     assert listed["items"][0]["id"] == created["id"]
     assert listed["items"][0]["public_url"] == created["public_url"]
+    assert queued == [created["id"]]
+
+
+def test_create_interview_invitation_does_not_set_sent_at_until_email_success(
+    db_session,
+    seeded_interview_domain,
+):
+    from src.schemas.interview_invitation import InterviewInvitationCreateRequest
+    from src.services.interview_invitation_service import create_interview_invitation
+
+    invitation = create_interview_invitation(
+        db_session,
+        user_id=seeded_interview_domain["user_id"],
+        body=InterviewInvitationCreateRequest(
+            job_id=seeded_interview_domain["primary_job_id"],
+            candidate_profile_id=seeded_interview_domain["candidate_id"],
+            interview_template_id=seeded_interview_domain["template_id"],
+            expires_in_hours=72,
+        ),
+    )
+
+    assert invitation.sent_at is None
+    assert invitation.status == "pending"
 
 
 def test_interview_template_rejects_whitespace_only_trimmed_fields(

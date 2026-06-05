@@ -114,6 +114,91 @@ def generate_interview_report(self, interview_session_id: str):
         raise self.retry(exc=exc)
 
 
+@celery_app.task(
+    name="worker.tasks.send_interview_invitation_email",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    acks_late=True,
+)
+def send_interview_invitation_email(self, invitation_id: str):
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from src.models.interview_invitation import InterviewInvitation
+    from src.models.oauth_identity import OAuthIdentity
+    from src.models.session import SessionLocal
+    from src.models.user_account import UserAccount
+    from src.services.email_templates import build_interview_invitation_email
+    from src.services.interview_invitation_service import build_interview_public_url
+    from src.services.mail_service import send_email
+
+    db = SessionLocal()
+    try:
+        try:
+            invitation_lookup_key = uuid.UUID(invitation_id)
+        except (TypeError, ValueError, AttributeError):
+            invitation_lookup_key = invitation_id
+
+        invitation = db.get(InterviewInvitation, invitation_lookup_key)
+        if invitation is None:
+            return {"sent": False, "reason": "invitation_not_found"}
+        if invitation.sent_at is not None:
+            return {"sent": True, "reason": "already_sent"}
+
+        candidate_email = invitation.candidate_profile.email if invitation.candidate_profile else None
+        if not candidate_email:
+            invitation.status = "email_failed"
+            db.commit()
+            return {"sent": False, "reason": "candidate_email_missing"}
+
+        user = db.get(UserAccount, invitation.sent_by_user_id)
+        if user is None:
+            invitation.status = "email_failed"
+            db.commit()
+            return {"sent": False, "reason": "sender_not_found"}
+
+        identity = (
+            db.execute(
+                select(OAuthIdentity).where(
+                    OAuthIdentity.user_id == user.id,
+                    OAuthIdentity.provider == "google",
+                )
+            )
+            .scalar_one_or_none()
+        )
+        if identity is None:
+            invitation.status = "email_failed"
+            db.commit()
+            return {"sent": False, "reason": "google_identity_missing"}
+
+        expires_at_text = invitation.expires_at.isoformat() if invitation.expires_at else None
+        subject, body = build_interview_invitation_email(
+            candidate_name=invitation.candidate_profile.full_name,
+            job_title=invitation.job.title,
+            public_url=build_interview_public_url(invitation.public_token),
+            expires_at_text=expires_at_text,
+        )
+        result = send_email(
+            sender=user.email,
+            to_email=candidate_email,
+            subject=subject,
+            body=body,
+            identity=identity,
+        )
+        invitation.sent_at = datetime.now(timezone.utc)
+        invitation.status = "sent"
+        db.commit()
+        return {"sent": True, "gmail_message_id": result.get("id")}
+    except Exception as exc:
+        db.rollback()
+        logger.exception("send_interview_invitation_email crashed for %s", invitation_id)
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
+
+
 # Backward-compatible stubs ------------------------------------------------
 
 

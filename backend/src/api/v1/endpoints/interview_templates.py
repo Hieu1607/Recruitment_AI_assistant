@@ -86,6 +86,9 @@ def create_job_interview_invitation(
     current_user: UserAccount = Depends(get_current_user),
 ):
     invitation = create_interview_invitation(db, user_id=current_user.id, body=body)
+    from worker.tasks import send_interview_invitation_email
+
+    send_interview_invitation_email.delay(str(invitation.id))
     return serialize_interview_invitation(invitation)
 
 

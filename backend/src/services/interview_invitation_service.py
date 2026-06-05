@@ -71,7 +71,6 @@ def create_interview_invitation(
         interview_template_id=template.id,
         expires_at=expires_at,
         sent_by_user_id=user_id,
-        sent_at=datetime.now(timezone.utc),
     )
     db.add(invitation)
     db.commit()
