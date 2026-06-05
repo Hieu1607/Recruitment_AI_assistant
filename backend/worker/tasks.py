@@ -199,6 +199,80 @@ def send_interview_invitation_email(self, invitation_id: str):
         db.close()
 
 
+@celery_app.task(
+    name="worker.tasks.send_outreach_email",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    acks_late=True,
+)
+def send_outreach_email(self, message_id: str):
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from src.models.enums import SentStatus
+    from src.models.oauth_identity import OAuthIdentity
+    from src.models.outreach import OutreachMessage
+    from src.models.session import SessionLocal
+    from src.models.user_account import UserAccount
+    from src.services.email_templates import build_outreach_email
+    from src.services.mail_service import send_email
+
+    db = SessionLocal()
+    try:
+        try:
+            message_lookup_key = uuid.UUID(message_id)
+        except (TypeError, ValueError, AttributeError):
+            message_lookup_key = message_id
+
+        message = db.get(OutreachMessage, message_lookup_key)
+        if message is None:
+            return {"sent": False, "reason": "message_not_found"}
+        if message.sent_status == SentStatus.SENT:
+            return {"sent": True, "reason": "already_sent"}
+
+        candidate_email = message.candidate_profile.email if message.candidate_profile else None
+        if not candidate_email:
+            message.sent_status = SentStatus.FAILED
+            db.commit()
+            return {"sent": False, "reason": "candidate_email_missing"}
+
+        user = db.get(UserAccount, message.created_by_user_id)
+        identity = (
+            db.execute(
+                select(OAuthIdentity).where(
+                    OAuthIdentity.user_id == message.created_by_user_id,
+                    OAuthIdentity.provider == "google",
+                )
+            )
+            .scalar_one_or_none()
+        )
+        if user is None or identity is None:
+            message.sent_status = SentStatus.FAILED
+            db.commit()
+            return {"sent": False, "reason": "sender_google_identity_missing"}
+
+        subject, body = build_outreach_email(subject=message.subject, body=message.body)
+        send_email(
+            sender=user.email,
+            to_email=candidate_email,
+            subject=subject,
+            body=body,
+            identity=identity,
+        )
+        message.sent_status = SentStatus.SENT
+        message.sent_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"sent": True}
+    except Exception as exc:
+        db.rollback()
+        logger.exception("send_outreach_email crashed for %s", message_id)
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
+
+
 # Backward-compatible stubs ------------------------------------------------
 
 

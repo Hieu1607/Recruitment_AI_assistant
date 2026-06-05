@@ -13,12 +13,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.models.candidate_profile import CandidateProfile
+from src.models.deps import get_current_user, get_db
 from src.models.enums import ContentSource, SentStatus
 from src.models.outreach import OutreachMessage
+from src.models.user_account import UserAccount
 from src.models.session import SessionLocal
 
 router = APIRouter()
@@ -173,6 +175,29 @@ def update_message(message_id: uuid.UUID, body: OutreachUpdateRequest):
         return _ser(msg)
     finally:
         db.close()
+
+
+@router.post("/{message_id}/send", response_model=OutreachResponse, status_code=status.HTTP_202_ACCEPTED)
+def send_message(
+    message_id: uuid.UUID,
+    db=Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    msg = _get_or_404(db, OutreachMessage, message_id, "OutreachMessage")
+    if msg.created_by_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"OutreachMessage '{message_id}' not found")
+    if msg.sent_status == SentStatus.SENT:
+        return _ser(msg)
+    if not msg.candidate_profile or not msg.candidate_profile.email:
+        msg.sent_status = SentStatus.FAILED
+        db.commit()
+        db.refresh(msg)
+        return _ser(msg)
+
+    from worker.tasks import send_outreach_email
+
+    send_outreach_email.delay(str(msg.id))
+    return _ser(msg)
 
 
 @router.delete("/{message_id}", status_code=204)
