@@ -1,4 +1,5 @@
 import { api, type CollectionResponse, type SessionResponse, type TurnResponse } from "@/api";
+import { parseAxiosError } from "@/api/errors";
 import {
     Badge,
     Button,
@@ -183,8 +184,8 @@ function RenameModal({
       onSuccess();
       onClose();
     },
-    onError: (err: any) => {
-      if (err?.response?.status === 409) {
+    onError: (err: unknown) => {
+      if (parseAxiosError(err).status === 409) {
         setConflict(true);
       } else {
         toast.error("Failed to rename collection");

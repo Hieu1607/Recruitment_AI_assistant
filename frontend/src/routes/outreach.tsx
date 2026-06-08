@@ -749,7 +749,7 @@ export default function OutreachRoute() {
       }
       return next;
     }, { replace: true });
-  }, [params, setParams, setUser, user?.gmail_connected]);
+  }, [params, setParams, setUser, user]);
 
   const handleConnectGmail = useCallback(async () => {
     if (isConnectPending) return;

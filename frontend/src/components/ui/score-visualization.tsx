@@ -74,13 +74,13 @@ function createRadarAxisTick(size: number) {
   const horizontalOffset = Math.max(8, Math.round(size * 0.02));
   const lineHeight = 13;
 
-  return function RadarAxisTick(props: any) {
-    const { x = 0, y = 0, textAnchor = "middle", payload } = props as {
-      x?: number | string;
-      y?: number | string;
-      textAnchor?: "inherit" | "start" | "middle" | "end";
-      payload?: { value?: string };
-    };
+  return function RadarAxisTick(props: {
+    x?: number | string;
+    y?: number | string;
+    textAnchor?: "inherit" | "start" | "middle" | "end";
+    payload?: { value?: string };
+  }) {
+    const { x = 0, y = 0, textAnchor = "middle", payload } = props;
     const fullLabel = String(payload?.value ?? "").trim();
     const lines = wrapRadarLabel(fullLabel, maxCharsPerLine);
     const textOffset = textAnchor === "start" ? horizontalOffset : textAnchor === "end" ? -horizontalOffset : 0;

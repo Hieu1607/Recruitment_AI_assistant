@@ -441,6 +441,91 @@ export interface ShortlistItemCreateRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Shortlist — Dispatch
+// ---------------------------------------------------------------------------
+
+export interface DispatchCollectionResponse {
+  id: string;
+  name: string;
+  item_count: number;
+}
+
+export interface DispatchJobResponse {
+  id: string;
+  title: string;
+}
+
+export interface DispatchOutreachStatus {
+  latest_message_id: string;
+  status: SentStatus;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface DispatchInterviewStatus {
+  latest_invitation_id: string;
+  status: string;
+  interview_template_id: string;
+  template_name: string | null;
+  sent_at: string | null;
+  completed_at: string | null;
+}
+
+export interface DispatchCandidateResponse {
+  candidate_profile_id: string;
+  full_name: string;
+  email: string | null;
+  current_job_title: string | null;
+  skills_text: string | null;
+  contact_status: "ready" | "missing_email";
+  outreach: DispatchOutreachStatus | null;
+  interview: DispatchInterviewStatus | null;
+  blockers: string[];
+}
+
+export interface DispatchCapabilitiesResponse {
+  gmail_connected: boolean;
+  active_interview_templates_count: number;
+}
+
+export interface DispatchSummaryResponse {
+  collection: DispatchCollectionResponse;
+  job: DispatchJobResponse | null;
+  candidates: DispatchCandidateResponse[];
+  capabilities: DispatchCapabilitiesResponse;
+}
+
+export interface OutreachDraftBatchRequest {
+  candidate_profile_ids: string[];
+  subject_template: string;
+  body_template: string;
+  content_source?: ContentSource;
+  force_update?: boolean;
+}
+
+export interface InterviewInvitationBatchRequest {
+  candidate_profile_ids: string[];
+  job_id: string;
+  interview_template_id: string;
+  expires_in_hours?: number | null;
+}
+
+export interface BatchCandidateResult {
+  candidate_profile_id: string;
+  full_name: string | null;
+  status: string;
+  reason: string | null;
+  record_id: string | null;
+}
+
+export interface BatchActionResponse {
+  created_count: number;
+  skipped_count: number;
+  failed_count: number;
+  results: BatchCandidateResult[];
+}
+
+// ---------------------------------------------------------------------------
 // Outreach Messages
 // ---------------------------------------------------------------------------
 

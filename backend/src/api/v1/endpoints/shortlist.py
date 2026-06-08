@@ -29,18 +29,27 @@ Items
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
+from src.models.candidate_profile import CandidateProfile
+from src.models.enums import ContentSource, SentStatus
+from src.models.interview_invitation import InterviewInvitation
+from src.models.interview_template import InterviewTemplate
+from src.models.job import Job
+from src.models.oauth_identity import GMAIL_SEND_SCOPE, OAuthIdentity
+from src.models.outreach import OutreachMessage
 from src.models.query_shortlist import (
     QuerySession,
     QueryTurn,
     ShortlistCollection,
     ShortlistItem,
 )
+from src.models.resume_document import ResumeDocument
 from src.models.session import SessionLocal
 
 router = APIRouter()
@@ -161,6 +170,90 @@ class ItemListResponse(BaseModel):
     total: int
 
 
+# --- Shortlist dispatch ---
+
+
+class DispatchCollectionResponse(BaseModel):
+    id: str
+    name: str
+    item_count: int
+
+
+class DispatchJobResponse(BaseModel):
+    id: str
+    title: str
+
+
+class DispatchOutreachStatus(BaseModel):
+    latest_message_id: str
+    status: str
+    created_at: datetime
+    sent_at: Optional[datetime]
+
+
+class DispatchInterviewStatus(BaseModel):
+    latest_invitation_id: str
+    status: str
+    interview_template_id: str
+    template_name: Optional[str]
+    sent_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+
+class DispatchCandidateResponse(BaseModel):
+    candidate_profile_id: str
+    full_name: str
+    email: Optional[str]
+    current_job_title: Optional[str]
+    skills_text: Optional[str]
+    contact_status: str
+    outreach: Optional[DispatchOutreachStatus]
+    interview: Optional[DispatchInterviewStatus]
+    blockers: list[str]
+
+
+class DispatchCapabilitiesResponse(BaseModel):
+    gmail_connected: bool
+    active_interview_templates_count: int
+
+
+class DispatchSummaryResponse(BaseModel):
+    collection: DispatchCollectionResponse
+    job: Optional[DispatchJobResponse]
+    candidates: list[DispatchCandidateResponse]
+    capabilities: DispatchCapabilitiesResponse
+
+
+class OutreachDraftBatchRequest(BaseModel):
+    candidate_profile_ids: list[uuid.UUID] = Field(..., min_length=1)
+    subject_template: str = Field(..., min_length=1, max_length=255)
+    body_template: str = Field(..., min_length=1)
+    content_source: ContentSource = ContentSource.TEMPLATE
+    force_update: bool = False
+
+
+class InterviewInvitationBatchRequest(BaseModel):
+    candidate_profile_ids: list[uuid.UUID] = Field(..., min_length=1)
+    job_id: uuid.UUID
+    interview_template_id: uuid.UUID
+    expires_in_hours: Optional[int] = Field(None, ge=1, le=24 * 30)
+
+
+class BatchCandidateResult(BaseModel):
+    candidate_profile_id: str
+    full_name: Optional[str]
+    status: str
+    reason: Optional[str] = None
+    record_id: Optional[str] = None
+
+
+class BatchActionResponse(BaseModel):
+    created_count: int
+    skipped_count: int
+    failed_count: int
+    results: list[BatchCandidateResult]
+
+
 # ---------------------------------------------------------------------------
 # Serialisers
 # ---------------------------------------------------------------------------
@@ -209,6 +302,163 @@ def _ser_item(i: ShortlistItem) -> ItemResponse:
         shortlist_collection_id=str(i.shortlist_collection_id),
         candidate_profile_id=str(i.candidate_profile_id),
         added_at=i.added_at,
+    )
+
+
+def _render_candidate_template(template: str, candidate: CandidateProfile, job: Job | None) -> str:
+    candidate_name = candidate.full_name or "candidate"
+    job_title = job.title if job is not None else ""
+    return (
+        template.replace("{{candidate_name}}", candidate_name)
+        .replace("{{candidate_email}}", candidate.email or "")
+        .replace("{{job_title}}", job_title)
+    )
+
+
+def _load_collection_candidates(db, collection_id: uuid.UUID) -> tuple[ShortlistCollection, list[CandidateProfile]]:
+    collection = _get_or_404(db, ShortlistCollection, collection_id, "Collection")
+    rows = (
+        db.query(ShortlistItem)
+        .options(
+            joinedload(ShortlistItem.candidate_profile)
+            .joinedload(CandidateProfile.resume_document)
+            .joinedload(ResumeDocument.job)
+        )
+        .filter(ShortlistItem.shortlist_collection_id == collection_id)
+        .order_by(ShortlistItem.added_at.asc())
+        .all()
+    )
+    return collection, [row.candidate_profile for row in rows if row.candidate_profile is not None]
+
+
+def _candidate_job(candidate: CandidateProfile | None) -> Job | None:
+    if candidate is None or candidate.resume_document is None:
+        return None
+    return candidate.resume_document.job
+
+
+def _collection_job(candidates: list[CandidateProfile]) -> Job | None:
+    for candidate in candidates:
+        job = _candidate_job(candidate)
+        if job is not None:
+            return job
+    return None
+
+
+def _latest_outreach(db, candidate_id: uuid.UUID) -> OutreachMessage | None:
+    return (
+        db.query(OutreachMessage)
+        .filter(OutreachMessage.candidate_profile_id == candidate_id)
+        .order_by(OutreachMessage.created_at.desc())
+        .first()
+    )
+
+
+def _latest_interview(
+    db, candidate_id: uuid.UUID, job_id: uuid.UUID | None = None
+) -> InterviewInvitation | None:
+    query = db.query(InterviewInvitation).filter(
+        InterviewInvitation.candidate_profile_id == candidate_id
+    )
+    if job_id is not None:
+        query = query.filter(InterviewInvitation.job_id == job_id)
+    return query.order_by(InterviewInvitation.created_at.desc()).first()
+
+
+def _active_interview_template_count(db, job_id: uuid.UUID | None) -> int:
+    if job_id is None:
+        return 0
+    return (
+        db.query(InterviewTemplate)
+        .filter(InterviewTemplate.job_id == job_id, InterviewTemplate.status == "active")
+        .count()
+    )
+
+
+def _gmail_connected(db, user_id: uuid.UUID) -> bool:
+    identity = (
+        db.query(OAuthIdentity)
+        .filter(
+            OAuthIdentity.user_id == user_id,
+            OAuthIdentity.provider == "google",
+        )
+        .first()
+    )
+    return bool(
+        identity
+        and identity.refresh_token_encrypted
+        and identity.has_scope(GMAIL_SEND_SCOPE)
+    )
+
+
+def _serialize_dispatch_candidate(
+    db,
+    candidate: CandidateProfile,
+    *,
+    job_id: uuid.UUID | None,
+    gmail_connected: bool,
+    active_template_count: int,
+) -> DispatchCandidateResponse:
+    outreach = _latest_outreach(db, candidate.id)
+    interview = _latest_interview(db, candidate.id, job_id)
+    blockers: list[str] = []
+    if not candidate.email:
+        blockers.append("missing_email")
+    if not gmail_connected:
+        blockers.append("gmail_not_connected")
+    if active_template_count == 0:
+        blockers.append("no_active_template")
+
+    return DispatchCandidateResponse(
+        candidate_profile_id=str(candidate.id),
+        full_name=candidate.full_name,
+        email=candidate.email,
+        current_job_title=candidate.current_job_title,
+        skills_text=candidate.skills_text,
+        contact_status="ready" if candidate.email else "missing_email",
+        outreach=(
+            DispatchOutreachStatus(
+                latest_message_id=str(outreach.id),
+                status=outreach.sent_status.value,
+                created_at=outreach.created_at,
+                sent_at=outreach.sent_at,
+            )
+            if outreach is not None
+            else None
+        ),
+        interview=(
+            DispatchInterviewStatus(
+                latest_invitation_id=str(interview.id),
+                status=interview.status,
+                interview_template_id=str(interview.interview_template_id),
+                template_name=interview.interview_template.name
+                if interview.interview_template is not None
+                else None,
+                sent_at=interview.sent_at,
+                completed_at=interview.completed_at,
+            )
+            if interview is not None
+            else None
+        ),
+        blockers=blockers,
+    )
+
+
+def _selected_collection_candidates(
+    candidates: list[CandidateProfile], selected_ids: list[uuid.UUID]
+) -> tuple[list[CandidateProfile], set[uuid.UUID]]:
+    by_id = {candidate.id: candidate for candidate in candidates}
+    selected = [by_id[candidate_id] for candidate_id in selected_ids if candidate_id in by_id]
+    missing = {candidate_id for candidate_id in selected_ids if candidate_id not in by_id}
+    return selected, missing
+
+
+def _batch_response(results: list[BatchCandidateResult]) -> BatchActionResponse:
+    return BatchActionResponse(
+        created_count=sum(1 for result in results if result.status == "created"),
+        skipped_count=sum(1 for result in results if result.status.startswith("skipped")),
+        failed_count=sum(1 for result in results if result.status == "failed"),
+        results=results,
     )
 
 
@@ -448,6 +698,254 @@ def get_collection(collection_id: uuid.UUID):
     try:
         collection = _get_or_404(db, ShortlistCollection, collection_id, "Collection")
         return _ser_collection(collection)
+    finally:
+        db.close()
+
+
+@router.get(
+    "/collections/{collection_id}/dispatch-summary",
+    response_model=DispatchSummaryResponse,
+    tags=["collections"],
+)
+def get_dispatch_summary(collection_id: uuid.UUID):
+    db = SessionLocal()
+    try:
+        collection, candidates = _load_collection_candidates(db, collection_id)
+        job = _collection_job(candidates)
+        job_id = job.id if job is not None else None
+        active_template_count = _active_interview_template_count(db, job_id)
+        gmail_connected = _gmail_connected(db, collection.created_by_user_id)
+
+        return DispatchSummaryResponse(
+            collection=DispatchCollectionResponse(
+                id=str(collection.id),
+                name=collection.name,
+                item_count=len(candidates),
+            ),
+            job=(
+                DispatchJobResponse(id=str(job.id), title=job.title)
+                if job is not None
+                else None
+            ),
+            candidates=[
+                _serialize_dispatch_candidate(
+                    db,
+                    candidate,
+                    job_id=job_id,
+                    gmail_connected=gmail_connected,
+                    active_template_count=active_template_count,
+                )
+                for candidate in candidates
+            ],
+            capabilities=DispatchCapabilitiesResponse(
+                gmail_connected=gmail_connected,
+                active_interview_templates_count=active_template_count,
+            ),
+        )
+    finally:
+        db.close()
+
+
+@router.post(
+    "/collections/{collection_id}/outreach-drafts",
+    response_model=BatchActionResponse,
+    status_code=201,
+    tags=["collections"],
+)
+def create_collection_outreach_drafts(
+    collection_id: uuid.UUID, body: OutreachDraftBatchRequest
+):
+    db = SessionLocal()
+    try:
+        collection, candidates = _load_collection_candidates(db, collection_id)
+        job = _collection_job(candidates)
+        selected, missing_ids = _selected_collection_candidates(
+            candidates, body.candidate_profile_ids
+        )
+        results: list[BatchCandidateResult] = [
+            BatchCandidateResult(
+                candidate_profile_id=str(candidate_id),
+                full_name=None,
+                status="skipped_not_in_collection",
+                reason="Candidate is not in this shortlist collection.",
+            )
+            for candidate_id in missing_ids
+        ]
+
+        for candidate in selected:
+            if not candidate.email:
+                results.append(
+                    BatchCandidateResult(
+                        candidate_profile_id=str(candidate.id),
+                        full_name=candidate.full_name,
+                        status="skipped_missing_email",
+                        reason="Candidate has no email address.",
+                    )
+                )
+                continue
+
+            existing = _latest_outreach(db, candidate.id)
+            if (
+                existing is not None
+                and existing.sent_status != SentStatus.FAILED
+                and not body.force_update
+            ):
+                results.append(
+                    BatchCandidateResult(
+                        candidate_profile_id=str(candidate.id),
+                        full_name=candidate.full_name,
+                        status="skipped_duplicate",
+                        reason="Candidate already has an outreach message.",
+                        record_id=str(existing.id),
+                    )
+                )
+                continue
+
+            message = OutreachMessage(
+                candidate_profile_id=candidate.id,
+                created_by_user_id=collection.created_by_user_id,
+                content_source=body.content_source,
+                subject=_render_candidate_template(
+                    body.subject_template, candidate, job
+                ).strip(),
+                body=_render_candidate_template(body.body_template, candidate, job).strip(),
+                sent_status=SentStatus.NOT_SENT,
+            )
+            db.add(message)
+            db.flush()
+            results.append(
+                BatchCandidateResult(
+                    candidate_profile_id=str(candidate.id),
+                    full_name=candidate.full_name,
+                    status="created",
+                    record_id=str(message.id),
+                )
+            )
+
+        db.commit()
+        return _batch_response(results)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post(
+    "/collections/{collection_id}/interview-invitations",
+    response_model=BatchActionResponse,
+    status_code=201,
+    tags=["collections"],
+)
+def create_collection_interview_invitations(
+    collection_id: uuid.UUID, body: InterviewInvitationBatchRequest
+):
+    db = SessionLocal()
+    try:
+        collection, candidates = _load_collection_candidates(db, collection_id)
+        template = (
+            db.query(InterviewTemplate)
+            .filter(
+                InterviewTemplate.id == body.interview_template_id,
+                InterviewTemplate.job_id == body.job_id,
+                InterviewTemplate.status == "active",
+            )
+            .first()
+        )
+        if template is None:
+            raise HTTPException(status_code=404, detail="Active interview template not found")
+
+        selected, missing_ids = _selected_collection_candidates(
+            candidates, body.candidate_profile_ids
+        )
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(hours=body.expires_in_hours)
+            if body.expires_in_hours is not None
+            else None
+        )
+        results: list[BatchCandidateResult] = [
+            BatchCandidateResult(
+                candidate_profile_id=str(candidate_id),
+                full_name=None,
+                status="skipped_not_in_collection",
+                reason="Candidate is not in this shortlist collection.",
+            )
+            for candidate_id in missing_ids
+        ]
+
+        for candidate in selected:
+            candidate_job = _candidate_job(candidate)
+            if candidate_job is None or candidate_job.id != body.job_id:
+                results.append(
+                    BatchCandidateResult(
+                        candidate_profile_id=str(candidate.id),
+                        full_name=candidate.full_name,
+                        status="skipped_job_mismatch",
+                        reason="Candidate does not belong to the selected job.",
+                    )
+                )
+                continue
+            if not candidate.email:
+                results.append(
+                    BatchCandidateResult(
+                        candidate_profile_id=str(candidate.id),
+                        full_name=candidate.full_name,
+                        status="skipped_missing_email",
+                        reason="Candidate has no email address.",
+                    )
+                )
+                continue
+
+            duplicate = (
+                db.query(InterviewInvitation)
+                .filter(
+                    InterviewInvitation.candidate_profile_id == candidate.id,
+                    InterviewInvitation.job_id == body.job_id,
+                    InterviewInvitation.interview_template_id
+                    == body.interview_template_id,
+                    InterviewInvitation.status.in_(["pending", "opened", "completed"]),
+                )
+                .order_by(InterviewInvitation.created_at.desc())
+                .first()
+            )
+            if duplicate is not None:
+                results.append(
+                    BatchCandidateResult(
+                        candidate_profile_id=str(candidate.id),
+                        full_name=candidate.full_name,
+                        status="skipped_duplicate",
+                        reason="Candidate already has an active interview invitation.",
+                        record_id=str(duplicate.id),
+                    )
+                )
+                continue
+
+            invitation = InterviewInvitation(
+                job_id=body.job_id,
+                candidate_profile_id=candidate.id,
+                interview_template_id=body.interview_template_id,
+                expires_at=expires_at,
+                sent_by_user_id=collection.created_by_user_id,
+            )
+            db.add(invitation)
+            db.flush()
+            from worker.tasks import send_interview_invitation_email
+
+            send_interview_invitation_email.delay(str(invitation.id))
+            results.append(
+                BatchCandidateResult(
+                    candidate_profile_id=str(candidate.id),
+                    full_name=candidate.full_name,
+                    status="created",
+                    record_id=str(invitation.id),
+                )
+            )
+
+        db.commit()
+        return _batch_response(results)
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

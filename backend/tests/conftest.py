@@ -121,5 +121,8 @@ if "worker.tasks" not in sys.modules:
     tasks_stub.process_resume = types.SimpleNamespace(
         delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-task-id")
     )
+    tasks_stub.send_interview_invitation_email = types.SimpleNamespace(
+        delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-interview-email-task-id")
+    )
     sys.modules["worker"] = worker_pkg
     sys.modules["worker.tasks"] = tasks_stub

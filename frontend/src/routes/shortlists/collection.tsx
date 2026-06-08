@@ -1,6 +1,8 @@
-import { api, type ShortlistItemResponse } from "@/api";
+import { api, type BatchActionResponse, type DispatchCandidateResponse } from "@/api";
+import { parseAxiosError } from "@/api/errors";
 import {
     Avatar,
+    Badge,
     Button,
     EmptyState,
     Modal,
@@ -20,13 +22,15 @@ import {
     ArrowLeft,
     Check,
     Layers,
+    Mail,
     MessageSquare,
+    Mic2,
     Pencil,
     Trash2,
     Users,
     X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -129,38 +133,43 @@ function InlineRename({
 // ── MemberRow ──────────────────────────────────────────────────────────────────
 
 function MemberRow({
-  item,
+  candidate,
+  selected,
+  onToggleSelected,
   onRemove,
   removing,
 }: {
-  item: ShortlistItemResponse;
-  onRemove: (item: ShortlistItemResponse) => void;
+  candidate: DispatchCandidateResponse;
+  selected: boolean;
+  onToggleSelected: (candidateId: string) => void;
+  onRemove: (candidateId: string) => void;
   removing: boolean;
 }) {
-  const { data: candidateProfile } = useQuery({
-    queryKey: ["candidate-profile-by-id", item.candidate_profile_id],
-    queryFn: () => api.candidates.getById(item.candidate_profile_id),
-    enabled: !!item.candidate_profile_id,
-    retry: false,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const displayName = candidateProfile?.full_name ?? `Candidate ${truncateId(item.candidate_profile_id)}`;
-  const skills = candidateProfile?.skills_text
-    ? candidateProfile.skills_text.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean).slice(0, 4)
+  const displayName = candidate.full_name || `Candidate ${truncateId(candidate.candidate_profile_id)}`;
+  const skills = candidate.skills_text
+    ? candidate.skills_text.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean).slice(0, 4)
     : [];
+  const outreachLabel = candidate.outreach?.status?.replace("_", " ") ?? "not started";
+  const interviewLabel = candidate.interview?.status ?? "not invited";
 
   return (
     <div className="group flex items-center gap-4 px-5 py-3.5 hairline-b last:border-b-0 hover:bg-[color:var(--hairline)]/30 transition-colors">
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggleSelected(candidate.candidate_profile_id)}
+        aria-label={`Select ${displayName}`}
+        className="h-4 w-4 shrink-0 accent-[color:var(--accent)]"
+      />
       <Avatar name={displayName} size="md" />
 
       <div className="flex-1 min-w-0">
         <p className="text-sm font-sans font-medium text-fg truncate">
           {displayName}
         </p>
-        {candidateProfile?.current_job_title && (
+        {candidate.current_job_title && (
           <p className="text-xs font-sans text-fg-muted mt-0.5 truncate">
-            {candidateProfile.current_job_title}
+            {candidate.current_job_title}
           </p>
         )}
       </div>
@@ -177,16 +186,37 @@ function MemberRow({
         ))}
       </div>
 
-      {/* Added-at */}
-      <span className="text-xs font-sans text-fg-subtle tabular-nums whitespace-nowrap hidden md:block">
-        Added {relativeTime(item.added_at)}
-      </span>
+      <div className="hidden lg:flex w-32 justify-end">
+        <Badge variant={candidate.contact_status === "ready" ? "success" : "warning"} size="sm" dot={false}>
+          {candidate.contact_status === "ready" ? "email ok" : "missing email"}
+        </Badge>
+      </div>
+
+      <div className="hidden xl:flex w-32 justify-end">
+        <Badge
+          variant={candidate.outreach?.status === "sent" ? "success" : candidate.outreach?.status === "failed" ? "danger" : "neutral"}
+          size="sm"
+          dot={false}
+        >
+          {outreachLabel}
+        </Badge>
+      </div>
+
+      <div className="hidden xl:flex w-32 justify-end">
+        <Badge
+          variant={candidate.interview?.completed_at ? "success" : candidate.interview ? "warning" : "neutral"}
+          size="sm"
+          dot={false}
+        >
+          {interviewLabel}
+        </Badge>
+      </div>
 
       {/* Remove button */}
       <button
         type="button"
         disabled={removing}
-        onClick={() => onRemove(item)}
+        onClick={() => onRemove(candidate.candidate_profile_id)}
         aria-label="Remove from collection"
         className={cn(
           "opacity-0 group-hover:opacity-100 transition-opacity",
@@ -201,6 +231,232 @@ function MemberRow({
   );
 }
 
+function selectedCandidateList(
+  candidates: DispatchCandidateResponse[],
+  selectedIds: Set<string>,
+) {
+  return candidates.filter((candidate) => selectedIds.has(candidate.candidate_profile_id));
+}
+
+function BatchResultSummary({ result }: { result: BatchActionResponse | null }) {
+  if (!result) return null;
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated px-3 py-2 text-sm text-fg-muted">
+      Created {result.created_count}, skipped {result.skipped_count}, failed {result.failed_count}.
+    </div>
+  );
+}
+
+function OutreachDraftModal({
+  open,
+  onOpenChange,
+  collectionId,
+  candidates,
+  onComplete,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  collectionId: string;
+  candidates: DispatchCandidateResponse[];
+  onComplete: () => void;
+}) {
+  const [subjectTemplate, setSubjectTemplate] = useState("Following up on {{job_title}}");
+  const [bodyTemplate, setBodyTemplate] = useState("Hi {{candidate_name}},\n\nI reviewed your profile and would like to discuss the {{job_title}} role.\n\nBest regards,");
+  const [result, setResult] = useState<BatchActionResponse | null>(null);
+
+  useEffect(() => {
+    if (open) setResult(null);
+  }, [open]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.shortlist.dispatch.createOutreachDrafts(collectionId, {
+        candidate_profile_ids: candidates.map((candidate) => candidate.candidate_profile_id),
+        subject_template: subjectTemplate,
+        body_template: bodyTemplate,
+        content_source: "template",
+      }),
+    onSuccess: (response) => {
+      setResult(response);
+      toast.success(`Created ${response.created_count} outreach draft${response.created_count === 1 ? "" : "s"}`);
+      onComplete();
+    },
+    onError: () => toast.error("Failed to create outreach drafts"),
+  });
+
+  return (
+    <Modal open={open} onOpenChange={onOpenChange}>
+      <ModalContent size="large">
+        <ModalHeader>
+          <ModalTitle>Create outreach drafts</ModalTitle>
+          <ModalDescription>
+            Review selected candidates before creating draft messages.
+          </ModalDescription>
+        </ModalHeader>
+        <div className="space-y-4">
+          <div className="max-h-40 overflow-y-auto rounded-[var(--radius-md)] border border-[color:var(--hairline)]">
+            {candidates.map((candidate) => (
+              <div key={candidate.candidate_profile_id} className="flex items-center justify-between gap-3 px-3 py-2 hairline-b last:border-b-0">
+                <span className="text-sm text-fg">{candidate.full_name}</span>
+                <span className="text-xs text-fg-muted">
+                  {candidate.email || "missing email"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <label className="space-y-1.5 block">
+            <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">Subject template</span>
+            <input
+              value={subjectTemplate}
+              onChange={(event) => setSubjectTemplate(event.target.value)}
+              className="h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+            />
+          </label>
+          <label className="space-y-1.5 block">
+            <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">Body template</span>
+            <textarea
+              value={bodyTemplate}
+              onChange={(event) => setBodyTemplate(event.target.value)}
+              rows={7}
+              className="w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+            />
+          </label>
+          <BatchResultSummary result={result} />
+        </div>
+        <ModalFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button
+            loading={mutation.isPending}
+            disabled={!candidates.length || !subjectTemplate.trim() || !bodyTemplate.trim()}
+            onClick={() => mutation.mutate()}
+          >
+            Create drafts
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function InterviewInviteModal({
+  open,
+  onOpenChange,
+  collectionId,
+  jobId,
+  candidates,
+  onComplete,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  collectionId: string;
+  jobId: string | null;
+  candidates: DispatchCandidateResponse[];
+  onComplete: () => void;
+}) {
+  const [templateId, setTemplateId] = useState("");
+  const [expiresInHours, setExpiresInHours] = useState("72");
+  const [result, setResult] = useState<BatchActionResponse | null>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["interview-templates", jobId],
+    queryFn: () => api.interviewTemplates.list(jobId!),
+    enabled: open && !!jobId,
+  });
+
+  useEffect(() => {
+    if (open) {
+      setTemplateId("");
+      setExpiresInHours("72");
+      setResult(null);
+    }
+  }, [open]);
+
+  const templates = data?.items.filter((template) => template.status === "active") ?? [];
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.shortlist.dispatch.createInterviewInvitations(collectionId, {
+        candidate_profile_ids: candidates.map((candidate) => candidate.candidate_profile_id),
+        job_id: jobId!,
+        interview_template_id: templateId,
+        expires_in_hours: expiresInHours ? Number(expiresInHours) : null,
+      }),
+    onSuccess: (response) => {
+      setResult(response);
+      toast.success(`Created ${response.created_count} interview invitation${response.created_count === 1 ? "" : "s"}`);
+      onComplete();
+    },
+    onError: () => toast.error("Failed to create interview invitations"),
+  });
+
+  return (
+    <Modal open={open} onOpenChange={onOpenChange}>
+      <ModalContent size="large">
+        <ModalHeader>
+          <ModalTitle>Send interview invites</ModalTitle>
+          <ModalDescription>
+            Select an active interview template and review the selected candidates.
+          </ModalDescription>
+        </ModalHeader>
+        <div className="space-y-4">
+          <div className="max-h-40 overflow-y-auto rounded-[var(--radius-md)] border border-[color:var(--hairline)]">
+            {candidates.map((candidate) => (
+              <div key={candidate.candidate_profile_id} className="flex items-center justify-between gap-3 px-3 py-2 hairline-b last:border-b-0">
+                <span className="text-sm text-fg">{candidate.full_name}</span>
+                <span className="text-xs text-fg-muted">
+                  {candidate.email || "missing email"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <label className="space-y-1.5 block">
+            <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">Interview template</span>
+            <select
+              value={templateId}
+              onChange={(event) => setTemplateId(event.target.value)}
+              className="h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+            >
+              <option value="">{isLoading ? "Loading templates..." : "Select template..."}</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1.5 block">
+            <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">Expires in hours</span>
+            <input
+              value={expiresInHours}
+              onChange={(event) => setExpiresInHours(event.target.value)}
+              inputMode="numeric"
+              className="h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+            />
+          </label>
+          {!jobId && (
+            <p className="rounded-[var(--radius-md)] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+              This shortlist has no job context, so interview invitations are blocked.
+            </p>
+          )}
+          {jobId && !isLoading && templates.length === 0 && (
+            <p className="rounded-[var(--radius-md)] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+              Create an active interview template for this job before sending invites.
+            </p>
+          )}
+          <BatchResultSummary result={result} />
+        </div>
+        <ModalFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button
+            loading={mutation.isPending}
+            disabled={!jobId || !templateId || !candidates.length}
+            onClick={() => mutation.mutate()}
+          >
+            Create invitations
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 // ── main component ─────────────────────────────────────────────────────────────
 
 export default function ShortlistCollectionRoute() {
@@ -211,7 +467,10 @@ export default function ShortlistCollectionRoute() {
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState(false);
   const [nameConflict, setNameConflict] = useState(false);
-  const [removeTarget, setRemoveTarget] = useState<ShortlistItemResponse | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [outreachOpen, setOutreachOpen] = useState(false);
+  const [interviewOpen, setInterviewOpen] = useState(false);
 
   // ── collection data ────────────────────────────────────────────────────────
 
@@ -221,19 +480,53 @@ export default function ShortlistCollectionRoute() {
     enabled: !!id,
   });
 
-  const { data: itemsData, isLoading: itemsLoading } = useQuery({
-    queryKey: ["collection-items", id, page],
-    queryFn: () =>
-      api.shortlist.items.listForCollection(id!, {
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-      }),
+  const { data: dispatchSummary, isLoading: dispatchLoading } = useQuery({
+    queryKey: ["collection-dispatch", id],
+    queryFn: () => api.shortlist.dispatch.summary(id!),
     enabled: !!id,
     staleTime: 30_000,
   });
 
-  const items = itemsData?.items ?? [];
-  const total = itemsData?.total ?? 0;
+  const candidates = useMemo(() => dispatchSummary?.candidates ?? [], [dispatchSummary]);
+  const total = candidates.length;
+  const pagedCandidates = candidates.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const selectedCandidates = useMemo(
+    () => selectedCandidateList(candidates, selectedIds),
+    [candidates, selectedIds],
+  );
+  const allPageSelected = pagedCandidates.length > 0 && pagedCandidates.every((candidate) => selectedIds.has(candidate.candidate_profile_id));
+
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const validIds = new Set(candidates.map((candidate) => candidate.candidate_profile_id));
+      const next = new Set([...current].filter((candidateId) => validIds.has(candidateId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [candidates]);
+
+  function toggleSelected(candidateId: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(candidateId)) {
+        next.delete(candidateId);
+      } else {
+        next.add(candidateId);
+      }
+      return next;
+    });
+  }
+
+  function togglePageSelected() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allPageSelected) {
+        pagedCandidates.forEach((candidate) => next.delete(candidate.candidate_profile_id));
+      } else {
+        pagedCandidates.forEach((candidate) => next.add(candidate.candidate_profile_id));
+      }
+      return next;
+    });
+  }
 
   // ── mutations ──────────────────────────────────────────────────────────────
 
@@ -246,8 +539,8 @@ export default function ShortlistCollectionRoute() {
       setEditing(false);
       setNameConflict(false);
     },
-    onError: (err: any) => {
-      if (err?.response?.status === 409) {
+    onError: (err: unknown) => {
+      if (parseAxiosError(err).status === 409) {
         setNameConflict(true);
       } else {
         toast.error("Failed to rename collection");
@@ -256,10 +549,10 @@ export default function ShortlistCollectionRoute() {
   });
 
   const removeMutation = useMutation({
-    mutationFn: (item: ShortlistItemResponse) =>
-      api.shortlist.items.remove(id!, item.candidate_profile_id),
+    mutationFn: (candidateId: string) =>
+      api.shortlist.items.remove(id!, candidateId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["collection-items", id] });
+      qc.invalidateQueries({ queryKey: ["collection-dispatch", id] });
       qc.invalidateQueries({ queryKey: ["collection", id] });
       qc.invalidateQueries({ queryKey: ["collections"] });
       toast.success("Candidate removed from collection");
@@ -366,10 +659,49 @@ export default function ShortlistCollectionRoute() {
         </div>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated px-4 py-3">
+          <div className="text-sm font-sans text-fg">
+            <span className="font-medium tabular-nums">{selectedIds.size}</span> selected
+            {dispatchSummary?.job && (
+              <span className="ml-2 text-fg-muted">for {dispatchSummary.job.title}</span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Mail size={14} strokeWidth={2} />}
+              onClick={() => setOutreachOpen(true)}
+            >
+              Create outreach drafts
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Mic2 size={14} strokeWidth={2} />}
+              onClick={() => setInterviewOpen(true)}
+            >
+              Send interview invites
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* ── Members table ── */}
       <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] overflow-hidden">
         {/* Table header */}
         <div className="flex items-center gap-4 px-5 py-3 bg-[color:var(--hairline)]/40 hairline-b">
+          <input
+            type="checkbox"
+            checked={allPageSelected}
+            onChange={togglePageSelected}
+            aria-label="Select all candidates on this page"
+            className="h-4 w-4 shrink-0 accent-[color:var(--accent)]"
+          />
           <div className="w-8 shrink-0" />
           <div className="flex-1 text-[11px] font-sans font-semibold uppercase tracking-wider text-fg-muted">
             Candidate
@@ -378,12 +710,18 @@ export default function ShortlistCollectionRoute() {
             Skills
           </div>
           <div className="hidden md:block text-[11px] font-sans font-semibold uppercase tracking-wider text-fg-muted w-28 text-right">
-            Added
+            Contact
+          </div>
+          <div className="hidden xl:block text-[11px] font-sans font-semibold uppercase tracking-wider text-fg-muted w-32 text-right">
+            Outreach
+          </div>
+          <div className="hidden xl:block text-[11px] font-sans font-semibold uppercase tracking-wider text-fg-muted w-32 text-right">
+            Interview
           </div>
           <div className="w-7" />
         </div>
 
-        {itemsLoading ? (
+        {dispatchLoading ? (
           <div className="divide-y divide-[color:var(--hairline)]">
             {[0, 1, 2, 3, 4].map((i) => (
               <div key={i} className="flex items-center gap-4 px-5 py-3.5">
@@ -396,7 +734,7 @@ export default function ShortlistCollectionRoute() {
               </div>
             ))}
           </div>
-        ) : items.length === 0 ? (
+        ) : pagedCandidates.length === 0 ? (
           <div className="py-16">
             <EmptyState
               icon={<Users size={28} strokeWidth={1.25} />}
@@ -407,12 +745,14 @@ export default function ShortlistCollectionRoute() {
           </div>
         ) : (
           <div>
-            {items.map((item) => (
+            {pagedCandidates.map((candidate) => (
               <MemberRow
-                key={item.id}
-                item={item}
+                key={candidate.candidate_profile_id}
+                candidate={candidate}
+                selected={selectedIds.has(candidate.candidate_profile_id)}
+                onToggleSelected={toggleSelected}
                 onRemove={setRemoveTarget}
-                removing={removeMutation.isPending && removeTarget?.id === item.id}
+                removing={removeMutation.isPending && removeTarget === candidate.candidate_profile_id}
               />
             ))}
           </div>
@@ -420,7 +760,7 @@ export default function ShortlistCollectionRoute() {
       </div>
 
       {/* Pagination */}
-      {!itemsLoading && total > PAGE_SIZE && (
+      {!dispatchLoading && total > PAGE_SIZE && (
         <div className="mt-4 hairline-t pt-3">
           <Pagination
             total={total}
@@ -440,7 +780,7 @@ export default function ShortlistCollectionRoute() {
             <ModalDescription>
               Remove candidate{" "}
               <span className="font-mono text-xs bg-[color:var(--hairline)] px-1 py-0.5 rounded">
-                {removeTarget ? truncateId(removeTarget.candidate_profile_id) : ""}
+                {removeTarget ? truncateId(removeTarget) : ""}
               </span>{" "}
               from this collection? They will not be deleted from the system.
             </ModalDescription>
@@ -457,6 +797,35 @@ export default function ShortlistCollectionRoute() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {id && (
+        <OutreachDraftModal
+          open={outreachOpen}
+          onOpenChange={setOutreachOpen}
+          collectionId={id}
+          candidates={selectedCandidates}
+          onComplete={() => {
+            qc.invalidateQueries({ queryKey: ["collection-dispatch", id] });
+            qc.invalidateQueries({ queryKey: ["outreach"] });
+          }}
+        />
+      )}
+
+      {id && (
+        <InterviewInviteModal
+          open={interviewOpen}
+          onOpenChange={setInterviewOpen}
+          collectionId={id}
+          jobId={dispatchSummary?.job?.id ?? null}
+          candidates={selectedCandidates}
+          onComplete={() => {
+            qc.invalidateQueries({ queryKey: ["collection-dispatch", id] });
+            if (dispatchSummary?.job?.id) {
+              qc.invalidateQueries({ queryKey: ["interview-invitations", dispatchSummary.job.id] });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
