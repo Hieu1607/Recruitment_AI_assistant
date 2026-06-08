@@ -4,7 +4,7 @@ import { useAuthStore } from "@/lib/auth";
 import { useResizableSidebar } from "@/lib/useResizableSidebar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { CommandPalette } from "../CommandPalette";
@@ -13,6 +13,7 @@ const EMPTY_JOBS: JobResponse[] = [];
 
 export function AppShell() {
   const qc = useQueryClient();
+  const { pathname } = useLocation();
   const selectedJobId = useAuthStore((s) => s.selectedJobId);
   const setSelectedJobId = useAuthStore((s) => s.setSelectedJobId);
   const jobsQuery = useQuery({
@@ -53,6 +54,9 @@ export function AppShell() {
     minWidth: 240,
     maxWidth: 240,
   });
+  const isFullBleedRoute =
+    pathname.startsWith("/outreach") ||
+    pathname.startsWith("/chat");
 
   return (
     <>
@@ -73,8 +77,8 @@ export function AppShell() {
           />
           <div className="flex-1 overflow-y-auto">
             <div
-              className="mx-auto w-full"
-              style={{ maxWidth: "var(--content-max)" }}
+              className={isFullBleedRoute ? "w-full" : "mx-auto w-full"}
+              style={isFullBleedRoute ? undefined : { maxWidth: "var(--content-max)" }}
             >
               <Outlet />
             </div>

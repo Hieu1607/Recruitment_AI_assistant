@@ -16,13 +16,15 @@ from src.models.candidate_profile import CandidateProfile
 from src.models.enums import GraduationStatus, ProfileStatus, UploadStatus
 from src.models.resume_document import ExtractionTrace, ResumeDocument
 from src.prompts.build_prompts import build_prompts
+from src.services.ai_agent.langgraph_trace import format_exception_payload
 from src.services.llm_service import LLMProvider
 from src.services.object_storage import get_object_storage, parse_storage_uri
+from src.services.resume_parse_trace import get_resume_parse_trace_logger
 
 _HF_OCR_MAX_ATTEMPTS = 3
 _HF_OCR_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 _VISION_FALLBACK_MAX_PAGES = 3
-_RESUME_PARSE_MAX_TOKENS = 2500
+_RESUME_PARSE_MAX_TOKENS = 4096
 _STRUCTURED_SECTION_TEXT_FIELDS = {
     "experience": "experience",
     "education": "education",
@@ -36,6 +38,10 @@ _STRUCTURED_SECTION_TEXT_FIELDS = {
     "other": "other",
 }
 logger = logging.getLogger(__name__)
+_RESUME_JSON_RETRY_SUFFIX = (
+    "\n\nIMPORTANT: Return one valid JSON object only. "
+    "Do not include markdown fences, commentary, or trailing commas."
+)
 
 _GRADUATION_STATUS_VALUES = {
     GraduationStatus.UNKNOWN.value,
@@ -44,6 +50,22 @@ _GRADUATION_STATUS_VALUES = {
     GraduationStatus.GRADUATED.value,
 }
 
+_MISSING_TEXT_PLACEHOLDERS = {
+    "-",
+    "--",
+    "n/a",
+    "na",
+    "none",
+    "null",
+    "not applicable",
+}
+
+
+def _is_missing_text_placeholder(value: str) -> bool:
+    normalized = value.strip().lower()
+    normalized = normalized.replace(".", "").replace(" ", "")
+    return normalized in _MISSING_TEXT_PLACEHOLDERS or normalized == "notapplicable"
+
 
 def _normalize_text(value: Any) -> Optional[str]:
     if value is None:
@@ -51,6 +73,8 @@ def _normalize_text(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         value = str(value)
     normalized = value.strip()
+    if normalized and _is_missing_text_placeholder(normalized):
+        return None
     return normalized or None
 
 
@@ -155,7 +179,10 @@ def _normalize_graduation_status(value: Any, parsed: Optional[Dict[str, Any]] = 
 
 
 def _resume_llm_provider() -> LLMProvider:
-    return LLMProvider(max_tokens=max(settings.LLM_MAX_TOKENS, _RESUME_PARSE_MAX_TOKENS))
+    return LLMProvider(
+        model_name=settings.RESUME_PARSE_MODEL_NAME,
+        max_tokens=max(settings.LLM_MAX_TOKENS, settings.RESUME_PARSE_MAX_TOKENS, _RESUME_PARSE_MAX_TOKENS),
+    )
 
 
 def _normalize_string_list(value: Any) -> List[str]:
@@ -418,27 +445,168 @@ def _render_pdf_pages_as_images(
     return images
 
 
+def _log_resume_llm_attempt(
+    *,
+    trace_id: str,
+    attempt_number: int,
+    stage: str,
+    prompt: str,
+    response_text: str,
+    llm_response: Any,
+    parse_error: Exception | None = None,
+) -> None:
+    get_resume_parse_trace_logger().record_llm_attempt(
+        trace_id=trace_id,
+        payload={
+            "attempt_number": attempt_number,
+            "stage": stage,
+            "provider": getattr(llm_response, "provider", None),
+            "model": getattr(llm_response, "model", None),
+            "prompt": prompt,
+            "response_text": response_text,
+            "parse_error": (
+                format_exception_payload(parse_error) if parse_error is not None else None
+            ),
+        },
+    )
+
+
+def _generate_resume_json_with_retries(
+    *,
+    trace_id: str,
+    stage: str,
+    llm_provider: LLMProvider,
+    prompt: str,
+) -> tuple[Dict[str, Any], Any, int]:
+    prompts = [
+        prompt,
+        f"{prompt}{_RESUME_JSON_RETRY_SUFFIX}",
+        (
+            "Repair the following response into one valid JSON object only. "
+            "Do not add commentary or markdown.\n\n"
+            f"Original prompt:\n{prompt}\n\n"
+            "Broken response:\n"
+            "{broken_response}"
+        ),
+    ]
+    last_error: Exception | None = None
+    last_response_text = ""
+
+    for attempt_number, attempt_prompt in enumerate(prompts, start=1):
+        prompt_text = (
+            attempt_prompt.format(broken_response=last_response_text)
+            if "{broken_response}" in attempt_prompt
+            else attempt_prompt
+        )
+        llm_response = llm_provider.generate(prompt_text)
+        last_response_text = llm_response.text
+        try:
+            parsed = _extract_json_object(llm_response.text)
+        except Exception as exc:
+            last_error = exc
+            _log_resume_llm_attempt(
+                trace_id=trace_id,
+                attempt_number=attempt_number,
+                stage=stage,
+                prompt=prompt_text,
+                response_text=llm_response.text,
+                llm_response=llm_response,
+                parse_error=exc,
+            )
+            logger.warning(
+                "Resume parsing JSON parse failed on attempt %s using model %s: %s",
+                attempt_number,
+                getattr(llm_response, "model", "unknown"),
+                exc,
+            )
+            continue
+
+        _log_resume_llm_attempt(
+            trace_id=trace_id,
+            attempt_number=attempt_number,
+            stage=stage,
+            prompt=prompt_text,
+            response_text=llm_response.text,
+            llm_response=llm_response,
+        )
+        return parsed, llm_response, attempt_number
+
+    raise ValueError(f"resume parsing failed after retries: {last_error}") from last_error
+
+
 def _parse_resume_payload(
     pdf_source: bytes | str,
     display_name: str,
     llm_provider: LLMProvider,
-) -> tuple[Dict[str, Any], Any, str]:
+    *,
+    trace_id: str,
+) -> tuple[Dict[str, Any], Any, str, int]:
+    trace_logger = get_resume_parse_trace_logger()
     cv_text = extract_text_from_pdf(pdf_source)
+    trace_logger.record_event(
+        trace_id=trace_id,
+        event_type="embedded_text_extraction",
+        payload={
+            "file_name": display_name,
+            "text_length": len(cv_text),
+            "text": cv_text,
+        },
+    )
     if cv_text.strip():
         logger.info("Resume %s extracted via embedded PDF text", display_name)
         prompt = build_prompts.build_cv_parsing_prompt(cv_text)
-        llm_response = llm_provider.generate(prompt)
-        return _extract_json_object(llm_response.text), llm_response, "text"
+        parsed, llm_response, attempt_count = _generate_resume_json_with_retries(
+            trace_id=trace_id,
+            stage="text",
+            llm_provider=llm_provider,
+            prompt=prompt,
+        )
+        return parsed, llm_response, "text", attempt_count
 
     vision_error: Exception | None = None
     try:
         logger.info("Resume %s has no embedded text; trying vision fallback", display_name)
         images = _render_pdf_pages_as_images(pdf_source)
+        trace_logger.record_event(
+            trace_id=trace_id,
+            event_type="vision_fallback_started",
+            payload={
+                "file_name": display_name,
+                "image_count": len(images),
+                "image_sizes": [len(image) for image in images],
+            },
+        )
         vision_prompt = build_prompts.build_cv_vision_prompt()
         llm_response = llm_provider.generate_with_images(vision_prompt, images)
-        return _extract_json_object(llm_response.text), llm_response, "vision"
+        try:
+            parsed = _extract_json_object(llm_response.text)
+        except Exception as exc:
+            _log_resume_llm_attempt(
+                trace_id=trace_id,
+                attempt_number=1,
+                stage="vision",
+                prompt=vision_prompt,
+                response_text=llm_response.text,
+                llm_response=llm_response,
+                parse_error=exc,
+            )
+            raise
+        _log_resume_llm_attempt(
+            trace_id=trace_id,
+            attempt_number=1,
+            stage="vision",
+            prompt=vision_prompt,
+            response_text=llm_response.text,
+            llm_response=llm_response,
+        )
+        return parsed, llm_response, "vision", 1
     except Exception as exc:
         vision_error = exc
+        trace_logger.record_event(
+            trace_id=trace_id,
+            event_type="vision_fallback_failed",
+            payload=format_exception_payload(exc),
+        )
         logger.warning(
             "Vision fallback failed for %s: %s. Falling back to OCR.",
             display_name,
@@ -447,13 +615,27 @@ def _parse_resume_payload(
 
     logger.info("Resume %s falling back to OCR extraction", display_name)
     cv_text = extract_text_via_hf_ocr(pdf_source, display_name)
+    trace_logger.record_event(
+        trace_id=trace_id,
+        event_type="ocr_extraction",
+        payload={
+            "file_name": display_name,
+            "text_length": len(cv_text),
+            "text": cv_text,
+        },
+    )
     if not cv_text.strip() and vision_error is not None:
         raise RuntimeError(
             f"Vision fallback failed ({vision_error}) and OCR returned empty text"
         ) from vision_error
     prompt = build_prompts.build_cv_parsing_prompt(cv_text)
-    llm_response = llm_provider.generate(prompt)
-    return _extract_json_object(llm_response.text), llm_response, "ocr"
+    parsed, llm_response, attempt_count = _generate_resume_json_with_retries(
+        trace_id=trace_id,
+        stage="ocr",
+        llm_provider=llm_provider,
+        prompt=prompt,
+    )
+    return parsed, llm_response, "ocr", attempt_count
 
 
 def _extract_json_object(raw_text: str) -> Dict[str, Any]:
@@ -707,10 +889,44 @@ def process_single_resume(
                 pdf_source = storage_uri
 
             llm_provider = _resume_llm_provider()
-            parsed_payload, llm_response, extraction_mode = _parse_resume_payload(
+            trace_id = str(uuid.uuid4())
+            trace_logger = get_resume_parse_trace_logger()
+            trace_logger.start_trace(
+                trace_id=trace_id,
+                metadata={
+                    "resume_document_id": resume.id,
+                    "file_name": display_name,
+                    "storage_uri": storage_uri,
+                },
+                trace_input={
+                    "pdf_source_kind": (
+                        "bytes" if isinstance(pdf_source, (bytes, bytearray)) else "path"
+                    ),
+                    "llm_model_name": getattr(llm_provider, "model_name", None),
+                    "llm_provider": getattr(llm_provider, "provider", None),
+                },
+            )
+            parsed_payload, llm_response, extraction_mode, json_attempt_count = _parse_resume_payload(
                 pdf_source,
                 display_name,
                 llm_provider,
+                trace_id=trace_id,
+            )
+            trace_logger.update_metadata(
+                trace_id=trace_id,
+                metadata={"extraction_mode": extraction_mode},
+            )
+            trace_path = trace_logger.finalize_trace(
+                trace_id=trace_id,
+                status="success",
+                result={
+                    "llm": {
+                        "provider": llm_response.provider,
+                        "model": llm_response.model,
+                    },
+                    "extraction_mode": extraction_mode,
+                    "parsed_payload": parsed_payload,
+                },
             )
 
             profile = _build_profile_from_parsed(
@@ -734,6 +950,8 @@ def process_single_resume(
                         "extractionMode": extraction_mode,
                         "llmProvider": llm_response.provider,
                         "llmModel": llm_response.model,
+                        "jsonAttemptCount": json_attempt_count,
+                        "resumeParseTraceFile": str(trace_path),
                     },
                 )
             )
@@ -752,6 +970,14 @@ def process_single_resume(
             db.rollback()
             resume_db = db.get(ResumeDocument, resume_document_id)
             failure_profile_id = None
+            trace_path = None
+            trace_id = locals().get("trace_id")
+            if trace_id:
+                trace_path = get_resume_parse_trace_logger().finalize_trace(
+                    trace_id=trace_id,
+                    status="failed",
+                    error=exc,
+                )
             if resume_db is not None:
                 resume_db.upload_status = UploadStatus.FAILED.value
                 minimal_profile = None
@@ -780,11 +1006,12 @@ def process_single_resume(
                                     "usedSubmittedFullName": False,
                                     "usedSubmittedEmail": False,
                                 }
-                            ),
-                            "createdFallbackProfile": minimal_profile is not None,
-                        },
-                    )
-                )
+                             ),
+                             "createdFallbackProfile": minimal_profile is not None,
+                             "resumeParseTraceFile": str(trace_path) if trace_path else None,
+                         },
+                     )
+                 )
                 db.commit()
                 if minimal_profile is not None:
                     db.refresh(minimal_profile)
@@ -869,10 +1096,44 @@ def parse_pdf_to_sections(
             else:
                 pdf_source = storage_uri
 
-            parsed_payload, llm_response, extraction_mode = _parse_resume_payload(
+            trace_id = str(uuid.uuid4())
+            trace_logger = get_resume_parse_trace_logger()
+            trace_logger.start_trace(
+                trace_id=trace_id,
+                metadata={
+                    "resume_document_id": resume.id,
+                    "file_name": display_name,
+                    "storage_uri": storage_uri,
+                },
+                trace_input={
+                    "pdf_source_kind": (
+                        "bytes" if isinstance(pdf_source, (bytes, bytearray)) else "path"
+                    ),
+                    "llm_model_name": getattr(llm_provider, "model_name", None),
+                    "llm_provider": getattr(llm_provider, "provider", None),
+                },
+            )
+            parsed_payload, llm_response, extraction_mode, json_attempt_count = _parse_resume_payload(
                 pdf_source,
                 display_name,
                 llm_provider,
+                trace_id=trace_id,
+            )
+            trace_logger.update_metadata(
+                trace_id=trace_id,
+                metadata={"extraction_mode": extraction_mode},
+            )
+            trace_path = trace_logger.finalize_trace(
+                trace_id=trace_id,
+                status="success",
+                result={
+                    "llm": {
+                        "provider": llm_response.provider,
+                        "model": llm_response.model,
+                    },
+                    "extraction_mode": extraction_mode,
+                    "parsed_payload": parsed_payload,
+                },
             )
 
             profile = _build_profile_from_parsed(
@@ -896,6 +1157,8 @@ def parse_pdf_to_sections(
                         "extractionMode": extraction_mode,
                         "llmProvider": llm_response.provider,
                         "llmModel": llm_response.model,
+                        "jsonAttemptCount": json_attempt_count,
+                        "resumeParseTraceFile": str(trace_path),
                     },
                 )
             )
@@ -915,6 +1178,14 @@ def parse_pdf_to_sections(
             db.rollback()
             resume_db = db.get(ResumeDocument, resume.id)
             failure_profile_id = None
+            trace_path = None
+            trace_id = locals().get("trace_id")
+            if trace_id:
+                trace_path = get_resume_parse_trace_logger().finalize_trace(
+                    trace_id=trace_id,
+                    status="failed",
+                    error=exc,
+                )
             if resume_db is not None:
                 resume_db.upload_status = UploadStatus.FAILED.value
                 minimal_profile = None
@@ -943,11 +1214,12 @@ def parse_pdf_to_sections(
                                     "usedSubmittedFullName": False,
                                     "usedSubmittedEmail": False,
                                 }
-                            ),
-                            "createdFallbackProfile": minimal_profile is not None,
-                        },
-                    )
-                )
+                             ),
+                             "createdFallbackProfile": minimal_profile is not None,
+                             "resumeParseTraceFile": str(trace_path) if trace_path else None,
+                         },
+                     )
+                 )
                 db.commit()
                 if minimal_profile is not None:
                     db.refresh(minimal_profile)

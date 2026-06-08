@@ -142,12 +142,16 @@ class BuildPrompts:
 
 		Rules:
 		- Use null when unknown.
+		- Do not output placeholders such as N/A, NA, none, null, "-", or "not applicable"; use null for scalar fields and [] for list fields.
 		- Preserve as much source detail as possible in the correct field.
 		- Do not summarize, shorten, paraphrase, or normalize away specifics.
 		- Keep bullet points, lists, metrics, technologies, dates, organizations, titles, and outcomes whenever present.
 		- Classify every relevant piece of CV content into the most appropriate field from the schema.
 		- If text does not clearly fit an earlier field, put it in other instead of dropping it.
 		- summary should capture the candidate's own profile/objective/overview statement from the CV, not a new AI-written summary.
+		- When a section has multiple projects, roles, schools, certifications, publications, achievements, or language groups, create one structured_profile entry per item.
+		- In structured_profile entries, only fill title, subtitle, role, location, dateRange, description, bullets, links, and metadata when that value is explicitly present or inferable from the CV text.
+		- For structured_profile.projects, create one entry per project whenever possible; put the project name in title, repository or portfolio URLs in links, dates in dateRange, technologies or organization in metadata, and project details in description or bullets.
 		- For "projects", include full project entries: project name, organization, link, date range, and all project bullet details as one multi-line string.
 		- For "experience", include full role entries: title, company, location, dates, and all role bullet details as one multi-line string.
 		- "experience" is only for actual work history such as employment, internships, assistantships, apprenticeships, consulting, or freelance roles.
@@ -227,12 +231,16 @@ Required schema:
 
 Rules:
 - Use null when unknown.
+- Do not output placeholders such as N/A, NA, none, null, "-", or "not applicable"; use null for scalar fields and [] for list fields.
 - Preserve as much source detail as possible in the correct field.
 - Do not summarize, shorten, paraphrase, or normalize away specifics.
 - Keep bullet points, lists, metrics, technologies, dates, organizations, titles, and outcomes whenever present.
 - Classify every relevant piece of CV content into the most appropriate field from the schema.
 - If text does not clearly fit an earlier field, put it in other instead of dropping it.
 - summary should capture the candidate's own profile/objective/overview statement from the CV, not a new AI-written summary.
+- When a section has multiple projects, roles, schools, certifications, publications, achievements, or language groups, create one structured_profile entry per item.
+- In structured_profile entries, only fill title, subtitle, role, location, dateRange, description, bullets, links, and metadata when that value is explicitly present or inferable from the CV text.
+- For structured_profile.projects, create one entry per project whenever possible; put the project name in title, repository or portfolio URLs in links, dates in dateRange, technologies or organization in metadata, and project details in description or bullets.
 - For "projects", include full project entries: project name, organization, link, date range, and all project bullet details as one multi-line string.
 - For "experience", include full role entries: title, company, location, dates, and all role bullet details as one multi-line string.
 - "experience" is only for actual work history such as employment, internships, assistantships, apprenticeships, consulting, or freelance roles.

@@ -1,16 +1,19 @@
-import type { CandidateProfileResponse, ChatResponse, ChatSessionResponse, ChatTurnResponse } from "@/api";
+import type { CandidateProfileResponse, ChatResponse, ChatSessionResponse, ChatTurnResponse, CollectionResponse } from "@/api";
 import { api } from "@/api";
 import { parseAxiosError } from "@/api/errors";
+import { Button, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle } from "@/components/ui";
 import { Avatar } from "@/components/ui/avatar";
 import { SidebarResizeHandle } from "@/components/layout/SidebarResizeHandle";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
-import { useSelectedJobId } from "@/lib/auth";
+import { useSelectedJobId, useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useResizableSidebar } from "@/lib/useResizableSidebar";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     Edit2,
     ExternalLink,
+    FileText,
+    Layers,
     MessageSquare,
     PanelLeftClose,
     PanelLeftOpen,
@@ -18,6 +21,7 @@ import {
     Send,
     Trash2,
     Users,
+    X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
@@ -38,8 +42,14 @@ interface ChatMsg {
   id: string;
   role: "human" | "ai";
   content: string;
+  turnId?: string;
   candidatesInScope?: number;
   matchedCandidateIds?: string[];
+}
+
+interface ShortlistDraft {
+  sourceTurnId?: string;
+  candidates: CandidateProfileResponse[];
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -78,6 +88,7 @@ function turnsToMessages(turns: ChatTurnResponse[]): ChatMsg[] {
       id: `ai-${turn.id}`,
       role: "ai" as const,
       content: turn.answer_text,
+      turnId: turn.id,
       candidatesInScope: turn.matched_count ?? undefined,
       matchedCandidateIds: turn.matched_candidate_ids ?? undefined,
     },
@@ -118,19 +129,41 @@ function AiAvatar() {
 function CandidateCards({
   count,
   candidates,
+  sourceTurnId,
+  onOpenCandidate,
+  onCreateShortlist,
 }: {
   count: number;
   candidates: CandidateProfileResponse[];
+  sourceTurnId?: string;
+  onOpenCandidate: (candidate: CandidateProfileResponse) => void;
+  onCreateShortlist: (draft: ShortlistDraft) => void;
 }) {
   const shown = candidates.slice(0, 4);
   return (
     <div className="mt-3 space-y-2">
-      <div className="flex items-center gap-1.5 text-xs text-fg-muted font-sans">
-        <Users size={12} strokeWidth={2} />
-        <span>
-          Found <span className="font-medium text-fg tabular-nums">{count}</span> candidate
-          {count !== 1 ? "s" : ""} in scope
-        </span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-xs text-fg-muted font-sans">
+          <Users size={12} strokeWidth={2} />
+          <span>
+            Found <span className="font-medium text-fg tabular-nums">{count}</span> candidate
+            {count !== 1 ? "s" : ""} in scope
+          </span>
+        </div>
+        {candidates.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onCreateShortlist({ sourceTurnId, candidates })}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-[var(--radius-full)] border px-3 py-1.5",
+              "border-[color:var(--hairline)] bg-bg-elevated text-xs font-sans font-medium text-fg",
+              "transition-all duration-[var(--duration-fast)] hover:border-[color:var(--hairline-strong)] hover:shadow-[var(--shadow-sm)]"
+            )}
+          >
+            <Layers size={12} strokeWidth={1.75} className="text-fg-muted" />
+            <span>Create shortlist</span>
+          </button>
+        )}
       </div>
       {shown.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -138,11 +171,14 @@ function CandidateCards({
             const name = c.full_name?.trim() || "Candidate";
             const subtitle = c.current_job_title?.trim() || "Candidate profile";
             return (
-              <a
+              <button
+                type="button"
                 key={c.id}
-                href={`/candidates/${c.id}`}
+                onClick={() => onOpenCandidate(c)}
+                aria-label={`Open resume preview for ${name}`}
                 className={cn(
                   "flex items-center gap-2.5 shrink-0 px-3 py-2 rounded-[var(--radius-md)]",
+                  "text-left",
                   "border border-[color:var(--hairline)] bg-bg-elevated",
                   "hover:border-[color:var(--hairline-strong)] hover:shadow-[var(--shadow-sm)]",
                   "transition-all duration-[var(--duration-fast)]"
@@ -158,7 +194,7 @@ function CandidateCards({
                   </p>
                 </div>
                 <ExternalLink size={10} strokeWidth={1.75} className="text-fg-subtle ml-1" />
-              </a>
+              </button>
             );
           })}
         </div>
@@ -176,9 +212,13 @@ function CandidateCards({
 function MessageBubble({
   msg,
   candidates,
+  onOpenCandidate,
+  onCreateShortlist,
 }: {
   msg: ChatMsg;
   candidates: CandidateProfileResponse[];
+  onOpenCandidate: (candidate: CandidateProfileResponse) => void;
+  onCreateShortlist: (draft: ShortlistDraft) => void;
 }) {
   if (msg.role === "human") {
     return (
@@ -201,10 +241,142 @@ function MessageBubble({
       <div className="flex-1 min-w-0">
         <MarkdownRenderer text={msg.content} />
         {msg.candidatesInScope !== undefined && msg.candidatesInScope > 0 && (
-          <CandidateCards count={msg.candidatesInScope} candidates={candidates} />
+          <CandidateCards
+            count={msg.candidatesInScope}
+            candidates={candidates}
+            sourceTurnId={msg.turnId}
+            onOpenCandidate={onOpenCandidate}
+            onCreateShortlist={onCreateShortlist}
+          />
         )}
       </div>
     </div>
+  );
+}
+
+function CreateShortlistModal({
+  draft,
+  name,
+  selectedIds,
+  conflict,
+  loading,
+  onClose,
+  onNameChange,
+  onToggleCandidate,
+  onToggleAll,
+  onSubmit,
+}: {
+  draft: ShortlistDraft;
+  name: string;
+  selectedIds: Set<string>;
+  conflict: boolean;
+  loading: boolean;
+  onClose: () => void;
+  onNameChange: (value: string) => void;
+  onToggleCandidate: (candidateId: string) => void;
+  onToggleAll: () => void;
+  onSubmit: () => void;
+}) {
+  const allSelected = draft.candidates.length > 0 && selectedIds.size === draft.candidates.length;
+
+  return (
+    <Modal open onOpenChange={(open) => !open && onClose()}>
+      <ModalContent size="large" className="sm:max-w-[720px]">
+        <ModalHeader>
+          <ModalTitle>Create shortlist</ModalTitle>
+          <ModalDescription>
+            Choose the candidates you want to save from this chat result and name the new collection.
+          </ModalDescription>
+        </ModalHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="chat-shortlist-name" className="text-sm font-sans font-medium text-fg">
+              Shortlist name
+            </label>
+            <input
+              id="chat-shortlist-name"
+              aria-label="Shortlist name"
+              value={name}
+              onChange={(e) => onNameChange(e.target.value)}
+              placeholder="Top candidates for screening"
+              className={cn(
+                "h-11 w-full rounded-[var(--radius-md)] border bg-bg px-3 text-sm font-sans text-fg outline-none",
+                conflict
+                  ? "border-danger focus:ring-2 focus:ring-danger/25"
+                  : "border-[color:var(--hairline-strong)] focus:border-accent focus:ring-2 focus:ring-accent/20"
+              )}
+            />
+            {conflict && (
+              <p className="text-xs font-sans text-danger">
+                A shortlist with this name already exists. Please choose a different name.
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-sans text-fg-muted">
+              <span className="font-medium text-fg tabular-nums">{selectedIds.size}</span> selected
+            </p>
+            <button
+              type="button"
+              onClick={onToggleAll}
+              className="text-sm font-sans font-medium text-accent hover:underline"
+            >
+              {allSelected ? "Clear all" : "Select all"}
+            </button>
+          </div>
+
+          <div className="max-h-[420px] space-y-2 overflow-y-auto rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-2">
+            {draft.candidates.map((candidate) => {
+              const checked = selectedIds.has(candidate.id);
+              const nameLabel = candidate.full_name?.trim() || "Candidate";
+              const subtitle = candidate.current_job_title?.trim() || "Candidate profile";
+              return (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  onClick={() => onToggleCandidate(candidate.id)}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-[var(--radius-md)] border px-3 py-3 text-left transition-colors",
+                    checked
+                      ? "border-accent bg-accent/5"
+                      : "border-[color:var(--hairline)] bg-bg-elevated hover:border-[color:var(--hairline-strong)]"
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggleCandidate(candidate.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="h-4 w-4 rounded border-[color:var(--hairline-strong)] text-accent focus:ring-accent"
+                  />
+                  <Avatar name={nameLabel} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-sans font-medium text-fg">{nameLabel}</p>
+                    <p className="truncate text-xs font-sans text-fg-muted">{subtitle}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <ModalFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            loading={loading}
+            disabled={!name.trim() || selectedIds.size === 0}
+            onClick={onSubmit}
+          >
+            Create shortlist
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
 
@@ -328,10 +500,17 @@ export default function ChatRoute() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const selectedJobId = useSelectedJobId();
+  const userId = useUserId();
   const queryClient = useQueryClient();
 
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidateProfileResponse | null>(null);
+  const [resumePreviewUrl, setResumePreviewUrl] = useState<string | null>(null);
+  const [shortlistDraft, setShortlistDraft] = useState<ShortlistDraft | null>(null);
+  const [shortlistName, setShortlistName] = useState("");
+  const [selectedShortlistIds, setSelectedShortlistIds] = useState<string[]>([]);
+  const [shortlistConflict, setShortlistConflict] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const historySidebar = useResizableSidebar({
@@ -365,6 +544,17 @@ export default function ChatRoute() {
   });
   const jobCandidates = candidateData?.items ?? [];
 
+  const {
+    data: resumePreviewBlob,
+    isFetching: resumePreviewLoading,
+    error: resumePreviewError,
+  } = useQuery({
+    queryKey: ["candidate-resume-preview", selectedCandidate?.resume_document_id],
+    queryFn: () => api.upload.getFile(selectedCandidate!.resume_document_id),
+    enabled: !!selectedCandidate?.resume_document_id,
+    staleTime: 60_000,
+  });
+
   // ── load session history when active session changes ──────────────────────
 
   const {
@@ -397,6 +587,25 @@ export default function ChatRoute() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    if (!resumePreviewBlob) {
+      setResumePreviewUrl(null);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(resumePreviewBlob);
+    setResumePreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [resumePreviewBlob]);
+
+  useEffect(() => {
+    setSelectedCandidate(null);
+    setShortlistDraft(null);
+    setSelectedShortlistIds([]);
+    setShortlistName("");
+    setShortlistConflict(false);
+  }, [selectedJobId, urlSessionId]);
+
   // ── send message mutation ─────────────────────────────────────────────────
 
   const sendMutation = useMutation<ChatResponse, Error, string>({
@@ -411,6 +620,7 @@ export default function ChatRoute() {
         id: `ai-${Date.now()}`,
         role: "ai",
         content: res.answer,
+        turnId: res.turn?.id ?? undefined,
         candidatesInScope: res.candidates_in_scope,
         matchedCandidateIds: res.turn?.matched_candidate_ids ?? undefined,
       };
@@ -460,6 +670,7 @@ export default function ChatRoute() {
     navigate("/chat");
     setMessages([]);
     setInput("");
+    setSelectedCandidate(null);
     setTimeout(() => textareaRef.current?.focus(), 50);
   }
 
@@ -504,6 +715,85 @@ export default function ChatRoute() {
     deleteMutation.mutate(session);
   }
 
+  const createShortlistMutation = useMutation({
+    mutationFn: async () => {
+      if (!userId || !shortlistDraft || selectedShortlistIds.length === 0 || !shortlistName.trim()) {
+        throw new Error("Missing shortlist inputs");
+      }
+
+      const collection = await api.shortlist.collections.create({
+        created_by_user_id: userId,
+        name: shortlistName.trim(),
+        source_query_turn_id: shortlistDraft.sourceTurnId,
+      });
+
+      await Promise.all(
+        selectedShortlistIds.map((candidateId) =>
+          api.shortlist.items.add(collection.id, { candidate_profile_id: candidateId })
+        )
+      );
+
+      return collection;
+    },
+    onSuccess: (collection: CollectionResponse) => {
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      toast.success("Shortlist created", {
+        action: {
+          label: "View shortlist",
+          onClick: () => navigate(`/shortlists/collections/${collection.id}`),
+        },
+      });
+      handleCloseShortlistDraft();
+    },
+    onError: (err: unknown) => {
+      const apiError = parseAxiosError(err);
+      if (apiError.status === 409) {
+        setShortlistConflict(true);
+        return;
+      }
+      toast.error(apiError.detail || "Failed to create shortlist");
+    },
+  });
+
+  function handleOpenCandidate(candidate: CandidateProfileResponse) {
+    setSelectedCandidate(candidate);
+  }
+
+  function handleCloseCandidatePreview() {
+    setSelectedCandidate(null);
+  }
+
+  function handleOpenShortlistDraft(draft: ShortlistDraft) {
+    setShortlistDraft(draft);
+    setShortlistName("");
+    setSelectedShortlistIds([]);
+    setShortlistConflict(false);
+  }
+
+  function handleCloseShortlistDraft() {
+    setShortlistDraft(null);
+    setShortlistName("");
+    setSelectedShortlistIds([]);
+    setShortlistConflict(false);
+  }
+
+  function toggleShortlistCandidate(candidateId: string) {
+    setSelectedShortlistIds((current) =>
+      current.includes(candidateId)
+        ? current.filter((id) => id !== candidateId)
+        : [...current, candidateId]
+    );
+  }
+
+  function toggleAllShortlistCandidates() {
+    if (!shortlistDraft) return;
+    setSelectedShortlistIds((current) =>
+      current.length === shortlistDraft.candidates.length
+        ? []
+        : shortlistDraft.candidates.map((candidate) => candidate.id)
+    );
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -525,7 +815,7 @@ export default function ChatRoute() {
 
   return (
     <div
-      className="flex overflow-hidden"
+      className="relative flex overflow-hidden"
       style={{ height: "calc(100vh - var(--topbar-height))" }}
     >
       {/* ── Sessions sidebar ── */}
@@ -724,6 +1014,8 @@ export default function ChatRoute() {
                   key={msg.id}
                   msg={msg}
                   candidates={candidatesForMessage(msg)}
+                  onOpenCandidate={handleOpenCandidate}
+                  onCreateShortlist={handleOpenShortlistDraft}
                 />
               ))}
               {isPending && (
@@ -795,6 +1087,87 @@ export default function ChatRoute() {
           </div>
         </div>
       </div>
+      {selectedCandidate && (
+        <aside
+          data-testid="chat-candidate-pdf-panel"
+          className={cn(
+            "absolute inset-y-0 right-0 z-20 flex w-full max-w-full flex-col min-w-0",
+            "border-l border-[color:var(--hairline)] bg-bg-elevated shadow-[var(--shadow-lg)] sm:max-w-[34rem]"
+          )}
+        >
+          <div className="flex items-start justify-between gap-3 border-b border-[color:var(--hairline)] px-4 py-4">
+            <div className="min-w-0">
+              <p className="text-xs font-sans font-semibold uppercase tracking-widest text-fg-subtle">
+                Resume Preview
+              </p>
+              <h2 className="mt-1 truncate text-base font-sans font-semibold text-fg">
+                {selectedCandidate.full_name?.trim() || "Candidate"}
+              </h2>
+              <p className="mt-1 truncate text-sm font-sans text-fg-muted">
+                {selectedCandidate.current_job_title?.trim() || "Candidate profile"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseCandidatePreview}
+              aria-label="Close candidate resume preview"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-[color:var(--hairline)] hover:text-fg"
+            >
+              <X size={16} strokeWidth={1.9} />
+            </button>
+          </div>
+
+          <div className="flex-1 min-h-0 p-4">
+            <div className="flex h-full min-h-[18rem] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg">
+              {resumePreviewLoading && (
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                  <div className="h-8 w-8 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+                  <p className="text-sm font-sans text-fg-muted">Loading resume PDF…</p>
+                </div>
+              )}
+
+              {!resumePreviewLoading && resumePreviewError && (
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                  <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[color:var(--hairline)] text-fg-muted">
+                    <FileText size={20} strokeWidth={1.75} />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm font-sans font-medium text-fg">Resume preview unavailable</p>
+                    <p className="text-sm font-sans text-fg-muted">
+                      The PDF could not be loaded for this candidate.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!resumePreviewLoading && !resumePreviewError && resumePreviewUrl && (
+                <iframe
+                  src={resumePreviewUrl}
+                  title={`Resume preview for ${selectedCandidate.full_name?.trim() || "candidate"}`}
+                  className="h-full w-full"
+                />
+              )}
+            </div>
+          </div>
+        </aside>
+      )}
+      {shortlistDraft && (
+        <CreateShortlistModal
+          draft={shortlistDraft}
+          name={shortlistName}
+          selectedIds={new Set(selectedShortlistIds)}
+          conflict={shortlistConflict}
+          loading={createShortlistMutation.isPending}
+          onClose={handleCloseShortlistDraft}
+          onNameChange={(value) => {
+            setShortlistName(value);
+            if (shortlistConflict) setShortlistConflict(false);
+          }}
+          onToggleCandidate={toggleShortlistCandidate}
+          onToggleAll={toggleAllShortlistCandidates}
+          onSubmit={() => createShortlistMutation.mutate()}
+        />
+      )}
     </div>
   );
 }

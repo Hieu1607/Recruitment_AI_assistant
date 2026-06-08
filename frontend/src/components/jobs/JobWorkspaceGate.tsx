@@ -1,13 +1,15 @@
 import { api, type JobResponse } from "@/api";
+import { JobDescriptionRichTextBody } from "@/components/jobs/JobDescriptionRichTextBody";
 import { Button, EmptyState, FilterChip, Skeleton } from "@/components/ui";
 import { useAuthStore } from "@/lib/auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, BriefcaseBusiness, FileText, MessageSquare, Plus, Search, Sparkles, Users } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { routes } from "@/routes";
 import { cn } from "@/lib/cn";
+import { htmlToMarkdown } from "@/components/jobs/job-description-markdown";
 import { CurrentWorkspaceBadge, JobStatusBadge } from "./job-ui";
 import {
   fieldClasses,
@@ -36,14 +38,14 @@ export function JobWorkspaceGate({
   const selectedJobId = useAuthStore((state) => state.selectedJobId);
   const setSelectedJobId = useAuthStore((state) => state.setSelectedJobId);
   const [jobTitle, setJobTitle] = useState("");
-  const [jobDescription, setJobDescription] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<JobFilter>("all");
+  const jobDescriptionRef = useRef<HTMLDivElement>(null);
 
   const createJob = useMutation({
     mutationFn: async () => {
       const title = jobTitle.trim();
-      const description = jobDescription.trim();
+      const description = htmlToMarkdown(jobDescriptionRef.current?.innerHTML ?? "");
       const job = await api.jobs.create({ title });
 
       if (!description) {
@@ -69,9 +71,13 @@ export function JobWorkspaceGate({
     onSuccess: ({ job, descriptionSaved, descriptionSaveError }) => {
       setSelectedJobId(job.id);
       setJobTitle("");
-      setJobDescription("");
+      if (jobDescriptionRef.current) {
+        jobDescriptionRef.current.innerText = "";
+      }
       qc.invalidateQueries({ queryKey: ["jobs"] });
       qc.invalidateQueries({ queryKey: ["jobs", job.id, "job-description", "summary"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-jds", job.id] });
+      qc.invalidateQueries({ queryKey: ["jobs", job.id, "setup-status"] });
       toast.success("Workspace created");
       if (descriptionSaveError && !descriptionSaved) {
         toast.error(`Workspace created, but the description was not saved. ${descriptionSaveError}`);
@@ -132,7 +138,7 @@ export function JobWorkspaceGate({
                 </h1>
                 <p className="mt-4 text-base leading-7 text-fg-muted">
                   {jobs.length === 0
-                    ? "Create the workspace context first. You can refine the full job description after you enter the dashboard."
+                    ? "Create the workspace context and draft the full job description together before you enter the dashboard."
                     : "Every resume, JD, score, and chat session is scoped to one job."}
                 </p>
               </div>
@@ -208,29 +214,21 @@ export function JobWorkspaceGate({
                       </div>
 
                       <div>
-                        <label
+                        <p
+                          id="first-job-description-label"
                           className="text-sm font-medium text-fg-muted"
-                          htmlFor="first-job-description"
                         >
                           Job description <span className="text-fg-subtle">(optional)</span>
-                        </label>
-                        <textarea
+                        </p>
+                        <div
                           id="first-job-description"
-                          value={jobDescription}
-                          onChange={(event) => setJobDescription(event.target.value)}
-                          placeholder="Responsibilities, required skills, or a short hiring brief."
-                          rows={6}
-                          className={cn(fieldClasses, "mt-2 min-h-36 resize-y bg-bg shadow-[var(--shadow-sm)]")}
-                        />
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {["Core responsibilities", "Required skills", "Hiring priorities"].map((item) => (
-                            <span
-                              key={item}
-                              className="rounded-full border border-[color:var(--hairline)] bg-bg px-3 py-1 text-xs text-fg-subtle"
-                            >
-                              {item}
-                            </span>
-                          ))}
+                          aria-labelledby="first-job-description-label"
+                          className="mt-2 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg px-4 py-4 shadow-[var(--shadow-sm)]"
+                        >
+                          <JobDescriptionRichTextBody
+                            editorRef={jobDescriptionRef}
+                            minHeightClassName="min-h-[220px]"
+                          />
                         </div>
                       </div>
 
@@ -265,7 +263,7 @@ export function JobWorkspaceGate({
                               {
                                 icon: FileText,
                                 title: "JD authoring",
-                                body: "You can expand this into a full job description when ready.",
+                                body: "Draft the full job description now so later scoring stays grounded.",
                               },
                               {
                                 icon: MessageSquare,
@@ -298,7 +296,7 @@ export function JobWorkspaceGate({
                           <div className="mt-3 space-y-2">
                             {[
                               "Upload resumes to generate candidate profiles.",
-                              "Add the full job description to define fit.",
+                              "Refine the JD if hiring priorities change.",
                               "Run scoring once both are ready.",
                               "Use AI chat to interrogate the pipeline.",
                             ].map((step, index) => (

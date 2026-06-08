@@ -7,6 +7,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.services.ai_agent.nodes import _apply_dsl, _resolve_candidates, answer_node, dsl_node, llm_node, router_node  # noqa: E402
 
 
+def test_get_llm_uses_higher_output_token_budget_for_ai_agent(monkeypatch):
+    import src.services.ai_agent.nodes as nodes_module
+
+    captured = {}
+
+    class DummyLLM:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(nodes_module, "LLMProvider", DummyLLM)
+    monkeypatch.setattr(nodes_module, "_llm", None)
+
+    llm = nodes_module._get_llm()
+
+    assert isinstance(llm, DummyLLM)
+    assert captured["kwargs"]["max_tokens"] == 8192
+
+
 def test_resolve_candidates_uses_scoped_current_candidates(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._fetch_candidates",
@@ -314,3 +332,31 @@ def test_router_node_overrides_educated_only_route_for_not_graduated_queries(mon
     assert result["router_output"]["llm_question_query"] == "Tìm các ứng viên chưa tốt nghiệp đại học"
     assert result["router_output"]["llm_relevant_fields"] == ["education_text", "summary_text"]
     assert "graduation-status semantics" in result["router_output"]["reasoning"]
+
+
+def test_router_node_falls_back_when_truncated_json_parses_as_list(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["full_name", "email"]',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw={"choices": [{"finish_reason": "length"}]},
+            )
+        ),
+    )
+
+    result = router_node({"question": "Bạn đang có thông tin những ứng viên nào"})
+
+    assert result["router_output"] == {
+        "is_recruitment_related": True,
+        "refusal_message": None,
+        "relevant_fields": [],
+        "dsl_question_query": None,
+        "llm_question_query": "Bạn đang có thông tin những ứng viên nào",
+        "dsl_relevant_fields": [],
+        "llm_relevant_fields": [],
+        "reasoning": "Parse failure – fell back to LLM path",
+    }

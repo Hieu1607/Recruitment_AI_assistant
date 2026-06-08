@@ -4,14 +4,17 @@ export interface CurrentUser {
   id: string;
   email: string;
   display_name: string;
+  gmail_connected: boolean;
 }
+
+type CurrentUserUpdate = Omit<CurrentUser, "gmail_connected"> & Partial<Pick<CurrentUser, "gmail_connected">>;
 
 const SELECTED_JOB_KEY = "recruit_ai_selected_job_id";
 
 interface AuthState {
   user: CurrentUser | null;
   selectedJobId: string | null;
-  setUser: (user: CurrentUser) => void;
+  setUser: (user: CurrentUserUpdate) => void;
   clearUser: () => void;
   setSelectedJobId: (jobId: string | null) => void;
 }
@@ -19,7 +22,16 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   selectedJobId: localStorage.getItem(SELECTED_JOB_KEY),
-  setUser: (user) => set({ user }),
+  setUser: (user) =>
+    set((state) => ({
+      user: {
+        ...user,
+        gmail_connected:
+          typeof user.gmail_connected === "boolean"
+            ? user.gmail_connected
+            : (state.user?.gmail_connected ?? false),
+      },
+    })),
   clearUser: () => set({ user: null }),
   setSelectedJobId: (jobId) => {
     if (jobId) localStorage.setItem(SELECTED_JOB_KEY, jobId);

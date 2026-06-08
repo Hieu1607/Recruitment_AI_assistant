@@ -26,10 +26,13 @@ export interface ResumeResponse {
   id: string;                              // UUID
   job_id?: string;                         // UUID
   original_file_name: string;
+  candidate_profile_id?: string | null;    // UUID
+  candidate_display_name?: string | null;
   storage_uri: string;                     // server-side file path
   upload_status: UploadStatus;
   duplicate_group_key: string | null;
   uploaded_by_user_id: string;             // UUID
+  uploader_display_name?: string | null;
   uploaded_at: string | null;              // ISO 8601 datetime
   processed_at: string | null;             // ISO 8601 datetime
   retention_expires_at: string | null;     // ISO 8601 datetime

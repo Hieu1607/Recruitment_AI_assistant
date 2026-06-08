@@ -3,6 +3,7 @@ import type {
   InterviewInvitationResponse,
   OutreachResponse,
   ResumeResponse,
+  StructuredEntry,
   StructuredLink,
   StructuredSection,
   StructuredSummary,
@@ -49,19 +50,71 @@ function statusVariant(status: string): "neutral" | "warning" | "success" | "dan
   return "neutral";
 }
 
+const missingDisplayValues = new Set(["-", "--", "n/a", "na", "none", "null", "notapplicable"]);
+
+function cleanDisplayText(value: string | null | undefined) {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  const comparable = normalized.toLowerCase().replace(/\./g, "").replace(/\s+/g, "");
+  return missingDisplayValues.has(comparable) ? null : normalized;
+}
+
+function cleanDisplayList(values: string[]) {
+  return values.map(cleanDisplayText).filter((item): item is string => item !== null);
+}
+
+function cleanDisplayLinks(links: StructuredLink[]) {
+  return links
+    .map((link) => {
+      const url = cleanDisplayText(link.url);
+      if (!url) return null;
+      return { url, label: cleanDisplayText(link.label) };
+    })
+    .filter((link): link is StructuredLink => link !== null);
+}
+
+function cleanStructuredEntry(entry: StructuredEntry): StructuredEntry | null {
+  const cleaned: StructuredEntry = {
+    title: cleanDisplayText(entry.title),
+    subtitle: cleanDisplayText(entry.subtitle),
+    role: cleanDisplayText(entry.role),
+    location: cleanDisplayText(entry.location),
+    dateRange: cleanDisplayText(entry.dateRange),
+    description: cleanDisplayText(entry.description),
+    bullets: cleanDisplayList(entry.bullets),
+    links: cleanDisplayLinks(entry.links),
+    metadata: cleanDisplayList(entry.metadata),
+  };
+
+  if (
+    cleaned.title ||
+    cleaned.subtitle ||
+    cleaned.role ||
+    cleaned.location ||
+    cleaned.dateRange ||
+    cleaned.description ||
+    cleaned.bullets.length > 0 ||
+    cleaned.links.length > 0 ||
+    cleaned.metadata.length > 0
+  ) {
+    return cleaned;
+  }
+  return null;
+}
+
 function displayValue(value: string | number | boolean | null | undefined) {
   if (value === null || value === undefined) return "No infomation";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") return String(value);
-  const normalized = value.trim();
-  return normalized || "No infomation";
+  return cleanDisplayText(value) || "No infomation";
 }
 
 function renderLinks(links: StructuredLink[]) {
-  if (links.length === 0) return null;
+  const visibleLinks = cleanDisplayLinks(links);
+  if (visibleLinks.length === 0) return null;
   return (
     <div className="mt-3 flex flex-wrap gap-2">
-      {links.map((link, index) => (
+      {visibleLinks.map((link, index) => (
         <a
           key={`${link.url}-${index}`}
           href={link.url}
@@ -82,7 +135,7 @@ function hasStructuredSection(section: StructuredSection | null | undefined) {
 }
 
 function StructuredSummaryBlock({ summary, fallbackText }: { summary?: StructuredSummary | null; fallbackText?: string | null }) {
-  const text = summary?.text || fallbackText;
+  const text = cleanDisplayText(summary?.text) || cleanDisplayText(fallbackText);
   const links = summary?.links ?? [];
   return (
     <>
@@ -103,50 +156,63 @@ function StructuredSectionBlock({
     return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(fallbackText)}</p>;
   }
 
+  const entries = section!.entries.map(cleanStructuredEntry).filter((entry): entry is StructuredEntry => entry !== null);
+  const rawText = cleanDisplayText(section?.rawText) || cleanDisplayText(fallbackText);
+
+  if (entries.length === 0 && !rawText) {
+    return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">No infomation</p>;
+  }
+
   return (
     <div className="mt-4 space-y-4">
-      {section!.entries.map((entry, index) => (
-        <article
-          key={`${entry.title || entry.subtitle || "entry"}-${index}`}
-          className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg px-4 py-3"
-        >
-          <div className="space-y-2">
-            {(entry.title || entry.subtitle) && (
-              <div>
-                {entry.title && <h3 className="text-sm font-medium text-fg">{entry.title}</h3>}
-                {entry.subtitle && <p className="text-sm text-fg-muted">{entry.subtitle}</p>}
+      {entries.map((entry, index) => (
+        (() => {
+          const hasListContent = entry.metadata.length > 0 || entry.bullets.length > 0;
+
+          return (
+            <article
+              key={`${entry.title || entry.subtitle || "entry"}-${index}`}
+              className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg px-4 py-3"
+            >
+              <div className="space-y-2">
+                {(entry.title || entry.subtitle) && (
+                  <div>
+                    {entry.title && <h3 className="text-sm font-medium text-fg">{entry.title}</h3>}
+                    {entry.subtitle && <p className="text-sm text-fg-muted">{entry.subtitle}</p>}
+                  </div>
+                )}
+                {(entry.role || entry.location || entry.dateRange) && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted">
+                    {entry.role && <span>{entry.role}</span>}
+                    {entry.location && <span>{entry.location}</span>}
+                    {entry.dateRange && <span>{entry.dateRange}</span>}
+                  </div>
+                )}
+                {entry.description && !hasListContent && (
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{entry.description}</p>
+                )}
+                {entry.metadata.length > 0 && (
+                  <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-fg">
+                    {entry.metadata.map((item, metaIndex) => (
+                      <li key={`${item}-${metaIndex}`}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+                {entry.bullets.length > 0 && (
+                  <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-fg">
+                    {entry.bullets.map((item, bulletIndex) => (
+                      <li key={`${item}-${bulletIndex}`}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+                {renderLinks(entry.links)}
               </div>
-            )}
-            {(entry.role || entry.location || entry.dateRange) && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted">
-                {entry.role && <span>{entry.role}</span>}
-                {entry.location && <span>{entry.location}</span>}
-                {entry.dateRange && <span>{entry.dateRange}</span>}
-              </div>
-            )}
-            {entry.description && (
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{entry.description}</p>
-            )}
-            {entry.metadata.length > 0 && (
-              <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-fg">
-                {entry.metadata.map((item, metaIndex) => (
-                  <li key={`${item}-${metaIndex}`}>{item}</li>
-                ))}
-              </ul>
-            )}
-            {entry.bullets.length > 0 && (
-              <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-fg">
-                {entry.bullets.map((item, bulletIndex) => (
-                  <li key={`${item}-${bulletIndex}`}>{item}</li>
-                ))}
-              </ul>
-            )}
-            {renderLinks(entry.links)}
-          </div>
-        </article>
+            </article>
+          );
+        })()
       ))}
-      {section?.rawText && section.entries.length === 0 && (
-        <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{section.rawText}</p>
+      {rawText && entries.length === 0 && (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{rawText}</p>
       )}
     </div>
   );
@@ -214,8 +280,6 @@ function OverviewTab({
     { label: "CPA", value: profile?.cpa },
     { label: "Graduation status", value: profile?.graduation_status },
     { label: "Studied abroad", value: profile?.ever_studied_abroad },
-    { label: "Profile ID", value: profile?.id },
-    { label: "Resume ID", value: profile?.resume_document_id ?? resume.id },
   ];
 
   return (

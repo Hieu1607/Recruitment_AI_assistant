@@ -8,6 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.models.base import Base
 
 
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+
+
 class OAuthIdentity(Base):
     __tablename__ = "oauth_identities"
     __table_args__ = (
@@ -42,3 +45,8 @@ class OAuthIdentity(Base):
     )
 
     user: Mapped["UserAccount"] = relationship(back_populates="oauth_identities")  # noqa: F821
+
+    def has_scope(self, required_scope: str) -> bool:
+        if not self.scope:
+            return False
+        return required_scope in self.scope.split()

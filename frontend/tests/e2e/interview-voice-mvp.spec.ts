@@ -366,9 +366,12 @@ test("recruiter manages interview templates, sends an invitation, and completes 
   await expect(page.getByLabel("Question 1")).toHaveValue("Tell me about your hiring approach.");
   await expect(page.getByLabel("Question 2")).toHaveValue("How do you keep interviews consistent?");
   await page
-    .getByLabel("Report rubric")
-    .fill(JSON.stringify({ score_bands: ["strong", "mixed", "weak"] }, null, 2));
+    .getByLabel("Report guidance")
+    .fill("Focus the summary on structured interviewing, candidate communication, and follow-up risks.");
   await page.getByRole("button", { name: "Create template" }).click();
+  expect(template?.report_rubric).toEqual({
+    guidance: "Focus the summary on structured interviewing, candidate communication, and follow-up risks.",
+  });
 
   const createdRow = page.getByRole("link", { name: /Structured recruiter screen/i });
   await expect(createdRow).toBeVisible();
@@ -378,6 +381,9 @@ test("recruiter manages interview templates, sends an invitation, and completes 
   await page.getByLabel("Intro script").fill("Welcome to the structured screen.");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByLabel("Intro script")).toHaveValue("Welcome to the structured screen.");
+  expect(template?.report_rubric).toEqual({
+    guidance: "Focus the summary on structured interviewing, candidate communication, and follow-up risks.",
+  });
 
   await page.goto(`${APP_URL}/candidates/${resume.id}`);
   await page.getByRole("button", { name: "Send interview invitation" }).click();

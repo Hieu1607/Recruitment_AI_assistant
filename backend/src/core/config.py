@@ -86,12 +86,17 @@ class Settings(BaseSettings):
     # LLM
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2048"))
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL_NAME: str = os.getenv("GROQ_MODEL_NAME", "llama-3.1-8b-instant")
+    RESUME_PARSE_MODEL_NAME: str = os.getenv(
+        "RESUME_PARSE_MODEL_NAME",
+        "llama-3.1-8b-instant",
+    )
+    RESUME_PARSE_MAX_TOKENS: int = int(os.getenv("RESUME_PARSE_MAX_TOKENS", "4096"))
     GROQ_JSON_FALLBACK_MODEL: str = os.getenv(
         "GROQ_JSON_FALLBACK_MODEL",
         "openai/gpt-oss-20b",
@@ -99,6 +104,9 @@ class Settings(BaseSettings):
     GROQ_VISION_MODEL_NAME: str = os.getenv(
         "GROQ_VISION_MODEL_NAME", "meta-llama/llama-4-scout-17b-16e-instruct"
     )
+    SHOPAIKEY_API_KEY: str = os.getenv("SHOPAIKEY_API_KEY", os.getenv("SHOPAI_API_KEY", ""))
+    SHOPAIKEY_BASE_URL: str = os.getenv("SHOPAIKEY_BASE_URL", "https://api.shopaikey.com/v1")
+    SHOPAIKEY_MODEL_NAME: str = os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b")
 
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL_NAME: str = os.getenv("OLLAMA_MODEL_NAME", "llama3.1:8b")

@@ -31,6 +31,12 @@ User → Frontend (http://localhost:5173)
      /dashboard
 ```
 
+Ngoài login cơ bản, repo hiện còn có progressive consent cho Gmail:
+
+- Login ban đầu chỉ dùng `openid email profile`.
+- Khi user mở Outreach và chưa nối Gmail, frontend gọi backend để lấy Google authorize URL cho flow `connect_gmail`.
+- Sau khi chấp nhận hoặc từ chối Gmail consent, user quay lại đúng route Outreach thay vì `/auth/callback`.
+
 **Quan trọng:** `REDIRECT_URI` ở GCP phải trùng **tuyệt đối** với URL mà backend gọi về Google (khớp scheme, host, port, path, không trailing slash).
 
 ---

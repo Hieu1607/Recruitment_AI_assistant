@@ -114,11 +114,14 @@ class ResumeResponse(BaseModel):
     id: str
     job_id: str
     original_file_name: str
+    candidate_profile_id: Optional[str] = None
+    candidate_display_name: Optional[str] = None
     storage_uri: str
     upload_status: str
     extraction_mode: Optional[str] = None
     duplicate_group_key: Optional[str]
     uploaded_by_user_id: str
+    uploader_display_name: Optional[str] = None
     uploaded_at: Optional[str]
     processed_at: Optional[str]
     retention_expires_at: Optional[str]
@@ -246,6 +249,41 @@ def _serialize_candidate(profile: CandidateProfile) -> CandidateResponse:
         ),
         education_text=profile.education_text,
     )
+
+
+def _resume_response_payload(
+    resume: ResumeDocument,
+    *,
+    candidate_profile_id: Optional[uuid.UUID] = None,
+    candidate_display_name: Optional[str] = None,
+    uploader_display_name: Optional[str] = None,
+) -> dict[str, Any]:
+    payload = _resume_to_dict(resume)
+    payload["candidate_profile_id"] = (
+        str(candidate_profile_id) if candidate_profile_id is not None else None
+    )
+    payload["candidate_display_name"] = candidate_display_name
+    payload["uploader_display_name"] = uploader_display_name
+    return payload
+
+
+def _get_resume_display_metadata(
+    db: Session,
+    resume_id: uuid.UUID,
+) -> tuple[Optional[uuid.UUID], Optional[str], Optional[str]]:
+    row = db.execute(
+        select(CandidateProfile.id, CandidateProfile.full_name, UserAccount.display_name)
+        .select_from(ResumeDocument)
+        .outerjoin(
+            CandidateProfile,
+            CandidateProfile.resume_document_id == ResumeDocument.id,
+        )
+        .outerjoin(UserAccount, UserAccount.id == ResumeDocument.uploaded_by_user_id)
+        .where(ResumeDocument.id == resume_id)
+    ).first()
+    if row is None:
+        return None, None, None
+    return row[0], row[1], row[2]
 
 
 def _load_job_candidates(
@@ -672,17 +710,43 @@ def list_job_resumes(
     current_user: UserAccount = Depends(get_current_user),
 ):
     get_current_user_owned_job(db, current_user.id, job_id)
-    query = db.query(ResumeDocument).filter(ResumeDocument.job_id == job_id)
+    query = select(
+        ResumeDocument,
+        CandidateProfile.id,
+        CandidateProfile.full_name,
+        UserAccount.display_name,
+    ).outerjoin(
+        CandidateProfile,
+        CandidateProfile.resume_document_id == ResumeDocument.id,
+    ).outerjoin(
+        UserAccount,
+        UserAccount.id == ResumeDocument.uploaded_by_user_id,
+    ).where(
+        ResumeDocument.job_id == job_id,
+    )
     if upload_status is not None:
-        query = query.filter(ResumeDocument.upload_status == upload_status)
+        query = query.where(ResumeDocument.upload_status == upload_status)
     rows = (
-        query.order_by(ResumeDocument.uploaded_at.desc())
-        .offset(offset)
-        .limit(limit)
+        db.execute(
+            query.order_by(ResumeDocument.uploaded_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         .all()
     )
     return ResumeListResponse(
-        items=[ResumeResponse(**_resume_to_dict(r)) for r in rows], total=len(rows)
+        items=[
+            ResumeResponse(
+                **_resume_response_payload(
+                    resume,
+                    candidate_profile_id=candidate_profile_id,
+                    candidate_display_name=candidate_display_name,
+                    uploader_display_name=uploader_display_name,
+                )
+            )
+            for resume, candidate_profile_id, candidate_display_name, uploader_display_name in rows
+        ],
+        total=len(rows),
     )
 
 
@@ -740,8 +804,17 @@ def get_job_resume(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ):
+    resume = get_job_scoped_resume(db, current_user.id, job_id, resume_id)
+    candidate_profile_id, candidate_display_name, uploader_display_name = _get_resume_display_metadata(
+        db, resume.id
+    )
     return ResumeResponse(
-        **_resume_to_dict(get_job_scoped_resume(db, current_user.id, job_id, resume_id))
+        **_resume_response_payload(
+            resume,
+            candidate_profile_id=candidate_profile_id,
+            candidate_display_name=candidate_display_name,
+            uploader_display_name=uploader_display_name,
+        )
     )
 
 
@@ -760,7 +833,17 @@ def update_job_resume(
         resume.upload_status = body.upload_status
     db.commit()
     db.refresh(resume)
-    return ResumeResponse(**_resume_to_dict(resume))
+    candidate_profile_id, candidate_display_name, uploader_display_name = _get_resume_display_metadata(
+        db, resume.id
+    )
+    return ResumeResponse(
+        **_resume_response_payload(
+            resume,
+            candidate_profile_id=candidate_profile_id,
+            candidate_display_name=candidate_display_name,
+            uploader_display_name=uploader_display_name,
+        )
+    )
 
 
 @router.delete("/{job_id}/resumes/{resume_id}")
@@ -770,9 +853,20 @@ def delete_job_resume(
     db: Session = Depends(get_db),
     current_user: UserAccount = Depends(get_current_user),
 ):
-    resume = get_job_scoped_resume(db, current_user.id, job_id, resume_id)
-    db.delete(resume)
-    db.commit()
+    get_current_user_owned_job(db, current_user.id, job_id)
+    resume = (
+        db.execute(
+            select(ResumeDocument).where(
+                ResumeDocument.id == resume_id,
+                ResumeDocument.job_id == job_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if resume is not None:
+        db.delete(resume)
+        db.commit()
     return {"deleted": True, "resume_id": str(resume_id)}
 
 

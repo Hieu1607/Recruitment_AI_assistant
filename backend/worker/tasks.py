@@ -212,7 +212,7 @@ def send_outreach_email(self, message_id: str):
     from sqlalchemy import select
 
     from src.models.enums import SentStatus
-    from src.models.oauth_identity import OAuthIdentity
+    from src.models.oauth_identity import GMAIL_SEND_SCOPE, OAuthIdentity
     from src.models.outreach import OutreachMessage
     from src.models.session import SessionLocal
     from src.models.user_account import UserAccount
@@ -248,10 +248,16 @@ def send_outreach_email(self, message_id: str):
             )
             .scalar_one_or_none()
         )
-        if user is None or identity is None:
+        if user is None:
             message.sent_status = SentStatus.FAILED
             db.commit()
-            return {"sent": False, "reason": "sender_google_identity_missing"}
+            return {"sent": False, "reason": "sender_not_found"}
+        if (
+            identity is None
+            or not identity.refresh_token_encrypted
+            or not identity.has_scope(GMAIL_SEND_SCOPE)
+        ):
+            return {"sent": False, "reason": "gmail_not_connected"}
 
         subject, body = build_outreach_email(subject=message.subject, body=message.body)
         send_email(

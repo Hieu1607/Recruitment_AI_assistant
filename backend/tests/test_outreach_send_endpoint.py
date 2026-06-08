@@ -17,6 +17,7 @@ from src.models.candidate_profile import CandidateProfile
 from src.models.deps import get_current_user, get_db
 from src.models.enums import ContentSource, ProfileStatus, SentStatus, UploadStatus, UserStatus
 from src.models.job import Job
+from src.models.oauth_identity import OAuthIdentity
 from src.models.outreach import OutreachMessage
 from src.models.resume_document import ResumeDocument
 from src.models.user_account import UserAccount
@@ -28,6 +29,7 @@ def _create_test_tables(engine):
         Base.metadata.tables["jobs"],
         Base.metadata.tables["resume_documents"],
         Base.metadata.tables["candidate_profiles"],
+        Base.metadata.tables["oauth_identities"],
         Base.metadata.tables["outreach_messages"],
     ]
     Base.metadata.create_all(engine, tables=tables)
@@ -132,10 +134,52 @@ def test_send_outreach_requires_current_user(api_client, seeded_outreach_message
     assert response.status_code in {401, 403}
 
 
-def test_send_outreach_queues_task_for_owner(authed_api_client, seeded_outreach_message, monkeypatch):
+def test_send_outreach_returns_gmail_not_connected_for_owner_without_capability(
+    authed_api_client,
+    seeded_outreach_message,
+    monkeypatch,
+):
     import worker.tasks as tasks_module
 
     message = seeded_outreach_message["message"]
+    queued = []
+
+    class FakeTask:
+        @staticmethod
+        def delay(message_id):
+            queued.append(message_id)
+
+    monkeypatch.setattr(tasks_module, "send_outreach_email", FakeTask, raising=False)
+
+    response = authed_api_client.post(f"/api/v1/outreach/{message.id}/send")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "gmail_not_connected"
+    assert queued == []
+
+
+def test_send_outreach_queues_task_for_owner_with_gmail_capability(
+    authed_api_client,
+    db_session,
+    seeded_outreach_message,
+    monkeypatch,
+):
+    import worker.tasks as tasks_module
+
+    user = seeded_outreach_message["user"]
+    message = seeded_outreach_message["message"]
+    db_session.add(
+        OAuthIdentity(
+            user_id=user.id,
+            provider="google",
+            provider_subject="google-subject",
+            email=user.email,
+            refresh_token_encrypted="encrypted-refresh",
+            scope="openid email profile https://www.googleapis.com/auth/gmail.send",
+        )
+    )
+    db_session.commit()
+
     queued = []
 
     class FakeTask:

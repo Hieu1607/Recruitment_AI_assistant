@@ -19,23 +19,57 @@ type TemplateFormState = {
   status: string;
   intro_script: string;
   closing_script: string;
-  report_rubric: string;
+  report_guidance: string;
 };
 
-function toPrettyJson(value: Record<string, unknown> | undefined) {
-  return JSON.stringify(value ?? {}, null, 2);
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+    : [];
 }
 
-function parseJsonField(value: string, field: string) {
-  try {
-    const parsed = JSON.parse(value || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { error: `${field} must be a JSON object.` };
-    }
-    return { value: parsed as Record<string, unknown> };
-  } catch {
-    return { error: `${field} must be valid JSON.` };
+function extractReportGuidance(rubric: Record<string, unknown> | undefined) {
+  if (!rubric || typeof rubric !== "object" || Array.isArray(rubric)) {
+    return "";
   }
+
+  if (typeof rubric.guidance === "string" && rubric.guidance.trim()) {
+    return rubric.guidance.trim();
+  }
+
+  if (typeof rubric.summary_guidance === "string" && rubric.summary_guidance.trim()) {
+    return rubric.summary_guidance.trim();
+  }
+
+  const focusAreas = readStringArray(rubric.focus);
+  if (focusAreas.length) {
+    return `Focus on:\n${focusAreas.map((item) => `- ${item}`).join("\n")}`;
+  }
+
+  const scoreBands = readStringArray(rubric.score_bands);
+  if (scoreBands.length) {
+    return `Use these score bands if needed: ${scoreBands.join(", ")}`;
+  }
+
+  return "";
+}
+
+function buildReportRubric(
+  currentValue: string,
+  existingRubric: Record<string, unknown> | undefined,
+) {
+  const trimmedGuidance = currentValue.trim();
+  const originalGuidance = extractReportGuidance(existingRubric);
+
+  if (!trimmedGuidance) {
+    return {};
+  }
+
+  if (existingRubric && trimmedGuidance === originalGuidance) {
+    return existingRubric;
+  }
+
+  return { guidance: trimmedGuidance };
 }
 
 function toQuestionDrafts(payload: Record<string, unknown> | undefined): QuestionDraft[] {
@@ -64,8 +98,7 @@ function withoutQuestions(payload: Record<string, unknown> | undefined) {
     return {};
   }
 
-  const { questions: _questions, ...rest } = payload;
-  return rest;
+  return Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "questions"));
 }
 
 function buildInitialState(template?: InterviewTemplateResponse): TemplateFormState {
@@ -75,7 +108,7 @@ function buildInitialState(template?: InterviewTemplateResponse): TemplateFormSt
     status: template?.status ?? "draft",
     intro_script: template?.intro_script ?? "",
     closing_script: template?.closing_script ?? "",
-    report_rubric: toPrettyJson(template?.report_rubric),
+    report_guidance: extractReportGuidance(template?.report_rubric),
   };
 }
 
@@ -91,16 +124,12 @@ function buildQuestionPayload(basePayload: Record<string, unknown>, questions: Q
   };
 }
 
-function buildQuestionPreview(basePayload: Record<string, unknown>, questions: QuestionDraft[]) {
-  return JSON.stringify(buildQuestionPayload(basePayload, questions), null, 2);
-}
-
 function parseQuestionImport(value: string) {
   return value
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => line.replace(/^(\d+[\.\)]|[-*])\s*/, "").trim())
+    .map((line) => line.replace(/^(\d+[.)]|[-*])\s*/, "").trim())
     .filter(Boolean);
 }
 
@@ -139,11 +168,6 @@ export function TemplateEditor({
   const statusOptions = mode === "create"
     ? ["draft", "active"]
     : ["draft", "active", "archived"];
-
-  const questionPreview = useMemo(
-    () => buildQuestionPreview(baseQuestionPayload, questions),
-    [baseQuestionPayload, questions],
-  );
 
   function updateField<K extends keyof TemplateFormState>(key: K, value: TemplateFormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -188,12 +212,6 @@ export function TemplateEditor({
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const reportRubric = parseJsonField(form.report_rubric, "Report rubric");
-    if (reportRubric.error) {
-      setError(reportRubric.error);
-      return;
-    }
-
     const normalizedQuestions = questions
       .map((question) => ({
         ...question,
@@ -214,7 +232,7 @@ export function TemplateEditor({
       intro_script: form.intro_script.trim() || null,
       closing_script: form.closing_script.trim() || null,
       question_payload: buildQuestionPayload(baseQuestionPayload, normalizedQuestions),
-      report_rubric: reportRubric.value,
+      report_rubric: buildReportRubric(form.report_guidance, template?.report_rubric),
     });
   }
 
@@ -225,6 +243,9 @@ export function TemplateEditor({
           <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">
             Template name
           </span>
+          <p className="text-sm text-fg-muted">
+            Give this template a clear name so your team can quickly tell when to use it.
+          </p>
           <input
             aria-label="Template name"
             value={form.name}
@@ -238,10 +259,13 @@ export function TemplateEditor({
         </label>
         <label className="space-y-1.5">
           <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">
-            Language code
+            Interview language
           </span>
+          <p className="text-sm text-fg-muted">
+            Choose the language the candidate will hear and respond in during the interview.
+          </p>
           <input
-            aria-label="Language code"
+            aria-label="Interview language"
             value={form.language_code}
             onChange={(event) => updateField("language_code", event.target.value)}
             required
@@ -255,6 +279,9 @@ export function TemplateEditor({
 
       <label className="space-y-1.5">
         <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Status</span>
+        <p className="text-sm text-fg-muted">
+          Keep drafts hidden until the template is ready. Switch to active when it can be used for invitations.
+        </p>
         <select
           aria-label="Status"
           value={form.status}
@@ -276,6 +303,9 @@ export function TemplateEditor({
         <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">
           Intro script
         </span>
+        <p className="text-sm text-fg-muted">
+          This is the opening message the candidate hears before the first question.
+        </p>
         <textarea
           aria-label="Intro script"
           value={form.intro_script}
@@ -292,6 +322,9 @@ export function TemplateEditor({
         <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">
           Closing script
         </span>
+        <p className="text-sm text-fg-muted">
+          Use this for the final wrap-up, next steps, or a polite thank-you at the end of the interview.
+        </p>
         <textarea
           aria-label="Closing script"
           value={form.closing_script}
@@ -381,35 +414,35 @@ export function TemplateEditor({
           </div>
         </div>
 
-        <label className="space-y-1.5">
-          <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">
-            Question payload preview
-          </span>
-          <textarea
-            aria-label="Question payload preview"
-            value={questionPreview}
-            readOnly
-            rows={10}
-            className={cn(
-              "w-full rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated px-3 py-2.5",
-              "font-mono text-xs text-fg-muted outline-none",
-            )}
-          />
-        </label>
+        <div className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated p-4">
+          <p className="text-sm font-medium text-fg">Interview flow</p>
+          <p className="mt-1 text-sm text-fg-muted">
+            Candidates will be asked these questions in the same order shown above.
+          </p>
+          <p className="mt-3 text-sm text-fg">
+            {questions.length
+              ? `${questions.length} question${questions.length === 1 ? "" : "s"} ready for this template.`
+              : "Add at least one question to build the interview flow."}
+          </p>
+        </div>
       </section>
 
       <label className="space-y-1.5">
         <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">
-          Report rubric
+          Report guidance
         </span>
+        <p className="text-sm text-fg-muted">
+          Describe what the final interview summary should focus on.
+        </p>
         <textarea
-          aria-label="Report rubric"
-          value={form.report_rubric}
-          onChange={(event) => updateField("report_rubric", event.target.value)}
-          rows={12}
+          aria-label="Report guidance"
+          value={form.report_guidance}
+          onChange={(event) => updateField("report_guidance", event.target.value)}
+          rows={7}
+          placeholder={"Example: Focus on communication, ownership, and problem-solving. Highlight notable strengths, concerns, and any areas that need follow-up after the interview."}
           className={cn(
             "w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2.5",
-            "font-mono text-xs text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
+            "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
           )}
         />
       </label>

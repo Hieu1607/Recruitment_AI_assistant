@@ -552,7 +552,7 @@ export default function JobsListRoute() {
                   variant="secondary"
                   icon={<PencilLine size={15} strokeWidth={1.75} />}
                   disabled={!selectedJob}
-                  onClick={() => navigate(routes.jobDescriptionNew)}
+                  onClick={() => navigate(routes.jobDescriptions)}
                 >
                   {jdQuery.data ? "Edit job description" : "Create job description"}
                 </Button>

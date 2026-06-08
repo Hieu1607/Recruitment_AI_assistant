@@ -22,12 +22,23 @@ test("job description management follows the selected workspace", async ({ page,
   await expect(editJobDescriptionButton).toBeVisible();
 
   await editJobDescriptionButton.click();
-  await expect(page).toHaveURL(`${baseURL}/job-descriptions/new`);
-  await expect(page.getByRole("button", { name: "Back to workspace" })).toBeVisible();
+  await expect(page).toHaveURL(`${baseURL}/job-descriptions`);
+  await expect(page.getByRole("heading", { name: "Workspace job description" })).toBeVisible();
 
   await page.goto(`${baseURL}/job-descriptions/${setup.jobDescriptionId}/edit`);
-  await expect(page).toHaveURL(`${baseURL}/job-descriptions/new`);
-  await expect(page.getByText("This editor follows the currently selected workspace.")).toBeVisible();
+  await expect(page).toHaveURL(`${baseURL}/job-descriptions`);
+  await expect(page.getByRole("heading", { name: "Workspace job description" })).toBeVisible();
+
+  await page.goto(`${baseURL}/jobs/new`);
+  await expect(page.getByRole("heading", { name: "New job" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Job title" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Job description" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Bold" })).toBeVisible();
+  await expect(page.getByText("Start writing the job description")).toBeVisible();
+
+  await page.goto(`${baseURL}/job-descriptions/new`);
+  await expect(page).toHaveURL(`${baseURL}/job-descriptions`);
+  await expect(page.getByRole("heading", { name: "Workspace job description" })).toBeVisible();
 
   await page.goto(`${baseURL}/job-descriptions`);
   await expect(page.getByRole("heading", { name: "Workspace job description" })).toBeVisible();

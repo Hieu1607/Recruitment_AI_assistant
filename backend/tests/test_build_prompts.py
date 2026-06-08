@@ -23,6 +23,8 @@ def test_cv_parsing_prompt_requires_exhaustive_extraction():
     assert 'For "skills", preserve grouped skill categories' in prompt
     assert '"structured_profile"' in prompt
     assert "Preserve links wherever they appear" in prompt
+    assert "Do not output placeholders such as N/A" in prompt
+    assert "When a section has multiple projects, roles, schools, certifications, publications, achievements, or language groups, create one structured_profile entry per item." in prompt
 
 
 def test_cv_vision_prompt_requires_exhaustive_extraction():
@@ -37,6 +39,8 @@ def test_cv_vision_prompt_requires_exhaustive_extraction():
     assert 'For "experience", include full role entries' in prompt
     assert '"experience" is only for actual work history' in prompt
     assert '"structured_profile"' in prompt
+    assert "Do not output placeholders such as N/A" in prompt
+    assert "When a section has multiple projects, roles, schools, certifications, publications, achievements, or language groups, create one structured_profile entry per item." in prompt
 
 
 def test_scoring_job_description_text_includes_recruiter_only_hidden_information():

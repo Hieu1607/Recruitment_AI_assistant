@@ -108,6 +108,45 @@ def test_build_profile_prefers_usable_parsed_name_and_email():
     assert profile.structured_profile["projects"]["entries"][0]["title"] == "Project A"
 
 
+def test_build_profile_strips_missing_placeholders_from_structured_entries():
+    profile = resume_service._build_profile_from_parsed(
+        uuid.uuid4(),
+        {
+            "name": "Teacher Candidate",
+            "skills": "Curriculum Development",
+            "structured_profile": {
+                "skills": {
+                    "entries": [
+                        {
+                            "title": "Curriculum Development",
+                            "subtitle": "N/A",
+                            "role": "N/A",
+                            "location": "N/A",
+                            "dateRange": "N/A",
+                            "description": "N/A",
+                            "metadata": ["N/A", "Curriculum Development"],
+                            "bullets": ["N/A", "Built lesson plans"],
+                        }
+                    ],
+                    "rawText": "N/A",
+                }
+            },
+        },
+    )
+
+    skill_entry = profile.structured_profile["skills"]["entries"][0]
+
+    assert skill_entry["title"] == "Curriculum Development"
+    assert skill_entry["subtitle"] is None
+    assert skill_entry["role"] is None
+    assert skill_entry["location"] is None
+    assert skill_entry["dateRange"] is None
+    assert skill_entry["description"] is None
+    assert skill_entry["metadata"] == ["Curriculum Development"]
+    assert skill_entry["bullets"] == ["Built lesson plans"]
+    assert profile.structured_profile["skills"]["rawText"] == "Curriculum Development"
+
+
 def test_build_profile_falls_back_to_submitted_name_and_email_when_parse_is_sparse():
     profile = resume_service._build_profile_from_parsed(
         uuid.uuid4(),
@@ -287,6 +326,123 @@ def test_parse_pdf_to_sections_uses_vision_fallback_for_image_only_pdf(monkeypat
     assert trace.payload["llmModel"] == "fake-vision-model"
 
 
+def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
+    monkeypatch, tmp_path
+):
+    db = FakeSession()
+    job_id = uuid.uuid4()
+    owner_user_id = uuid.uuid4()
+
+    monkeypatch.setattr(resume_service, "extract_text_from_pdf", lambda filepath: "cv text")
+    monkeypatch.setattr(
+        resume_service.build_prompts,
+        "build_cv_parsing_prompt",
+        lambda cv_text: "prompt",
+    )
+    monkeypatch.setenv("LANGGRAPH_TRACE_LOG_DIR", str(tmp_path))
+
+    class FakeProvider:
+        def __init__(self):
+            self.calls = 0
+            self.model_name = "llama-3.1-8b-instant"
+
+        def generate(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                return types.SimpleNamespace(
+                    text='{"name":"Broken"',
+                    provider="groq",
+                    model="llama-3.1-8b-instant",
+                )
+            return types.SimpleNamespace(
+                text=json.dumps(
+                    {
+                        "name": "Retry Candidate",
+                        "email": "retry@example.com",
+                        "skills": "Python",
+                    }
+                ),
+                provider="groq",
+                model="llama-3.1-8b-instant",
+            )
+
+    provider = FakeProvider()
+    monkeypatch.setattr(resume_service, "LLMProvider", lambda **kwargs: provider)
+    monkeypatch.setattr(resume_service, "_resume_trace_logger", None, raising=False)
+
+    result = resume_service.parse_pdf_to_sections(
+        filepaths=["resume.pdf"],
+        db=db,
+        job_id=job_id,
+        uploaded_by_user_id=owner_user_id,
+        original_filenames=["resume.pdf"],
+    )
+
+    assert result[0]["status"] == "processed"
+    assert provider.calls == 2
+
+    trace = [item for item in db.added if isinstance(item, ExtractionTrace)][-1]
+    trace_path = Path(trace.payload["resumeParseTraceFile"])
+    assert trace.payload["jsonAttemptCount"] == 2
+    assert trace_path.exists()
+
+    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace_payload["status"] == "success"
+    assert trace_payload["metadata"]["file_name"] == "resume.pdf"
+    assert trace_payload["metadata"]["extraction_mode"] == "text"
+    assert trace_payload["result"]["llm"]["model"] == "llama-3.1-8b-instant"
+    assert len(trace_payload["llm_attempts"]) == 2
+    assert trace_payload["llm_attempts"][0]["parse_error"]["message"] == "LLM did not return a valid JSON object"
+
+
+def test_parse_pdf_to_sections_records_failure_trace_file(monkeypatch, tmp_path):
+    db = FakeSession()
+    job_id = uuid.uuid4()
+
+    monkeypatch.setattr(resume_service, "extract_text_from_pdf", lambda filepath: "cv text")
+    monkeypatch.setattr(
+        resume_service.build_prompts,
+        "build_cv_parsing_prompt",
+        lambda cv_text: "prompt",
+    )
+    monkeypatch.setenv("LANGGRAPH_TRACE_LOG_DIR", str(tmp_path))
+
+    class FakeProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, prompt):
+            self.calls += 1
+            return types.SimpleNamespace(
+                text="not-json",
+                provider="groq",
+                model="llama-3.1-8b-instant",
+            )
+
+    provider = FakeProvider()
+    monkeypatch.setattr(resume_service, "LLMProvider", lambda **kwargs: provider)
+    monkeypatch.setattr(resume_service, "_resume_trace_logger", None, raising=False)
+
+    result = resume_service.parse_pdf_to_sections(
+        filepaths=["resume.pdf"],
+        db=db,
+        job_id=job_id,
+        original_filenames=["resume.pdf"],
+    )
+
+    assert result[0]["status"] == "failed"
+    assert provider.calls >= 2
+
+    failure_trace = [item for item in db.added if isinstance(item, ExtractionTrace)][-1]
+    trace_path = Path(failure_trace.payload["resumeParseTraceFile"])
+    assert trace_path.exists()
+
+    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace_payload["status"] == "failed"
+    assert trace_payload["error"]["message"].startswith("resume parsing failed after retries:")
+    assert len(trace_payload["llm_attempts"]) == provider.calls
+
+
 def test_latest_extraction_mode_prefers_newest_success_trace():
     resume_id = uuid.uuid4()
     older = ExtractionTrace(
@@ -322,7 +478,7 @@ def test_resume_to_dict_includes_extraction_mode():
     assert data["extraction_mode"] == "text"
 
 
-def test_resume_llm_provider_uses_higher_token_budget(monkeypatch):
+def test_resume_llm_provider_uses_resume_parse_model_and_higher_token_budget(monkeypatch):
     captured = {}
 
     class FakeProvider:
@@ -331,7 +487,14 @@ def test_resume_llm_provider_uses_higher_token_budget(monkeypatch):
 
     monkeypatch.setattr(resume_service, "LLMProvider", FakeProvider)
     monkeypatch.setattr(resume_service.settings, "LLM_MAX_TOKENS", 1024)
+    monkeypatch.setattr(resume_service.settings, "RESUME_PARSE_MAX_TOKENS", 4096)
+    monkeypatch.setattr(
+        resume_service.settings,
+        "RESUME_PARSE_MODEL_NAME",
+        "llama-3.1-8b-instant",
+    )
 
     resume_service._resume_llm_provider()
 
-    assert captured["max_tokens"] == 2500
+    assert captured["model_name"] == "llama-3.1-8b-instant"
+    assert captured["max_tokens"] == 4096

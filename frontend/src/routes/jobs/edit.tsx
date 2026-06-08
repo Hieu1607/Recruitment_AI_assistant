@@ -1,5 +1,6 @@
 import { ApiError, api } from "@/api";
 import { DeleteJobDialog } from "@/components/jobs/DeleteJobDialog";
+import { JobDescriptionRichTextBody } from "@/components/jobs/JobDescriptionRichTextBody";
 import { PublicApplicationLinkCard } from "@/components/jobs/PublicApplicationLinkCard";
 import { JobStatusBadge } from "@/components/jobs/job-ui";
 import { fieldClasses, formatAbsoluteDate, panelClasses } from "@/components/jobs/job-utils";
@@ -8,10 +9,11 @@ import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BriefcaseBusiness, CalendarDays, ChevronLeft, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { routes } from "@/routes";
+import { htmlToMarkdown } from "@/components/jobs/job-description-markdown";
 
 const statusOptions = [
   { value: "active", label: "Active" },
@@ -30,6 +32,7 @@ export default function JobEditRoute() {
   const [candidateMessage, setCandidateMessage] = useState("");
   const [publicApplyEnabled, setPublicApplyEnabled] = useState(true);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const createJobDescriptionRef = useRef<HTMLDivElement>(null);
 
   const jobQuery = useQuery({
     queryKey: ["jobs", jobId],
@@ -46,26 +49,60 @@ export default function JobEditRoute() {
   }, [jobQuery.data]);
 
   const saveJob = useMutation({
-    mutationFn: () =>
-      isEditMode
-        ? api.jobs.update(jobId!, {
-            title: title.trim(),
-            status,
-            candidate_message: candidateMessage.trim() || null,
-            public_apply_enabled: publicApplyEnabled,
-          })
-        : api.jobs.create({
+    mutationFn: async () => {
+      if (isEditMode) {
+        return {
+          job: await api.jobs.update(jobId!, {
             title: title.trim(),
             status,
             candidate_message: candidateMessage.trim() || null,
             public_apply_enabled: publicApplyEnabled,
           }),
-    onSuccess: (job) => {
+          descriptionSaved: false,
+          descriptionSaveError: null as string | null,
+        };
+      }
+
+      const job = await api.jobs.create({
+        title: title.trim(),
+        status,
+        candidate_message: candidateMessage.trim() || null,
+        public_apply_enabled: publicApplyEnabled,
+      });
+      const jobDescription = htmlToMarkdown(createJobDescriptionRef.current?.innerHTML ?? "");
+
+      if (!jobDescription) {
+        return { job, descriptionSaved: false, descriptionSaveError: null as string | null };
+      }
+
+      try {
+        await api.jobs.jobDescription.upsert(job.id, {
+          title: title.trim() || undefined,
+          jd_text: jobDescription,
+          is_active: true,
+        });
+        return { job, descriptionSaved: true, descriptionSaveError: null as string | null };
+      } catch (saveError) {
+        return {
+          job,
+          descriptionSaved: false,
+          descriptionSaveError:
+            saveError instanceof Error ? saveError.message : "Unable to save job description",
+        };
+      }
+    },
+    onSuccess: ({ job, descriptionSaved, descriptionSaveError }) => {
       setSelectedJobId(job.id);
       qc.invalidateQueries({ queryKey: ["jobs"] });
       qc.invalidateQueries({ queryKey: ["jobs", job.id] });
+      qc.invalidateQueries({ queryKey: ["jobs", job.id, "job-description"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-jds", job.id] });
+      qc.invalidateQueries({ queryKey: ["jobs", job.id, "setup-status"] });
       toast.success(isEditMode ? "Workspace updated" : "Workspace created");
-      navigate(routes.jobs);
+      if (!isEditMode && descriptionSaveError && !descriptionSaved) {
+        toast.error(`Workspace created, but the description was not saved. ${descriptionSaveError}`);
+      }
+      navigate(isEditMode ? routes.jobs : routes.dashboard);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Unable to save job");
@@ -157,14 +194,39 @@ export default function JobEditRoute() {
                   <label htmlFor="job-title" className="text-sm font-medium text-fg-muted">
                     Job title
                   </label>
-                  <input
-                    id="job-title"
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    placeholder="Senior Backend Engineer"
-                    className="mt-2 w-full border-none bg-transparent px-0 py-0 font-display text-4xl leading-tight text-fg outline-none placeholder:text-fg-subtle"
-                  />
+                  <p className="mt-2 text-sm text-fg-muted">
+                    Enter the role name candidates are applying for.
+                  </p>
+                  <div className="mt-3 rounded-[var(--radius-lg)] border border-[color:var(--hairline-strong)] bg-bg-elevated px-5 py-4 shadow-[var(--shadow-sm)] transition-colors focus-within:border-accent focus-within:shadow-[var(--shadow-md)]">
+                    <input
+                      id="job-title"
+                      value={title}
+                      onChange={(event) => setTitle(event.target.value)}
+                      placeholder="Senior Backend Engineer"
+                      className="w-full border-none bg-transparent px-0 py-0 font-display text-4xl leading-tight text-fg outline-none placeholder:text-fg-subtle"
+                    />
+                  </div>
                 </div>
+
+                {!isEditMode && (
+                  <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5 sm:p-6">
+                    <div className="mb-6">
+                      <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">
+                        Step 2
+                      </p>
+                      <h2 className="mt-3 font-display text-3xl leading-tight text-fg">
+                        Job description
+                      </h2>
+                      <p className="mt-3 max-w-3xl text-sm leading-6 text-fg-muted">
+                        Write the full JD here while you create the workspace so scoring and AI workflows are ready from the start.
+                      </p>
+                    </div>
+                    <JobDescriptionRichTextBody
+                      editorRef={createJobDescriptionRef}
+                      minHeightClassName="min-h-[360px]"
+                    />
+                  </div>
+                )}
 
                 <div className="max-w-sm">
                   <label htmlFor="job-status" className="text-sm font-medium text-fg-muted">
@@ -246,7 +308,9 @@ export default function JobEditRoute() {
                 <JobStatusBadge status={status} />
               </div>
               <p className="mt-4 text-sm leading-6 text-fg-muted">
-                This workspace will define the data boundary for the rest of the recruiting pipeline.
+                {isEditMode
+                  ? "This workspace will define the data boundary for the rest of the recruiting pipeline."
+                  : "This workspace and JD will be created together so candidates, scoring, and chat start from the same context."}
               </p>
             </section>
 

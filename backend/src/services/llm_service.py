@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -21,6 +22,8 @@ PROVIDER_LIMIT_ERROR_MARKERS = (
     "requests per day",
     "too many requests",
 )
+_MAX_RETRY_BACKOFF_MULTIPLIER = 4
+_RETRY_AFTER_SECONDS_RE = re.compile(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 
 
 class LLMProviderError(Exception):
@@ -74,8 +77,27 @@ def _raise_provider_limit_error(
     ) from exc
 
 
+def _retry_after_seconds_from_error(exc: BaseException) -> Optional[float]:
+    match = _RETRY_AFTER_SECONDS_RE.search(str(exc))
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _retry_backoff_seconds(attempt: int, exc: Optional[BaseException] = None) -> float:
+    multiplier = min(2**attempt, _MAX_RETRY_BACKOFF_MULTIPLIER)
+    retry_after = _retry_after_seconds_from_error(exc) if exc is not None else None
+    if retry_after is not None:
+        return retry_after * multiplier
+    return float(multiplier)
+
+
 class ProviderType(str, Enum):
     GROQ = "groq"
+    SHOPAIKEY = "shopaikey"
     OLLAMA = "ollama"
 
 
@@ -86,6 +108,51 @@ class LLMResponse:
     model: str
     usage: Optional[Dict[str, Any]] = None
     raw: Optional[Dict[str, Any]] = None
+
+
+def _extract_finish_reason(raw: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(raw, dict):
+        return None
+
+    choices = raw.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            finish_reason = first_choice.get("finish_reason")
+            if finish_reason:
+                return str(finish_reason)
+
+    done_reason = raw.get("done_reason")
+    if done_reason:
+        return str(done_reason)
+
+    finish_reason = raw.get("finish_reason")
+    if finish_reason:
+        return str(finish_reason)
+
+    return None
+
+
+def _log_length_finish_reason(
+    *,
+    provider: str,
+    model: str,
+    max_tokens: int,
+    usage: Optional[Dict[str, Any]],
+    raw: Optional[Dict[str, Any]],
+) -> None:
+    finish_reason = _extract_finish_reason(raw)
+    if (finish_reason or "").strip().lower() != "length":
+        return
+
+    logger.warning(
+        "LLM response stopped because output token limit was reached. provider=%s model=%s finish_reason=%s max_tokens=%s usage=%s",
+        provider,
+        model,
+        finish_reason,
+        max_tokens,
+        usage,
+    )
 
 
 class _BaseAdapter:
@@ -152,16 +219,27 @@ class _GroqAdapter(_BaseAdapter):
                         "completion_tokens": getattr(completion.usage, "completion_tokens", None),
                         "total_tokens": getattr(completion.usage, "total_tokens", None),
                     }
+                raw = completion.model_dump() if hasattr(completion, "model_dump") else None
+                _log_length_finish_reason(
+                    provider=ProviderType.GROQ.value,
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    usage=usage,
+                    raw=raw,
+                )
                 return LLMResponse(
                     text=content,
                     provider=ProviderType.GROQ.value,
                     model=self.model,
                     usage=usage,
-                    raw=completion.model_dump() if hasattr(completion, "model_dump") else None,
+                    raw=raw,
                 )
             except Exception as exc:
                 last_error = exc
                 if is_provider_limit_error(exc):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                        continue
                     _raise_provider_limit_error(
                         provider=ProviderType.GROQ.value,
                         model=self.model,
@@ -169,7 +247,7 @@ class _GroqAdapter(_BaseAdapter):
                         exc=exc,
                     )
                 if attempt < self.max_retries:
-                    time.sleep(min(2 ** attempt, 3))
+                    time.sleep(_retry_backoff_seconds(attempt, exc))
                     continue
                 break
         raise LLMProviderError(f"Groq request failed: {last_error}") from last_error
@@ -196,10 +274,34 @@ class _GroqAdapter(_BaseAdapter):
                     max_tokens=max(self.max_tokens, 2048),
                 )
                 text = (completion.choices[0].message.content or "").strip()
-                return LLMResponse(text=text, provider=ProviderType.GROQ.value, model=vision_model)
+                usage = None
+                if getattr(completion, "usage", None) is not None:
+                    usage = {
+                        "prompt_tokens": getattr(completion.usage, "prompt_tokens", None),
+                        "completion_tokens": getattr(completion.usage, "completion_tokens", None),
+                        "total_tokens": getattr(completion.usage, "total_tokens", None),
+                    }
+                raw = completion.model_dump() if hasattr(completion, "model_dump") else None
+                _log_length_finish_reason(
+                    provider=ProviderType.GROQ.value,
+                    model=vision_model,
+                    max_tokens=max(self.max_tokens, 2048),
+                    usage=usage,
+                    raw=raw,
+                )
+                return LLMResponse(
+                    text=text,
+                    provider=ProviderType.GROQ.value,
+                    model=vision_model,
+                    usage=usage,
+                    raw=raw,
+                )
             except Exception as exc:
                 last_error = exc
                 if is_provider_limit_error(exc):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                        continue
                     _raise_provider_limit_error(
                         provider=ProviderType.GROQ.value,
                         model=vision_model,
@@ -207,10 +309,134 @@ class _GroqAdapter(_BaseAdapter):
                         exc=exc,
                     )
                 if attempt < self.max_retries:
-                    time.sleep(min(2 ** attempt, 3))
+                    time.sleep(_retry_backoff_seconds(attempt, exc))
                     continue
                 break
         raise LLMProviderError(f"Groq vision request failed: {last_error}") from last_error
+
+
+class _ShopAIKeyAdapter(_BaseAdapter):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        timeout_seconds: int,
+        max_retries: int,
+    ):
+        super().__init__(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
+        if not api_key:
+            raise LLMConfigurationError(
+                "SHOPAIKEY_API_KEY or SHOPAI_API_KEY is required for ShopAIKey fallback"
+            )
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+
+    def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+
+        last_error: Optional[Exception] = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                req = Request(
+                    url=f"{self.base_url}/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    },
+                    method="POST",
+                )
+                with urlopen(req, timeout=self.timeout_seconds) as response:
+                    body = response.read().decode("utf-8")
+                    parsed = json.loads(body)
+
+                choices = parsed.get("choices") or []
+                message = (choices[0].get("message") if choices else {}) or {}
+                content = (message.get("content") or "").strip()
+                usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else None
+                _log_length_finish_reason(
+                    provider=ProviderType.SHOPAIKEY.value,
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    usage=usage,
+                    raw=parsed,
+                )
+                return LLMResponse(
+                    text=content,
+                    provider=ProviderType.SHOPAIKEY.value,
+                    model=self.model,
+                    usage=usage,
+                    raw=parsed,
+                )
+            except HTTPError as exc:
+                body = ""
+                try:
+                    body = exc.read().decode("utf-8")
+                except Exception:
+                    body = ""
+                enriched_error = RuntimeError(
+                    f"ShopAIKey HTTP {exc.code}: {body or exc.reason or str(exc)}"
+                )
+                last_error = enriched_error
+                if is_provider_limit_error(enriched_error):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, enriched_error))
+                        continue
+                    _raise_provider_limit_error(
+                        provider=ProviderType.SHOPAIKEY.value,
+                        model=self.model,
+                        operation="chat request",
+                        exc=enriched_error,
+                    )
+                if attempt < self.max_retries:
+                    time.sleep(_retry_backoff_seconds(attempt, enriched_error))
+                    continue
+                break
+            except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if is_provider_limit_error(exc):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                        continue
+                    _raise_provider_limit_error(
+                        provider=ProviderType.SHOPAIKEY.value,
+                        model=self.model,
+                        operation="chat request",
+                        exc=exc,
+                    )
+                if attempt < self.max_retries:
+                    time.sleep(_retry_backoff_seconds(attempt, exc))
+                    continue
+                break
+            except Exception as exc:
+                last_error = exc
+                if is_provider_limit_error(exc):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                        continue
+                    _raise_provider_limit_error(
+                        provider=ProviderType.SHOPAIKEY.value,
+                        model=self.model,
+                        operation="chat request",
+                        exc=exc,
+                    )
+                break
+        raise LLMProviderError(f"ShopAIKey request failed: {last_error}") from last_error
 
 
 class _OllamaAdapter(_BaseAdapter):
@@ -265,6 +491,13 @@ class _OllamaAdapter(_BaseAdapter):
                     "prompt_eval_count": parsed.get("prompt_eval_count"),
                     "eval_count": parsed.get("eval_count"),
                 }
+                _log_length_finish_reason(
+                    provider=ProviderType.OLLAMA.value,
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    usage=usage,
+                    raw=parsed,
+                )
                 return LLMResponse(
                     text=content,
                     provider=ProviderType.OLLAMA.value,
@@ -275,6 +508,9 @@ class _OllamaAdapter(_BaseAdapter):
             except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = exc
                 if is_provider_limit_error(exc):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                        continue
                     _raise_provider_limit_error(
                         provider=ProviderType.OLLAMA.value,
                         model=self.model,
@@ -282,12 +518,15 @@ class _OllamaAdapter(_BaseAdapter):
                         exc=exc,
                     )
                 if attempt < self.max_retries:
-                    time.sleep(min(2 ** attempt, 3))
+                    time.sleep(_retry_backoff_seconds(attempt, exc))
                     continue
                 break
             except Exception as exc:
                 last_error = exc
                 if is_provider_limit_error(exc):
+                    if attempt < self.max_retries:
+                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                        continue
                     _raise_provider_limit_error(
                         provider=ProviderType.OLLAMA.value,
                         model=self.model,
@@ -329,12 +568,35 @@ class LLMProvider:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.model_name = model_name
+        self._fallback_adapter: Optional[_BaseAdapter] = None
 
         if self.provider == ProviderType.GROQ:
             selected_model = model_name or settings.GROQ_MODEL_NAME
             self.model_name = selected_model
             self._adapter = _GroqAdapter(
                 api_key=settings.GROQ_API_KEY,
+                model=selected_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+            )
+            if settings.SHOPAIKEY_API_KEY:
+                self._fallback_adapter = _ShopAIKeyAdapter(
+                    api_key=settings.SHOPAIKEY_API_KEY,
+                    base_url=settings.SHOPAIKEY_BASE_URL,
+                    model=settings.SHOPAIKEY_MODEL_NAME,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout_seconds=timeout_seconds,
+                    max_retries=max_retries,
+                )
+        elif self.provider == ProviderType.SHOPAIKEY:
+            selected_model = model_name or settings.SHOPAIKEY_MODEL_NAME
+            self.model_name = selected_model
+            self._adapter = _ShopAIKeyAdapter(
+                api_key=settings.SHOPAIKEY_API_KEY,
+                base_url=settings.SHOPAIKEY_BASE_URL,
                 model=selected_model,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -357,7 +619,18 @@ class LLMProvider:
     def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         if not isinstance(messages, list) or not messages:
             raise ValueError("messages must be a non-empty list")
-        return self._adapter.chat(messages)
+        try:
+            return self._adapter.chat(messages)
+        except Exception as exc:
+            if self.provider != ProviderType.GROQ or self._fallback_adapter is None:
+                raise
+            logger.warning(
+                "Primary Groq request failed; falling back to ShopAIKey. primary_model=%s fallback_model=%s error=%s",
+                self.model_name,
+                self._fallback_adapter.model,
+                exc,
+            )
+            return self._fallback_adapter.chat(messages)
 
     async def achat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         if not isinstance(messages, list) or not messages:

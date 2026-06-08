@@ -10,6 +10,7 @@ export interface UserProfile {
   id: string;
   email: string;
   display_name: string;
+  gmail_connected: boolean;
 }
 
 export interface UpdateProfileRequest {
@@ -31,6 +32,10 @@ export interface RegisterRequest {
 export interface TokenResponse {
   access_token: string;
   token_type: string;
+}
+
+interface GoogleConnectGmailResponse {
+  authorize_url: string;
 }
 
 export const authApi = {
@@ -74,5 +79,12 @@ export const authApi = {
     const base = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
     const qs = new URLSearchParams({ redirect });
     return `${base}/auth/google/login?${qs.toString()}`;
+  },
+
+  async getGoogleConnectGmailUrl(redirect: string = "/outreach"): Promise<string> {
+    const { data } = await client.get<GoogleConnectGmailResponse>("/auth/google/connect-gmail", {
+      params: { redirect },
+    });
+    return data.authorize_url;
   },
 };

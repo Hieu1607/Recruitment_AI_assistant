@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage
 
+from src.core.config import settings
 from src.prompts.build_prompts import build_prompts
 from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 from src.services.llm_service import LLMProvider
@@ -24,12 +25,13 @@ from src.services.llm_service import LLMProvider
 logger = logging.getLogger(__name__)
 
 _llm: LLMProvider | None = None
+_AI_AGENT_LLM_MAX_TOKENS = 8192
 
 
 def _get_llm() -> LLMProvider:
     global _llm
     if _llm is None:
-        _llm = LLMProvider()
+        _llm = LLMProvider(max_tokens=max(settings.LLM_MAX_TOKENS, _AI_AGENT_LLM_MAX_TOKENS))
     return _llm
 
 
@@ -96,6 +98,19 @@ def _parse_json(text: str) -> Any:
         if match:
             return json.loads(match.group())
         raise
+
+
+def _default_router_output(question: str) -> Dict[str, Any]:
+    return {
+        "is_recruitment_related": True,
+        "refusal_message": None,
+        "relevant_fields": [],
+        "dsl_question_query": None,
+        "llm_question_query": question,
+        "dsl_relevant_fields": [],
+        "llm_relevant_fields": [],
+        "reasoning": "Parse failure – fell back to LLM path",
+    }
 
 
 def _normalize_text_match(value: Any) -> str:
@@ -393,16 +408,13 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
         router_output = _parse_json(response.text)
     except Exception:
         logger.warning("[router_node] failed to parse JSON response, defaulting to LLM path")
-        router_output = {
-            "is_recruitment_related": True,
-            "refusal_message": None,
-            "relevant_fields": [],
-            "dsl_question_query": None,
-            "llm_question_query": question,
-            "dsl_relevant_fields": [],
-            "llm_relevant_fields": [],
-            "reasoning": "Parse failure – fell back to LLM path",
-        }
+        router_output = _default_router_output(question)
+    if not isinstance(router_output, dict):
+        logger.warning(
+            "[router_node] parsed JSON had unexpected type %s, defaulting to LLM path",
+            type(router_output).__name__,
+        )
+        router_output = _default_router_output(question)
 
     router_output = _override_router_output_for_graduation_status_semantics(
         question=question,

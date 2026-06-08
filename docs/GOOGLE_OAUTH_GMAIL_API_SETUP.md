@@ -12,6 +12,12 @@
 
 Repo hiện đã có Google OAuth cho đăng nhập. Hướng dẫn này là phần mở rộng để xin thêm quyền gửi mail qua Gmail API.
 
+Luồng hiện tại dùng progressive consent:
+
+- Đăng nhập Google chỉ xin scope cơ bản `openid email profile`.
+- Quyền `gmail.send` chỉ được xin sau, từ màn hình Outreach khi recruiter thật sự muốn gửi mail.
+- Nếu user từ chối Gmail consent, app quay lại đúng màn hình Outreach để có thể thử lại sau.
+
 Bạn cần làm hướng dẫn này nếu muốn:
 
 - Gửi link phỏng vấn cho ứng viên từ Gmail thật của recruiter.
@@ -137,6 +143,7 @@ GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
 FRONTEND_BASE_URL=http://localhost:5173
 
 # Google OAuth + Gmail API
+# Login ban đầu chỉ dùng scope cơ bản; Gmail send được xin sau từ Outreach.
 GOOGLE_OAUTH_SCOPES=openid email profile https://www.googleapis.com/auth/gmail.send
 GOOGLE_OAUTH_ACCESS_TYPE=offline
 GOOGLE_OAUTH_PROMPT=consent
@@ -218,10 +225,12 @@ docker compose logs -f worker
 Test Outreach:
 
 1. Mở `http://localhost:5173/outreach`.
-2. Tạo outreach draft cho candidate có email.
-3. Mở draft và bấm `Send email`.
-4. Kiểm tra status chuyển sang `sent`.
-5. Kiểm tra inbox của candidate.
+2. Nếu account chưa nối Gmail send, app hiển thị onboarding thay vì mail UI.
+3. Bấm `Connect Gmail`, chấp nhận consent, rồi quay lại đúng route Outreach.
+4. Tạo outreach draft cho candidate có email.
+5. Mở draft và bấm `Send email`.
+6. Kiểm tra status chuyển sang `sent`.
+7. Kiểm tra inbox của candidate.
 
 ---
 

@@ -4,9 +4,12 @@ import React from "react";
 
 function parseInline(text: string): React.ReactNode[] {
   // Order matters: bold before italic, code before everything
-  const regex = /(\*\*.*?\*\*|\*.*?\*|`.*?`|\[.*?\]\(.*?\))/g;
+  const regex = /(<br\s*\/?>|\*\*.*?\*\*|\*.*?\*|`.*?`|\[.*?\]\(.*?\))/gi;
   const parts = text.split(regex);
   return parts.map((part, index) => {
+    if (/^<br\s*\/?>$/i.test(part)) {
+      return <br key={index} />;
+    }
     if (part.startsWith("**") && part.endsWith("**")) {
       return (
         <strong key={index} className="font-semibold text-fg">

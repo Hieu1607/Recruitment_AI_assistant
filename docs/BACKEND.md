@@ -33,7 +33,11 @@ The backend allows cross-origin requests only from origins listed in the `BACKEN
 
 ## Authentication
 
-JWT infrastructure exists on the backend (`SECRET_KEY`, `HS256`, 30-minute expiry) but **no endpoints currently enforce authentication**. You can call all endpoints without an `Authorization` header. This will likely change before production -- plan for a `Bearer <token>` header on protected routes.
+JWT infrastructure exists on the backend (`SECRET_KEY`, `HS256`, 30-minute expiry), and auth-sensitive routes now rely on `Bearer <token>` headers. Google OAuth uses progressive consent:
+
+- `GET /api/v1/auth/google/login` starts basic Google sign-in with `openid email profile`.
+- `GET /api/v1/auth/google/connect-gmail` is an authenticated endpoint that returns a Google authorize URL for the Gmail send consent flow.
+- Google callback handling branches by signed OAuth state so Gmail consent can return directly to Outreach without affecting the normal login callback flow.
 
 ## Candidate Email Sending
 
@@ -980,6 +984,24 @@ Delete an outreach message.
 | Status | Condition         |
 |--------|-------------------|
 | 404    | Message not found |
+
+---
+
+### POST `/api/v1/outreach/{message_id}/send`
+
+Queue an outreach message for background Gmail delivery.
+
+The sender must have a Google identity with a refresh token and the `gmail.send` scope. If Gmail has not been connected yet, or consent was revoked, the backend returns a reconnectable error instead of queueing work.
+
+**Response** -- `202 Accepted`
+
+Returns the current `OutreachResponse` body when the send is accepted for background processing.
+
+| Status | Condition |
+|--------|-----------|
+| 202 | Send accepted and queued |
+| 404 | Message not found or not owned by current user |
+| 409 | `gmail_not_connected` |
 
 ---
 

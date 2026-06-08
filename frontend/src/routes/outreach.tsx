@@ -2,7 +2,7 @@ import type { CandidateProfileResponse, ContentSource, OutreachResponse, SentSta
 import { api } from "@/api";
 import { parseAxiosError } from "@/api/errors";
 import { Badge, Button, EmptyState, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle, Skeleton } from "@/components/ui";
-import { useSelectedJobId, useUserId } from "@/lib/auth";
+import { useAuthStore, useSelectedJobId, useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, Mail } from "lucide-react";
@@ -71,7 +71,7 @@ function useOutreachParams() {
     });
   }, [setParams]);
 
-  return { folder, candidate, messageId, setFolder, setCandidate, setMessage };
+  return { params, setParams, folder, candidate, messageId, setFolder, setCandidate, setMessage };
 }
 
 function FolderSidebar({
@@ -672,10 +672,103 @@ function ComposeModal({
   );
 }
 
+function GmailOnboardingPanel({
+  isPending,
+  onConnect,
+}: {
+  isPending: boolean;
+  onConnect: () => void;
+}) {
+  return (
+    <div className="flex overflow-hidden" style={{ height: "calc(100vh - var(--topbar-height))" }}>
+      <div className="flex-1 bg-bg-elevated p-6 md:p-8">
+        <div className="flex h-full items-center justify-center rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg">
+          <div className="max-w-md px-6 py-10 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[color:var(--hairline)] text-accent">
+              <Mail size={24} strokeWidth={1.5} />
+            </div>
+            <p className="font-display text-2xl font-semibold text-fg">Connect Gmail to start outreach</p>
+            <p className="mt-3 text-sm font-sans leading-6 text-fg-muted">
+              Outreach needs Gmail permission before you can view drafts, edit messages, or send candidate emails.
+            </p>
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-6"
+              loading={isPending}
+              disabled={isPending}
+              onClick={onConnect}
+            >
+              Connect Gmail
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OutreachRoute() {
-  const { folder, candidate, messageId, setFolder, setCandidate, setMessage } = useOutreachParams();
+  const { params, setParams, folder, candidate, messageId, setFolder, setCandidate, setMessage } = useOutreachParams();
   const [composeOpen, setComposeOpen] = useState(false);
+  const [isConnectPending, setIsConnectPending] = useState(false);
   const selectedJobId = useSelectedJobId();
+  const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
+  const needsGmailOnboarding = user?.gmail_connected === false;
+
+  useEffect(() => {
+    const gmailConnected = params.get("gmail_connected") === "1";
+    const gmailConsentDenied = params.get("error") === "gmail_consent_denied";
+
+    if (!gmailConnected && !gmailConsentDenied) return;
+
+    if (gmailConsentDenied) {
+      toast("Gmail connection was canceled. You can try again anytime.");
+    }
+
+    if (gmailConnected && user?.gmail_connected !== true) {
+      if (user) {
+        setUser({
+          id: user.id,
+          email: user.email,
+          display_name: user.display_name,
+          gmail_connected: true,
+        });
+      }
+      void api.auth.me().then(setUser).catch(() => {
+        toast.error("Gmail connected, but your account state could not be refreshed.");
+      });
+    }
+
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("gmail_connected");
+      if (next.get("error") === "gmail_consent_denied") {
+        next.delete("error");
+      }
+      return next;
+    }, { replace: true });
+  }, [params, setParams, setUser, user?.gmail_connected]);
+
+  const handleConnectGmail = useCallback(async () => {
+    if (isConnectPending) return;
+
+    setIsConnectPending(true);
+    try {
+      const redirectParams = new URLSearchParams(window.location.search);
+      redirectParams.delete("gmail_connected");
+      redirectParams.delete("error");
+      const redirect = redirectParams.toString()
+        ? `${window.location.pathname}?${redirectParams.toString()}`
+        : window.location.pathname;
+      const url = await api.auth.getGoogleConnectGmailUrl(redirect);
+      window.location.assign(url);
+    } catch {
+      toast.error("Could not start Gmail connection. Please try again.");
+      setIsConnectPending(false);
+    }
+  }, [isConnectPending]);
 
   // Fetch candidates for the filter combobox
   const { data: candidateData } = useQuery({
@@ -684,7 +777,7 @@ export default function OutreachRoute() {
       selectedJobId
         ? api.jobs.listCandidates(selectedJobId)
         : Promise.resolve({ items: [], total: 0 }),
-    enabled: !!selectedJobId,
+    enabled: !!selectedJobId && !needsGmailOnboarding,
     staleTime: 60_000,
   });
   const candidates = candidateData?.items ?? [];
@@ -701,15 +794,16 @@ export default function OutreachRoute() {
         candidate_profile_id: candidate,
         limit: 100,
       }),
+    enabled: !needsGmailOnboarding,
     staleTime: 30_000,
   });
   const messages = listData?.items ?? [];
 
   // Fetch per-folder counts (4 parallel queries, each for one status)
-  const { data: allData } = useQuery({ queryKey: ["outreach-count", "all", candidate ?? null], queryFn: () => api.outreach.list({ candidate_profile_id: candidate, limit: 1 }), staleTime: 30_000 });
-  const { data: notSentData } = useQuery({ queryKey: ["outreach-count", "not_sent", candidate ?? null], queryFn: () => api.outreach.list({ sent_status: "not_sent", candidate_profile_id: candidate, limit: 1 }), staleTime: 30_000 });
-  const { data: sentData } = useQuery({ queryKey: ["outreach-count", "sent", candidate ?? null], queryFn: () => api.outreach.list({ sent_status: "sent", candidate_profile_id: candidate, limit: 1 }), staleTime: 30_000 });
-  const { data: failedData } = useQuery({ queryKey: ["outreach-count", "failed", candidate ?? null], queryFn: () => api.outreach.list({ sent_status: "failed", candidate_profile_id: candidate, limit: 1 }), staleTime: 30_000 });
+  const { data: allData } = useQuery({ queryKey: ["outreach-count", "all", candidate ?? null], queryFn: () => api.outreach.list({ candidate_profile_id: candidate, limit: 1 }), enabled: !needsGmailOnboarding, staleTime: 30_000 });
+  const { data: notSentData } = useQuery({ queryKey: ["outreach-count", "not_sent", candidate ?? null], queryFn: () => api.outreach.list({ sent_status: "not_sent", candidate_profile_id: candidate, limit: 1 }), enabled: !needsGmailOnboarding, staleTime: 30_000 });
+  const { data: sentData } = useQuery({ queryKey: ["outreach-count", "sent", candidate ?? null], queryFn: () => api.outreach.list({ sent_status: "sent", candidate_profile_id: candidate, limit: 1 }), enabled: !needsGmailOnboarding, staleTime: 30_000 });
+  const { data: failedData } = useQuery({ queryKey: ["outreach-count", "failed", candidate ?? null], queryFn: () => api.outreach.list({ sent_status: "failed", candidate_profile_id: candidate, limit: 1 }), enabled: !needsGmailOnboarding, staleTime: 30_000 });
 
   const counts = {
     all: allData?.total ?? 0,
@@ -717,6 +811,10 @@ export default function OutreachRoute() {
     sent: sentData?.total ?? 0,
     failed: failedData?.total ?? 0,
   };
+
+  if (needsGmailOnboarding) {
+    return <GmailOnboardingPanel isPending={isConnectPending} onConnect={handleConnectGmail} />;
+  }
 
   return (
     <div className="flex overflow-hidden" style={{ height: "calc(100vh - var(--topbar-height))" }}>

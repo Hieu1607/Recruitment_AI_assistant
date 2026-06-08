@@ -4,6 +4,7 @@ import { Button } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore, useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { routes } from "@/routes";
 import { isVietnameseUi } from "@/lib/ui-language";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -761,7 +762,7 @@ export default function DashboardRoute() {
         <FirstRunDashboardState
           jobTitle={currentJob?.title ?? ""}
           onUpload={() => setUploadOpen(true)}
-          onAddJobDescription={() => navigate("/job-descriptions/new")}
+          onAddJobDescription={() => navigate(routes.jobDescriptions)}
         />
       ) : (
         <>
@@ -889,7 +890,7 @@ export default function DashboardRoute() {
                     icon={FileText}
                     label="Create JD"
                     description="Write a new job description"
-                    onClick={() => navigate("/job-descriptions/new")}
+                    onClick={() => navigate(routes.jobDescriptions)}
                   />
                   <QuickActionButton
                     icon={BarChart3}

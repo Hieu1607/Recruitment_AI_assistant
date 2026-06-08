@@ -2,9 +2,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -12,18 +14,23 @@ from src.api.v1.endpoints.auth import (  # noqa: E402
     LoginRequest,
     RegisterRequest,
     UpdateProfileRequest,
+    get_me,
     login,
     register,
+    router,
     update_me,
 )
+from src.models.deps import get_current_user, get_db  # noqa: E402
 from src.models.base import Base  # noqa: E402
 from src.models.enums import RoleName, UserStatus  # noqa: E402
+from src.models.oauth_identity import OAuthIdentity  # noqa: E402
 from src.models.user_account import RoleAssignment, UserAccount  # noqa: E402
 
 
 def _create_test_tables(engine):
     tables = [
         Base.metadata.tables["user_accounts"],
+        Base.metadata.tables["oauth_identities"],
         Base.metadata.tables["role_assignments"],
     ]
     Base.metadata.create_all(engine, tables=tables)
@@ -34,10 +41,30 @@ def db():
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     _create_test_tables(engine)
     with Session(engine) as session:
         yield session
+
+
+@pytest.fixture()
+def auth_client(db):
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1/auth")
+
+    def _override_db():
+        yield db
+
+    def _override_current_user():
+        user = db.query(UserAccount).filter_by(email="current@example.com").one()
+        return user
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_current_user
+
+    with TestClient(app) as client:
+        yield client
 
 
 def test_register_creates_active_user_and_recruiter_role(db, monkeypatch):
@@ -137,3 +164,137 @@ def test_update_me_rejects_email_taken_by_other_user(db):
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == "Email already in use"
+
+
+def test_get_me_returns_gmail_connected_false_without_google_refresh_token(db):
+    user = UserAccount(
+        email="current@example.com",
+        display_name="Current",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    response = get_me(current_user=user)
+
+    assert response.gmail_connected is False
+
+
+def test_get_me_returns_gmail_connected_true_with_refresh_token_and_scope(db):
+    user = UserAccount(
+        email="current@example.com",
+        display_name="Current",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    identity = OAuthIdentity(
+        user_id=user.id,
+        provider="google",
+        provider_subject="google-sub-1",
+        email=user.email,
+        refresh_token_encrypted="encrypted-refresh",
+        scope="openid email profile https://www.googleapis.com/auth/gmail.send",
+    )
+    db.add(identity)
+    db.commit()
+    db.refresh(user)
+
+    response = get_me(current_user=user)
+
+    assert response.gmail_connected is True
+
+
+def test_update_me_response_does_not_include_gmail_connected(db):
+    user = UserAccount(
+        email="current@example.com",
+        display_name="Current",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    response = update_me(
+        UpdateProfileRequest(display_name="Updated"),
+        current_user=user,
+        db=db,
+    )
+
+    assert response.display_name == "Updated"
+    assert not hasattr(response, "gmail_connected")
+
+
+def test_get_me_http_returns_gmail_connected_false_without_google_refresh_token(
+    db, auth_client
+):
+    user = UserAccount(
+        email="current@example.com",
+        display_name="Current",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    db.commit()
+
+    response = auth_client.get("/api/v1/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["gmail_connected"] is False
+
+
+def test_get_me_http_returns_gmail_connected_true_with_refresh_token_and_scope(
+    db, auth_client
+):
+    user = UserAccount(
+        email="current@example.com",
+        display_name="Current",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    db.add(
+        OAuthIdentity(
+            user_id=user.id,
+            provider="google",
+            provider_subject="google-sub-1",
+            email=user.email,
+            refresh_token_encrypted="encrypted-refresh",
+            scope="openid email profile https://www.googleapis.com/auth/gmail.send",
+        )
+    )
+    db.commit()
+
+    response = auth_client.get("/api/v1/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["gmail_connected"] is True
+
+
+def test_get_me_patch_http_does_not_expose_gmail_connected(db, auth_client):
+    user = UserAccount(
+        email="current@example.com",
+        display_name="Current",
+        password_hash=None,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    db.commit()
+
+    response = auth_client.patch(
+        "/api/v1/auth/me",
+        json={"display_name": "Updated"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "Updated"
+    assert "gmail_connected" not in response.json()

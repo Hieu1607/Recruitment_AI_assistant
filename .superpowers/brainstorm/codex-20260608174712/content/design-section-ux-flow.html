@@ -1,0 +1,60 @@
+<h2>Design section 1: UX flow cho Shortlist dispatch</h2>
+<p class="subtitle">Shortlist tro thanh tram dieu phoi: chon ung vien, xem trang thai, tao outreach draft, hoac moi interview theo template.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Shortlist Collection - Dispatch view</div>
+  <div class="mockup-body">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:12px">
+      <div>
+        <strong style="font-size:18px">Backend Engineer shortlist</strong><br>
+        <span style="color:#777">12 candidates • active job: Senior Backend Engineer</span>
+      </div>
+      <div style="display:flex; gap:8px">
+        <button class="mock-button">Create outreach drafts</button>
+        <button class="mock-button">Send interview invites</button>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:32px 1.5fr 130px 140px 140px; gap:10px; color:#777; font-size:12px; padding:8px 10px">
+      <span></span><strong>Candidate</strong><strong>Contact</strong><strong>Outreach</strong><strong>Interview</strong>
+    </div>
+    <div style="display:grid; gap:8px">
+      <div style="display:grid; grid-template-columns:32px 1.5fr 130px 140px 140px; gap:10px; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+        <input type="checkbox" checked>
+        <div><strong>Nguyen Van A</strong><br><span style="color:#777">Backend Engineer • Python, FastAPI</span></div>
+        <span>email ok</span>
+        <span style="color:#7a5">draft ready</span>
+        <span>not invited</span>
+      </div>
+      <div style="display:grid; grid-template-columns:32px 1.5fr 130px 140px 140px; gap:10px; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+        <input type="checkbox" checked>
+        <div><strong>Tran Thi B</strong><br><span style="color:#777">Platform Engineer • AWS, Docker</span></div>
+        <span>email ok</span>
+        <span>sent</span>
+        <span style="color:#7a5">invited</span>
+      </div>
+      <div style="display:grid; grid-template-columns:32px 1.5fr 130px 140px 140px; gap:10px; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+        <input type="checkbox">
+        <div><strong>Le Van C</strong><br><span style="color:#777">Backend Lead • Go, Kubernetes</span></div>
+        <span style="color:#a75">missing email</span>
+        <span style="color:#a75">blocked</span>
+        <span>not invited</span>
+      </div>
+    </div>
+
+    <div style="margin-top:14px; padding:12px; border:1px solid #ddd; border-radius:8px; background:#fafafa">
+      <strong>Batch review drawer</strong><br>
+      <span style="color:#777">Before final action: show eligible, skipped, duplicates, missing Gmail/template/email, and let recruiter confirm.</span>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Happy path</h3>
+  <p>Shortlist collection -> select candidates -> choose Create outreach drafts or Send interview invites -> review drawer -> confirm -> success summary -> optional link to Outreach or Interview Prep filtered by collection/candidates.</p>
+</div>
+
+<div class="section">
+  <h3>Guardrails</h3>
+  <p>No direct bulk send without review. Duplicate candidates are skipped by default. Missing email, missing Gmail permission, missing active interview template, and already-invited candidates are visible before confirmation.</p>
+</div>
