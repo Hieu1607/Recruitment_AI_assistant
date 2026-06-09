@@ -1,5 +1,6 @@
 import { api, type CollectionResponse, type ResumeResponse } from "@/api";
 import { UploadModal } from "@/components/candidates/UploadModal";
+import { DashboardIntroGallery } from "@/components/dashboard/DashboardIntroGallery";
 import { Button } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore, useSelectedJobId } from "@/lib/auth";
@@ -426,14 +427,14 @@ function FirstRunDashboardState({
   onAddJobDescription: () => void;
 }) {
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-7xl">
       <div
         className={cn(
           "rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8",
         )}
       >
-        <div className="grid gap-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(280px,1fr)] lg:items-start">
-          <div>
+        <div className="grid gap-8 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)] xl:items-start">
+          <div className="xl:pr-4">
             <p className="text-xs font-sans font-semibold uppercase tracking-[0.22em] text-fg-subtle">
               Workspace Ready
             </p>
@@ -441,8 +442,8 @@ function FirstRunDashboardState({
               {jobTitle ? `"${jobTitle}" is ready.` : "Your workspace is ready."}
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-fg-muted sm:text-base">
-              The job has been created. Next, upload resumes or add the full job description.
-              Scoring and AI chat become much more useful once one of those data sources exists.
+              Upload resumes, define the role, and let the workspace carry recruiters from setup
+              to ranking to fast AI-assisted review.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Button
@@ -483,6 +484,8 @@ function FirstRunDashboardState({
               ))}
             </div>
           </div>
+
+          <DashboardIntroGallery />
         </div>
       </div>
 
