@@ -126,9 +126,15 @@ class Settings(BaseSettings):
     OPENAI_REALTIME_MODEL: str = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
     OPENAI_TRANSCRIPTION_MODEL: str = os.getenv(
         "OPENAI_TRANSCRIPTION_MODEL",
-        "gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
     )
     OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+    OPENAI_TTS_VOICE: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
+    EDGE_TTS_VOICE_EN: str = os.getenv("EDGE_TTS_VOICE_EN", "en-US-AvaMultilingualNeural")
+    EDGE_TTS_VOICE_VI: str = os.getenv("EDGE_TTS_VOICE_VI", "vi-VN-HoaiMyNeural")
+    EDGE_TTS_RATE: str = os.getenv("EDGE_TTS_RATE", "+0%")
+    EDGE_TTS_VOLUME: str = os.getenv("EDGE_TTS_VOLUME", "+0%")
+    TTS_TIMEOUT_SECONDS: int = int(os.getenv("TTS_TIMEOUT_SECONDS", "30"))
 
     APP_UI_LANGUAGE: str = os.getenv("APP_UI_LANGUAGE", "en")
 

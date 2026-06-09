@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import uuid
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models.interview_template import InterviewTemplate
+from src.models.job_matching import InterviewQuestionSet, JobDescription
 from src.schemas.interview_template import (
     InterviewTemplateCreateRequest,
     InterviewTemplateResponse,
@@ -19,6 +21,55 @@ def _normalize_optional_script(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def materialize_question_set_template(
+    db: Session,
+    *,
+    job_id: uuid.UUID,
+    question_set: InterviewQuestionSet,
+) -> InterviewTemplate:
+    jd_title = question_set.job_description.title if question_set.job_description is not None else "Interview"
+    candidate_name = question_set.candidate_profile.full_name if question_set.candidate_profile is not None else None
+    name_parts = [jd_title.strip() if jd_title else "Interview"]
+    if candidate_name:
+        name_parts.append(candidate_name.strip())
+    template = InterviewTemplate(
+        job_id=job_id,
+        name="Question Set · " + " · ".join(part for part in name_parts if part),
+        language_code="vi-VN",
+        status="active",
+        question_payload=question_set.question_payload or {},
+        report_rubric={},
+    )
+    db.add(template)
+    db.flush()
+    return template
+
+
+def get_job_scoped_interview_question_set(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    job_id: uuid.UUID,
+    question_set_id: uuid.UUID,
+) -> InterviewQuestionSet:
+    get_current_user_owned_job(db, user_id, job_id)
+    question_set = (
+        db.execute(
+            select(InterviewQuestionSet)
+            .join(JobDescription, InterviewQuestionSet.job_description_id == JobDescription.id)
+            .where(
+                InterviewQuestionSet.id == question_set_id,
+                JobDescription.job_id == job_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if question_set is None:
+        raise HTTPException(status_code=404, detail="Interview question set not found for this job")
+    return question_set
 
 
 def serialize_interview_template(template: InterviewTemplate) -> InterviewTemplateResponse:
@@ -77,6 +128,14 @@ def list_interview_templates(db: Session, *, user_id: uuid.UUID, job_id: uuid.UU
 
 def get_interview_template(db: Session, *, user_id: uuid.UUID, template_id: uuid.UUID) -> InterviewTemplate:
     return get_user_owned_interview_template(db, user_id, template_id)
+
+
+def delete_interview_template(db: Session, *, user_id: uuid.UUID, template_id: uuid.UUID) -> None:
+    template = get_user_owned_interview_template(db, user_id, template_id)
+    if template.invitations:
+        raise HTTPException(status_code=409, detail="Interview template is already in use")
+    db.delete(template)
+    db.commit()
 
 
 def update_interview_template(

@@ -1,7 +1,7 @@
-import { api, type PublicInterviewStartResponse } from "@/api";
+import { ApiError, api, type PublicInterviewInvitationPayload, type PublicInterviewStartResponse, type PublicInterviewStatusResponse } from "@/api";
 import { Badge, Button, EmptyState } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Mic, MicOff, Play, Send, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -71,9 +71,42 @@ function buildProviderSessionId() {
   return `browser-${Date.now()}`;
 }
 
-function formatAttempts(started: PublicInterviewStartResponse | null) {
-  if (!started) return null;
-  return `${started.invitation.attempt_count}/${started.invitation.max_attempts}`;
+function formatAttempts(invitation: Pick<PublicInterviewInvitationPayload, "attempt_count" | "max_attempts"> | null) {
+  if (!invitation) return null;
+  return `${invitation.attempt_count}/${invitation.max_attempts}`;
+}
+
+function describeAvailability(snapshot: PublicInterviewStatusResponse | null) {
+  const reason = snapshot?.availability.reason;
+  switch (reason) {
+    case "completed":
+      return {
+        heading: "Interview completed",
+        body: "This interview has already been submitted. The recruiter can review the transcript and summary.",
+      };
+    case "expired":
+      return {
+        heading: "Interview unavailable",
+        body: "This interview link has expired. Ask the recruiter to send you a new invitation.",
+      };
+    case "attempt_limit_reached":
+      return {
+        heading: "Interview unavailable",
+        body: "The allowed number of interview attempts has already been used for this invitation.",
+      };
+    case "session_in_progress":
+      return {
+        heading: "Interview already in progress",
+        body: "This invitation is already being used in another browser session.",
+      };
+    case "inactive":
+      return {
+        heading: "Interview unavailable",
+        body: "This invitation is no longer active. Ask the recruiter to send a replacement link if needed.",
+      };
+    default:
+      return null;
+  }
 }
 
 export function PublicInterviewShell({ token }: { token: string }) {
@@ -85,6 +118,15 @@ export function PublicInterviewShell({ token }: { token: string }) {
   const [isCompleted, setIsCompleted] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const publicInterviewStatus = useQuery({
+    queryKey: ["public-interview", token],
+    queryFn: () => api.interviewPublic.getStatus(token),
+    enabled: !!token && !started,
+    retry: false,
+    meta: { suppressGlobalErrorToast: true },
+  });
 
   const questions = useMemo(
     () => (started ? extractQuestions(started.template.question_payload) : []),
@@ -92,8 +134,12 @@ export function PublicInterviewShell({ token }: { token: string }) {
   );
   const currentQuestion = questions[currentQuestionIndex] ?? null;
   const supportsSpeechRecognition = typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const invitationSnapshot = started?.invitation ?? publicInterviewStatus.data?.invitation ?? null;
+  const templateSnapshot = started?.template ?? publicInterviewStatus.data?.template ?? null;
+  const availabilitySummary = describeAvailability(publicInterviewStatus.data ?? null);
 
   const startMutation = useMutation({
+    meta: { suppressGlobalErrorToast: true },
     mutationFn: async () =>
       api.interviewPublic.start(token, {
         provider: "fake",
@@ -110,10 +156,14 @@ export function PublicInterviewShell({ token }: { token: string }) {
       setErrorMessage(null);
       await promptCurrentQuestion(response, 0, true);
     },
-    onError: (error: Error) => setErrorMessage(error.message || "Unable to start interview."),
+    onError: () => {
+      setErrorMessage(null);
+      void publicInterviewStatus.refetch();
+    },
   });
 
   const eventsMutation = useMutation({
+    meta: { suppressGlobalErrorToast: true },
     mutationFn: (events: Array<{ speaker: string; text: string; question_key?: string | null }>) =>
       api.interviewPublic.ingestEvents(token, {
         provider: "fake",
@@ -127,9 +177,10 @@ export function PublicInterviewShell({ token }: { token: string }) {
   });
 
   const completeMutation = useMutation({
+    meta: { suppressGlobalErrorToast: true },
     mutationFn: async () => api.interviewPublic.complete(token, { provider: "fake" }),
     onSuccess: () => {
-      window.speechSynthesis?.cancel();
+      audioRef.current?.pause();
       setIsListening(false);
       setIsCompleted(true);
     },
@@ -139,17 +190,37 @@ export function PublicInterviewShell({ token }: { token: string }) {
   useEffect(() => {
     return () => {
       recognitionRef.current?.stop();
-      window.speechSynthesis?.cancel();
+      audioRef.current?.pause();
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
+      }
     };
   }, []);
 
   async function speak(text: string) {
     const candidate = text.trim();
-    if (!candidate || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(candidate);
-    utterance.lang = started?.template.language_code || "en-US";
-    window.speechSynthesis.speak(utterance);
+    if (!candidate || typeof window === "undefined") return;
+
+    audioRef.current?.pause();
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+
+    const blob = await api.interviewPublic.synthesizeSpeech(token, { text: candidate });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    audioUrlRef.current = url;
+    try {
+      await audio.play();
+    } catch {
+      URL.revokeObjectURL(url);
+      audioRef.current = null;
+      audioUrlRef.current = null;
+      throw new Error("Unable to play interview audio.");
+    }
   }
 
   async function promptCurrentQuestion(
@@ -263,7 +334,25 @@ export function PublicInterviewShell({ token }: { token: string }) {
     );
   }
 
-  const attemptText = formatAttempts(started);
+  if (publicInterviewStatus.error && !started) {
+    const error = publicInterviewStatus.error;
+    const heading =
+      error instanceof ApiError && error.status === 404
+        ? "Interview link is invalid"
+        : "Interview unavailable";
+    const body =
+      error instanceof Error ? error.message : "The interview invitation could not be loaded.";
+
+    return (
+      <div className="min-h-screen bg-bg px-6 py-10">
+        <div className="mx-auto max-w-4xl">
+          <EmptyState heading={heading} body={body} />
+        </div>
+      </div>
+    );
+  }
+
+  const attemptText = formatAttempts(invitationSnapshot);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(228,209,167,0.26),_transparent_42%),linear-gradient(180deg,_var(--color-bg-sidebar),_var(--color-bg))] px-6 py-10">
@@ -273,7 +362,7 @@ export function PublicInterviewShell({ token }: { token: string }) {
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.22em] text-fg-muted">Public AI Interview</p>
               <h1 className="mt-2 font-display text-[2.4rem] leading-tight text-fg">
-                {started?.template.name ?? "Structured Screening Interview"}
+                {templateSnapshot?.name ?? "Structured Screening Interview"}
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-fg-muted">
                 This interview uses a fixed recruiter-approved question set. Your responses are transcribed and shared
@@ -282,7 +371,7 @@ export function PublicInterviewShell({ token }: { token: string }) {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {started?.invitation.status && <Badge variant="warning">{started.invitation.status}</Badge>}
+              {invitationSnapshot?.status && <Badge variant="warning">{invitationSnapshot.status}</Badge>}
               {attemptText && <Badge variant="neutral">Attempt {attemptText}</Badge>}
             </div>
           </div>
@@ -290,26 +379,41 @@ export function PublicInterviewShell({ token }: { token: string }) {
 
         {!started ? (
           <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-6">
-            <h2 className="font-display text-xl font-medium text-fg">Before you begin</h2>
-            <ul className="mt-4 space-y-2 text-sm leading-relaxed text-fg-muted">
-              <li>The interviewer will ask only the questions configured for this role.</li>
-              <li>You can answer by voice if your browser supports speech recognition, or type into the fallback box.</li>
-              <li>The interview can be attempted only within the invitation limits set by the recruiter.</li>
-            </ul>
+            <h2 className="font-display text-xl font-medium text-fg">
+              {availabilitySummary?.heading ?? "Before you begin"}
+            </h2>
+            {publicInterviewStatus.isLoading ? (
+              <p className="mt-4 text-sm leading-relaxed text-fg-muted">Checking interview invitation status...</p>
+            ) : availabilitySummary ? (
+              <p className="mt-4 max-w-2xl text-sm leading-relaxed text-fg-muted">{availabilitySummary.body}</p>
+            ) : (
+              <ul className="mt-4 space-y-2 text-sm leading-relaxed text-fg-muted">
+                <li>The interviewer will ask only the questions configured for this role.</li>
+                <li>You can answer by voice if your browser supports speech recognition, or type into the fallback box.</li>
+                <li>The interview can be attempted only within the invitation limits set by the recruiter.</li>
+              </ul>
+            )}
             {errorMessage && (
               <p className="mt-4 rounded-[var(--radius-md)] border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
                 {errorMessage}
               </p>
             )}
-            <div className="mt-6 flex flex-wrap gap-3">
-              <Button
-                onClick={() => startMutation.mutate()}
-                loading={startMutation.isPending}
-                icon={<Play size={15} strokeWidth={1.9} />}
-              >
-                Start interview
-              </Button>
-            </div>
+            {!publicInterviewStatus.isLoading && publicInterviewStatus.data?.availability.detail && (
+              <p className="mt-4 rounded-[var(--radius-md)] border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+                {publicInterviewStatus.data.availability.detail}
+              </p>
+            )}
+            {!publicInterviewStatus.isLoading && publicInterviewStatus.data?.availability.can_start && (
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Button
+                  onClick={() => startMutation.mutate()}
+                  loading={startMutation.isPending}
+                  icon={<Play size={15} strokeWidth={1.9} />}
+                >
+                  Start interview
+                </Button>
+              </div>
+            )}
           </section>
         ) : isCompleted ? (
           <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-6">

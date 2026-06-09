@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from src.models.candidate_profile import CandidateProfile
@@ -51,6 +51,10 @@ from src.models.query_shortlist import (
 )
 from src.models.resume_document import ResumeDocument
 from src.models.session import SessionLocal
+from src.services.interview_template_service import (
+    get_job_scoped_interview_question_set,
+    materialize_question_set_template,
+)
 
 router = APIRouter()
 
@@ -235,8 +239,18 @@ class OutreachDraftBatchRequest(BaseModel):
 class InterviewInvitationBatchRequest(BaseModel):
     candidate_profile_ids: list[uuid.UUID] = Field(..., min_length=1)
     job_id: uuid.UUID
-    interview_template_id: uuid.UUID
+    interview_template_id: uuid.UUID | None = None
+    interview_question_set_id: uuid.UUID | None = None
     expires_in_hours: Optional[int] = Field(None, ge=1, le=24 * 30)
+    send_email: bool = True
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if bool(self.interview_template_id) == bool(self.interview_question_set_id):
+            raise ValueError(
+                "Provide exactly one of interview_template_id or interview_question_set_id."
+            )
+        return self
 
 
 class BatchCandidateResult(BaseModel):
@@ -843,17 +857,26 @@ def create_collection_interview_invitations(
     db = SessionLocal()
     try:
         collection, candidates = _load_collection_candidates(db, collection_id)
-        template = (
-            db.query(InterviewTemplate)
-            .filter(
-                InterviewTemplate.id == body.interview_template_id,
-                InterviewTemplate.job_id == body.job_id,
-                InterviewTemplate.status == "active",
+        if body.interview_template_id is not None:
+            template = (
+                db.query(InterviewTemplate)
+                .filter(
+                    InterviewTemplate.id == body.interview_template_id,
+                    InterviewTemplate.job_id == body.job_id,
+                    InterviewTemplate.status == "active",
+                )
+                .first()
             )
-            .first()
-        )
-        if template is None:
-            raise HTTPException(status_code=404, detail="Active interview template not found")
+            if template is None:
+                raise HTTPException(status_code=404, detail="Active interview template not found")
+        else:
+            question_set = get_job_scoped_interview_question_set(
+                db,
+                user_id=collection.created_by_user_id,
+                job_id=body.job_id,
+                question_set_id=body.interview_question_set_id,
+            )
+            template = materialize_question_set_template(db, job_id=body.job_id, question_set=question_set)
 
         selected, missing_ids = _selected_collection_candidates(
             candidates, body.candidate_profile_ids
@@ -885,7 +908,7 @@ def create_collection_interview_invitations(
                     )
                 )
                 continue
-            if not candidate.email:
+            if body.send_email and not candidate.email:
                 results.append(
                     BatchCandidateResult(
                         candidate_profile_id=str(candidate.id),
@@ -901,9 +924,8 @@ def create_collection_interview_invitations(
                 .filter(
                     InterviewInvitation.candidate_profile_id == candidate.id,
                     InterviewInvitation.job_id == body.job_id,
-                    InterviewInvitation.interview_template_id
-                    == body.interview_template_id,
-                    InterviewInvitation.status.in_(["pending", "opened", "completed"]),
+                    InterviewInvitation.interview_template_id == template.id,
+                    InterviewInvitation.status.in_(["pending", "in_progress", "completed"]),
                 )
                 .order_by(InterviewInvitation.created_at.desc())
                 .first()
@@ -923,15 +945,16 @@ def create_collection_interview_invitations(
             invitation = InterviewInvitation(
                 job_id=body.job_id,
                 candidate_profile_id=candidate.id,
-                interview_template_id=body.interview_template_id,
+                interview_template_id=template.id,
                 expires_at=expires_at,
                 sent_by_user_id=collection.created_by_user_id,
             )
             db.add(invitation)
             db.flush()
-            from worker.tasks import send_interview_invitation_email
+            if body.send_email:
+                from worker.tasks import send_interview_invitation_email
 
-            send_interview_invitation_email.delay(str(invitation.id))
+                send_interview_invitation_email.delay(str(invitation.id))
             results.append(
                 BatchCandidateResult(
                     candidate_profile_id=str(candidate.id),

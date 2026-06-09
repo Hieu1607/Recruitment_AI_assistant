@@ -228,6 +228,61 @@ def test_public_interview_start_events_and_complete_flow(
     assert session_record.completed_at is not None
 
 
+def test_public_interview_status_returns_ready_invitation_snapshot(
+    api_client: TestClient,
+    interview_invitation: InterviewInvitation,
+):
+    response = api_client.get(f"/api/v1/public/interview/{interview_invitation.public_token}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["invitation"]["public_token"] == interview_invitation.public_token
+    assert payload["invitation"]["status"] == "pending"
+    assert payload["template"]["name"] == "Voice Screen"
+    assert payload["availability"] == {
+        "can_start": True,
+        "reason": "ready",
+        "detail": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "expires_at", "attempt_count", "completed_at", "expected_reason", "expected_detail"),
+    [
+        ("cancelled", datetime.now(timezone.utc) + timedelta(hours=1), 0, None, "inactive", "Interview invitation is not active"),
+        ("pending", datetime.now(timezone.utc) - timedelta(minutes=1), 0, None, "expired", "Interview invitation has expired"),
+        ("pending", datetime.now(timezone.utc) + timedelta(hours=1), 1, None, "attempt_limit_reached", "Interview attempt limit has been reached"),
+        ("completed", datetime.now(timezone.utc) + timedelta(hours=1), 0, datetime.now(timezone.utc), "completed", "Interview invitation is already completed"),
+    ],
+)
+def test_public_interview_status_reports_why_start_is_blocked(
+    api_client: TestClient,
+    db_session: Session,
+    interview_invitation: InterviewInvitation,
+    status: str,
+    expires_at: datetime,
+    attempt_count: int,
+    completed_at: datetime | None,
+    expected_reason: str,
+    expected_detail: str,
+):
+    interview_invitation.status = status
+    interview_invitation.expires_at = expires_at
+    interview_invitation.attempt_count = attempt_count
+    interview_invitation.completed_at = completed_at
+    db_session.add(interview_invitation)
+    db_session.commit()
+
+    response = api_client.get(f"/api/v1/public/interview/{interview_invitation.public_token}")
+
+    assert response.status_code == 200
+    assert response.json()["availability"] == {
+        "can_start": False,
+        "reason": expected_reason,
+        "detail": expected_detail,
+    }
+
+
 def test_public_interview_events_recovers_when_turn_index_conflict_happens_during_ingest(
     api_client: TestClient,
     db_session: Session,

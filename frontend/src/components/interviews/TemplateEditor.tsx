@@ -168,6 +168,10 @@ export function TemplateEditor({
   const statusOptions = mode === "create"
     ? ["draft", "active"]
     : ["draft", "active", "archived"];
+  const languageOptions = [
+    { value: "vi-VN", label: "Tiếng Việt" },
+    { value: "en-US", label: "English" },
+  ];
 
   function updateField<K extends keyof TemplateFormState>(key: K, value: TemplateFormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -264,16 +268,21 @@ export function TemplateEditor({
           <p className="text-sm text-fg-muted">
             Choose the language the candidate will hear and respond in during the interview.
           </p>
-          <input
+          <select
             aria-label="Interview language"
             value={form.language_code}
             onChange={(event) => updateField("language_code", event.target.value)}
-            required
             className={cn(
               "h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3",
               "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
             )}
-          />
+          >
+            {languageOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
 

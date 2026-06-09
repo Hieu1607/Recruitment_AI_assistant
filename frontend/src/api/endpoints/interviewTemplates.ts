@@ -1,5 +1,6 @@
 import { client } from "../client";
 import type {
+  DeleteInterviewTemplateResponse,
   InterviewTemplateCreateRequest,
   InterviewTemplateListResponse,
   InterviewTemplateResponse,
@@ -34,6 +35,13 @@ export const interviewTemplatesApi = {
     const { data } = await client.patch<InterviewTemplateResponse>(
       `/interview-templates/${templateId}`,
       body,
+    );
+    return data;
+  },
+
+  async remove(templateId: string): Promise<DeleteInterviewTemplateResponse> {
+    const { data } = await client.delete<DeleteInterviewTemplateResponse>(
+      `/interview-templates/${templateId}`,
     );
     return data;
   },

@@ -17,4 +17,11 @@ export const interviewInvitationsApi = {
     );
     return data;
   },
+
+  async revoke(invitationId: string): Promise<InterviewInvitationResponse> {
+    const { data } = await client.post<InterviewInvitationResponse>(
+      `/interview-invitations/${invitationId}/revoke`,
+    );
+    return data;
+  },
 };

@@ -36,6 +36,7 @@ from src.models.enums import ContentSource, ProfileStatus, SentStatus, UploadSta
 from src.models.interview_invitation import InterviewInvitation  # noqa: E402
 from src.models.interview_template import InterviewTemplate  # noqa: E402
 from src.models.job import Job  # noqa: E402
+from src.models.job_matching import InterviewQuestionSet, JobDescription  # noqa: E402
 from src.models.oauth_identity import GMAIL_SEND_SCOPE, OAuthIdentity  # noqa: E402
 from src.models.outreach import OutreachMessage  # noqa: E402
 from src.models.query_shortlist import QuerySession, QueryTurn  # noqa: E402
@@ -49,6 +50,8 @@ def _create_test_tables(engine):
         Base.metadata.tables["jobs"],
         Base.metadata.tables["resume_documents"],
         Base.metadata.tables["candidate_profiles"],
+        Base.metadata.tables["job_descriptions"],
+        Base.metadata.tables["interview_question_sets"],
         Base.metadata.tables["oauth_identities"],
         Base.metadata.tables["outreach_messages"],
         Base.metadata.tables["interview_templates"],
@@ -121,6 +124,25 @@ def seeded_data(db_session_factory):
         db.add(candidate)
         db.flush()
 
+        jd = JobDescription(
+            job_id=job.id,
+            title="Platform Engineer JD",
+            jd_text="Need backend systems design and communication skills.",
+            created_by_user_id=user.id,
+            is_active=True,
+        )
+        db.add(jd)
+        db.flush()
+
+        question_set = InterviewQuestionSet(
+            candidate_profile_id=candidate.id,
+            job_description_id=jd.id,
+            generated_by_user_id=user.id,
+            question_payload={"questions": [{"key": "q1", "prompt": "Tell us about yourself"}]},
+        )
+        db.add(question_set)
+        db.flush()
+
         missing_email_resume = ResumeDocument(
             original_file_name="missing-email.pdf",
             storage_uri="s3://bucket/resumes/missing-email.pdf",
@@ -149,6 +171,8 @@ def seeded_data(db_session_factory):
             "job": job,
             "candidate": candidate,
             "missing_email_candidate": missing_email_candidate,
+            "job_description": jd,
+            "question_set_id": question_set.id,
         }
     finally:
         db.close()
@@ -409,3 +433,47 @@ def test_create_interview_invitations_skips_duplicates_and_missing_email(
 
     assert duplicate_result.created_count == 0
     assert duplicate_result.results[0].status == "skipped_duplicate"
+
+
+def test_create_interview_invitations_can_materialize_question_set_without_sending_email(
+    db_session_factory,
+    seeded_data,
+):
+    user = seeded_data["user"]
+    job = seeded_data["job"]
+    candidate = seeded_data["candidate"]
+    missing_email_candidate = seeded_data["missing_email_candidate"]
+    question_set_id = seeded_data["question_set_id"]
+    collection = create_collection(
+        CollectionCreateRequest(created_by_user_id=user.id, name="Question set shortlist")
+    )
+    add_item(uuid.UUID(collection.id), ItemAddRequest(candidate_profile_id=candidate.id))
+    add_item(
+        uuid.UUID(collection.id),
+        ItemAddRequest(candidate_profile_id=missing_email_candidate.id),
+    )
+
+    result = shortlist_module.create_collection_interview_invitations(
+        uuid.UUID(collection.id),
+            shortlist_module.InterviewInvitationBatchRequest(
+                candidate_profile_ids=[candidate.id, missing_email_candidate.id],
+                job_id=job.id,
+                interview_question_set_id=question_set_id,
+                send_email=False,
+            ),
+        )
+
+    assert result.created_count == 2
+    assert result.skipped_count == 0
+    assert all(item.status == "created" for item in result.results)
+
+    with db_session_factory() as db:
+        invitations = db.query(InterviewInvitation).order_by(InterviewInvitation.created_at.asc()).all()
+        assert len(invitations) == 2
+        assert invitations[0].sent_at is None
+        assert invitations[0].interview_template_id == invitations[1].interview_template_id
+
+        template = db.get(InterviewTemplate, invitations[0].interview_template_id)
+        assert template is not None
+        assert template.job_id == job.id
+        assert template.question_payload["questions"][0]["key"] == "q1"

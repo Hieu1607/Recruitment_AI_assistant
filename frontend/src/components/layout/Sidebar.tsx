@@ -27,7 +27,7 @@ const NAV_ITEMS = [
   { to: routes.chat, label: "AI Chat", icon: MessageSquare },
   { to: routes.shortlists, label: "Shortlists", icon: ListChecks },
   { to: routes.outreach, label: "Outreach", icon: Mail },
-  { to: routes.interviewQuestions, label: "Interview Prep", icon: Mic2 }
+  { to: routes.interviews, label: "Interviews", icon: Mic2 }
 ] as const;
 
 const SECONDARY_ITEMS = [

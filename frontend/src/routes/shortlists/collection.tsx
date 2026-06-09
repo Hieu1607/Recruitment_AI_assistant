@@ -175,13 +175,14 @@ function MemberRow({
       </div>
 
       {/* Skill chips */}
-      <div className="hidden xl:flex items-center gap-1.5 flex-1 min-w-0">
+      <div className="hidden xl:flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
         {skills.map((s) => (
           <span
             key={s}
-            className="px-2 py-0.5 text-[11px] font-sans text-fg-muted rounded-[var(--radius-sm)] border border-[color:var(--hairline)] bg-bg shrink-0"
+            title={s}
+            className="inline-flex min-w-0 max-w-[9.5rem] items-center rounded-[var(--radius-sm)] border border-[color:var(--hairline)] bg-bg px-2 py-0.5 text-[11px] font-sans text-fg-muted"
           >
-            {s}
+            <span className="truncate">{s}</span>
           </span>
         ))}
       </div>

@@ -24,6 +24,7 @@ const BREADCRUMB_RULES: Array<[string, string]> = [
   ["/outreach", "Outreach"],
   ["/interviews/reports", "Interview Reports"],
   ["/interviews/templates", "Interview Templates"],
+  ["/interviews", "Interviews"],
   ["/interview-questions", "Interview Prep"],
   ["/settings", "Settings"]
 ];

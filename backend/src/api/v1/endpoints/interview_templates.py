@@ -21,10 +21,12 @@ from src.schemas.interview_template import (
 from src.services.interview_invitation_service import (
     create_interview_invitation,
     list_interview_invitations,
+    revoke_interview_invitation,
     serialize_interview_invitation,
 )
 from src.services.interview_template_service import (
     create_interview_template,
+    delete_interview_template,
     get_interview_template,
     list_interview_templates,
     serialize_interview_template,
@@ -79,6 +81,16 @@ def update_single_interview_template(
     return serialize_interview_template(template)
 
 
+@router.delete("/interview-templates/{template_id}")
+def delete_single_interview_template(
+    template_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    delete_interview_template(db, user_id=current_user.id, template_id=template_id)
+    return {"deleted": True, "template_id": str(template_id)}
+
+
 @router.post("/interview-invitations", response_model=InterviewInvitationResponse, status_code=201)
 def create_job_interview_invitation(
     body: InterviewInvitationCreateRequest,
@@ -86,9 +98,10 @@ def create_job_interview_invitation(
     current_user: UserAccount = Depends(get_current_user),
 ):
     invitation = create_interview_invitation(db, user_id=current_user.id, body=body)
-    from worker.tasks import send_interview_invitation_email
+    if body.send_email:
+        from worker.tasks import send_interview_invitation_email
 
-    send_interview_invitation_email.delay(str(invitation.id))
+        send_interview_invitation_email.delay(str(invitation.id))
     return serialize_interview_invitation(invitation)
 
 
@@ -103,3 +116,13 @@ def list_job_interview_invitations(
         items=[serialize_interview_invitation(invitation) for invitation in invitations],
         total=len(invitations),
     )
+
+
+@router.post("/interview-invitations/{invitation_id}/revoke", response_model=InterviewInvitationResponse)
+def revoke_single_interview_invitation(
+    invitation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    invitation = revoke_interview_invitation(db, user_id=current_user.id, invitation_id=invitation_id)
+    return serialize_interview_invitation(invitation)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from src.models.deps import get_db
@@ -11,15 +11,27 @@ from src.schemas.interview_public import (
     PublicInterviewEventsResponse,
     PublicInterviewStartRequest,
     PublicInterviewStartResponse,
+    PublicInterviewStatusResponse,
+    PublicInterviewTTSRequest,
 )
 from src.services.interview_session_service import (
     complete_public_interview_session,
+    get_public_interview_status,
     ingest_public_interview_events,
     start_public_interview_session,
+    synthesize_public_interview_prompt,
 )
 
 
 router = APIRouter()
+
+
+@router.get("/interview/{token}", response_model=PublicInterviewStatusResponse)
+def get_interview_status(
+    token: str,
+    db: Session = Depends(get_db),
+):
+    return get_public_interview_status(db, token=token)
 
 
 @router.post("/interview/{token}/start", response_model=PublicInterviewStartResponse)
@@ -47,3 +59,13 @@ def complete_interview_session(
     db: Session = Depends(get_db),
 ):
     return complete_public_interview_session(db, token=token, body=body)
+
+
+@router.post("/interview/{token}/tts")
+def synthesize_interview_tts(
+    token: str,
+    body: PublicInterviewTTSRequest,
+    db: Session = Depends(get_db),
+):
+    audio, _language_code = synthesize_public_interview_prompt(db, token=token, body=body)
+    return Response(content=audio, media_type="audio/mpeg")

@@ -80,6 +80,7 @@ export const router = createBrowserRouter([
       { path: routePatterns.shortlists, ...lazy(() => import("@/routes/shortlists/list")) },
       { path: routePatterns.shortlistCollection, ...lazy(() => import("@/routes/shortlists/collection")) },
       { path: routePatterns.outreach, ...lazy(() => import("@/routes/outreach")) },
+      { path: routePatterns.interviews, ...lazy(() => import("@/routes/interviews")) },
       { path: routePatterns.interviewTemplates, ...lazy(() => import("@/routes/interviews/templates")) },
       { path: routePatterns.interviewTemplateDetail, ...lazy(() => import("@/routes/interviews/template-detail")) },
       { path: routePatterns.interviewReport, ...lazy(() => import("@/routes/interviews/report")) },

@@ -506,8 +506,10 @@ export interface OutreachDraftBatchRequest {
 export interface InterviewInvitationBatchRequest {
   candidate_profile_ids: string[];
   job_id: string;
-  interview_template_id: string;
+  interview_template_id?: string | null;
+  interview_question_set_id?: string | null;
   expires_in_hours?: number | null;
+  send_email?: boolean;
 }
 
 export interface BatchCandidateResult {
@@ -639,8 +641,10 @@ export interface InterviewTemplateUpdateRequest {
 export interface InterviewInvitationCreateRequest {
   job_id: string;
   candidate_profile_id: string;
-  interview_template_id: string;
+  interview_template_id?: string | null;
+  interview_question_set_id?: string | null;
   expires_in_hours?: number | null;
+  send_email?: boolean;
 }
 
 export interface InterviewInvitationResponse {
@@ -656,6 +660,7 @@ export interface InterviewInvitationResponse {
   expires_at: string | null;
   max_attempts: number;
   attempt_count: number;
+  latest_interview_session_id: string | null;
   sent_by_user_id: string | null;
   sent_at: string | null;
   opened_at: string | null;
@@ -668,6 +673,11 @@ export interface InterviewInvitationResponse {
 export interface InterviewInvitationListResponse {
   items: InterviewInvitationResponse[];
   total: number;
+}
+
+export interface DeleteInterviewTemplateResponse {
+  deleted: boolean;
+  template_id: string;
 }
 
 export interface InterviewReportResponse {
@@ -705,6 +715,10 @@ export interface PublicInterviewCompleteRequest {
   provider?: string | null;
 }
 
+export interface PublicInterviewTTSRequest {
+  text: string;
+}
+
 export interface PublicInterviewInvitationPayload {
   id: string;
   public_token: string;
@@ -732,6 +746,18 @@ export interface PublicInterviewTemplatePayload {
   intro_script: string | null;
   closing_script: string | null;
   question_payload: Record<string, unknown>;
+}
+
+export interface PublicInterviewAvailabilityPayload {
+  can_start: boolean;
+  reason: string;
+  detail: string | null;
+}
+
+export interface PublicInterviewStatusResponse {
+  invitation: PublicInterviewInvitationPayload;
+  template: PublicInterviewTemplatePayload;
+  availability: PublicInterviewAvailabilityPayload;
 }
 
 export interface PublicInterviewStartResponse {

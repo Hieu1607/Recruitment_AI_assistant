@@ -79,6 +79,18 @@ class PublicInterviewCompleteRequest(BaseModel):
         return candidate
 
 
+class PublicInterviewTTSRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+
+    @field_validator("text")
+    @classmethod
+    def validate_required_trimmed_text(cls, value: str) -> str:
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("must not be blank")
+        return candidate
+
+
 class PublicInterviewInvitationPayload(BaseModel):
     id: str
     public_token: str
@@ -106,6 +118,18 @@ class PublicInterviewTemplatePayload(BaseModel):
     intro_script: str | None
     closing_script: str | None
     question_payload: dict[str, Any]
+
+
+class PublicInterviewAvailabilityPayload(BaseModel):
+    can_start: bool
+    reason: str
+    detail: str | None
+
+
+class PublicInterviewStatusResponse(BaseModel):
+    invitation: PublicInterviewInvitationPayload
+    template: PublicInterviewTemplatePayload
+    availability: PublicInterviewAvailabilityPayload
 
 
 class PublicInterviewStartResponse(BaseModel):

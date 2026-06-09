@@ -3,14 +3,24 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class InterviewInvitationCreateRequest(BaseModel):
     job_id: uuid.UUID
     candidate_profile_id: uuid.UUID
-    interview_template_id: uuid.UUID
+    interview_template_id: uuid.UUID | None = None
+    interview_question_set_id: uuid.UUID | None = None
     expires_in_hours: int | None = Field(default=None, ge=1, le=24 * 30)
+    send_email: bool = True
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if bool(self.interview_template_id) == bool(self.interview_question_set_id):
+            raise ValueError(
+                "Provide exactly one of interview_template_id or interview_question_set_id."
+            )
+        return self
 
 
 class InterviewInvitationResponse(BaseModel):
@@ -26,6 +36,7 @@ class InterviewInvitationResponse(BaseModel):
     expires_at: datetime | None
     max_attempts: int
     attempt_count: int
+    latest_interview_session_id: str | None
     sent_by_user_id: str | None
     sent_at: datetime | None
     opened_at: datetime | None

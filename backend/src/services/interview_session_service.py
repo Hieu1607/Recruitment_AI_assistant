@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast
 
@@ -13,6 +14,7 @@ from src.models.interview_invitation import InterviewInvitation
 from src.models.interview_session import InterviewSession, InterviewTranscriptTurn
 from src.models.interview_template import InterviewTemplate
 from src.schemas.interview_public import (
+    PublicInterviewAvailabilityPayload,
     PublicInterviewCompleteRequest,
     PublicInterviewCompleteResponse,
     PublicInterviewEventsRequest,
@@ -21,13 +23,24 @@ from src.schemas.interview_public import (
     PublicInterviewSessionPayload,
     PublicInterviewStartRequest,
     PublicInterviewStartResponse,
+    PublicInterviewStatusResponse,
     PublicInterviewTemplatePayload,
+    PublicInterviewTTSRequest,
 )
+from src.services.tts_service import synthesize_speech
 from src.services.voice_provider import UnsupportedVoiceProviderError, VoiceProvider, get_voice_provider
 
 
-ACTIVE_INVITATION_STATUSES = {"pending", "opened", "in_progress"}
+STARTABLE_INVITATION_STATUSES = {"pending", "in_progress"}
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InvitationStartAvailability:
+    can_start: bool
+    reason: str
+    detail: str | None = None
+    status_code: int | None = None
 
 
 def serialize_public_interview_invitation(invitation: InterviewInvitation) -> PublicInterviewInvitationPayload:
@@ -66,6 +79,26 @@ def serialize_public_interview_template(template: InterviewTemplate) -> PublicIn
     )
 
 
+def get_public_interview_status(
+    db: Session,
+    *,
+    token: str,
+) -> PublicInterviewStatusResponse:
+    invitation = _get_public_interview_invitation(db, token)
+    template = invitation.interview_template
+    assert template is not None
+    availability = _evaluate_invitation_start_availability(invitation, _get_active_session(invitation))
+    return PublicInterviewStatusResponse(
+        invitation=serialize_public_interview_invitation(invitation),
+        template=serialize_public_interview_template(template),
+        availability=PublicInterviewAvailabilityPayload(
+            can_start=availability.can_start,
+            reason=availability.reason,
+            detail=availability.detail,
+        ),
+    )
+
+
 def start_public_interview_session(
     db: Session,
     *,
@@ -73,9 +106,6 @@ def start_public_interview_session(
     body: PublicInterviewStartRequest,
 ) -> PublicInterviewStartResponse:
     invitation = _get_public_interview_invitation(db, token)
-    active_session = _get_active_session(invitation)
-    if active_session is not None:
-        raise HTTPException(status_code=409, detail="Interview session is already in progress")
     _ensure_invitation_can_start(invitation)
 
     provider = _resolve_voice_provider(body.provider)
@@ -162,6 +192,18 @@ def complete_public_interview_session(
     )
 
 
+def synthesize_public_interview_prompt(
+    db: Session,
+    *,
+    token: str,
+    body: PublicInterviewTTSRequest,
+) -> tuple[bytes, str]:
+    invitation = _get_public_interview_invitation(db, token)
+    template = invitation.interview_template
+    language_code = template.language_code if template is not None else "en-US"
+    return synthesize_speech(body.text, language_code=language_code), language_code
+
+
 def _build_start_response(db: Session, invitation_id, session_id) -> PublicInterviewStartResponse:
     invitation = (
         db.execute(
@@ -223,20 +265,18 @@ def _resolve_session_provider(provider_name: str | None, session_record: Intervi
 
 
 def _ensure_invitation_can_start(invitation: InterviewInvitation) -> None:
-    _ensure_invitation_not_expired(invitation)
-    if invitation.completed_at is not None or invitation.status == "completed":
-        raise HTTPException(status_code=409, detail="Interview invitation is already completed")
-    if invitation.status not in ACTIVE_INVITATION_STATUSES:
-        raise HTTPException(status_code=410, detail="Interview invitation is not active")
-    if invitation.attempt_count >= invitation.max_attempts:
-        raise HTTPException(status_code=409, detail="Interview attempt limit has been reached")
+    availability = _evaluate_invitation_start_availability(invitation, _get_active_session(invitation))
+    if availability.can_start:
+        return
+    assert availability.status_code is not None
+    raise HTTPException(status_code=availability.status_code, detail=availability.detail)
 
 
 def _ensure_invitation_is_open(invitation: InterviewInvitation) -> None:
     _ensure_invitation_not_expired(invitation)
     if invitation.completed_at is not None or invitation.status == "completed":
         raise HTTPException(status_code=409, detail="Interview invitation is already completed")
-    if invitation.status not in {"opened", "in_progress"}:
+    if invitation.status != "in_progress":
         raise HTTPException(status_code=410, detail="Interview invitation is not active")
 
 
@@ -259,6 +299,60 @@ def _get_active_session(invitation: InterviewInvitation) -> InterviewSession | N
     if not active_sessions:
         return None
     return max(active_sessions, key=lambda session_record: session_record.created_at or datetime.min.replace(tzinfo=timezone.utc))
+
+
+def _evaluate_invitation_start_availability(
+    invitation: InterviewInvitation,
+    active_session: InterviewSession | None,
+) -> InvitationStartAvailability:
+    if _is_invitation_expired(invitation):
+        return InvitationStartAvailability(
+            can_start=False,
+            reason="expired",
+            detail="Interview invitation has expired",
+            status_code=410,
+        )
+    if invitation.completed_at is not None or invitation.status == "completed":
+        return InvitationStartAvailability(
+            can_start=False,
+            reason="completed",
+            detail="Interview invitation is already completed",
+            status_code=409,
+        )
+    if active_session is not None:
+        return InvitationStartAvailability(
+            can_start=False,
+            reason="session_in_progress",
+            detail="Interview session is already in progress",
+            status_code=409,
+        )
+    if invitation.status not in STARTABLE_INVITATION_STATUSES:
+        return InvitationStartAvailability(
+            can_start=False,
+            reason="inactive",
+            detail="Interview invitation is not active",
+            status_code=410,
+        )
+    if invitation.attempt_count >= invitation.max_attempts:
+        return InvitationStartAvailability(
+            can_start=False,
+            reason="attempt_limit_reached",
+            detail="Interview attempt limit has been reached",
+            status_code=409,
+        )
+    return InvitationStartAvailability(
+        can_start=True,
+        reason="ready",
+    )
+
+
+def _is_invitation_expired(invitation: InterviewInvitation) -> bool:
+    if invitation.expires_at is None:
+        return False
+    expires_at = invitation.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < _utc_now()
 
 
 def _append_transcript_turns_with_retry(

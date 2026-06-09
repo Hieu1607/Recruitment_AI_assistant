@@ -30,6 +30,7 @@ from src.models.interview_session import (  # noqa: E402
 )
 from src.models.interview_template import InterviewTemplate  # noqa: E402
 from src.models.job import Job  # noqa: E402
+from src.models.job_matching import InterviewQuestionSet, JobDescription  # noqa: E402
 from src.models.resume_document import ResumeDocument  # noqa: E402
 from src.models.user_account import UserAccount  # noqa: E402
 from src.main import app  # noqa: E402
@@ -60,6 +61,8 @@ def _create_test_tables(engine):
         "jobs",
         "resume_documents",
         "candidate_profiles",
+        "job_descriptions",
+        "interview_question_sets",
         "interview_templates",
         "interview_invitations",
         "interview_sessions",
@@ -115,6 +118,32 @@ def seeded_interview_domain(db_session: Session):
     db_session.add(candidate)
     db_session.flush()
 
+    primary_jd = JobDescription(
+        job_id=primary_job.id,
+        title="Primary JD",
+        jd_text="Need strong communication and backend fundamentals.",
+        created_by_user_id=user.id,
+        is_active=True,
+    )
+    secondary_jd = JobDescription(
+        job_id=secondary_job.id,
+        title="Secondary JD",
+        jd_text="Need data and automation experience.",
+        created_by_user_id=user.id,
+        is_active=True,
+    )
+    db_session.add_all([primary_jd, secondary_jd])
+    db_session.flush()
+
+    primary_question_set = InterviewQuestionSet(
+        candidate_profile_id=candidate.id,
+        job_description_id=primary_jd.id,
+        generated_by_user_id=user.id,
+        question_payload={"questions": [{"key": "q1", "prompt": "Tell me about yourself."}]},
+    )
+    db_session.add(primary_question_set)
+    db_session.flush()
+
     secondary_resume = ResumeDocument(
         original_file_name="candidate-two.pdf",
         storage_uri="s3://bucket/resumes/candidate-two.pdf",
@@ -157,6 +186,9 @@ def seeded_interview_domain(db_session: Session):
         "secondary_job_id": secondary_job.id,
         "candidate_id": candidate.id,
         "secondary_candidate_id": secondary_candidate.id,
+        "primary_job_description_id": primary_jd.id,
+        "secondary_job_description_id": secondary_jd.id,
+        "question_set_id": primary_question_set.id,
         "template_id": template.id,
         "secondary_template_id": secondary_template.id,
     }
@@ -335,6 +367,141 @@ def test_recruiter_can_create_and_list_interview_invitations(
     assert listed["items"][0]["id"] == created["id"]
     assert listed["items"][0]["public_url"] == created["public_url"]
     assert queued == [created["id"]]
+
+
+def test_recruiter_can_create_interview_invitation_from_question_set_without_sending_email(
+    api_client: TestClient,
+    seeded_interview_domain,
+    monkeypatch,
+):
+    import worker.tasks as tasks_module
+
+    queued = []
+
+    class FakeTask:
+        @staticmethod
+        def delay(invitation_id):
+            queued.append(invitation_id)
+
+    monkeypatch.setattr(tasks_module, "send_interview_invitation_email", FakeTask, raising=False)
+
+    create_response = api_client.post(
+        "/api/v1/interview-invitations",
+        json={
+            "job_id": str(seeded_interview_domain["primary_job_id"]),
+            "candidate_profile_id": str(seeded_interview_domain["candidate_id"]),
+            "interview_question_set_id": str(seeded_interview_domain["question_set_id"]),
+            "send_email": False,
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["candidate_profile_id"] == str(seeded_interview_domain["candidate_id"])
+    assert created["sent_at"] is None
+    assert created["status"] == "pending"
+    assert queued == []
+
+    get_template_response = api_client.get(
+        f"/api/v1/interview-templates/{created['interview_template_id']}"
+    )
+    assert get_template_response.status_code == 200
+    materialized = get_template_response.json()
+    assert materialized["job_id"] == str(seeded_interview_domain["primary_job_id"])
+    assert materialized["question_payload"]["questions"][0]["key"] == "q1"
+
+
+def test_recruiter_can_delete_unused_interview_template(
+    api_client: TestClient,
+    seeded_interview_domain,
+):
+    create_response = api_client.post(
+        f"/api/v1/jobs/{seeded_interview_domain['primary_job_id']}/interview-templates",
+        json={
+            "name": "Delete Me",
+            "status": "draft",
+        },
+    )
+    assert create_response.status_code == 201
+    template_id = create_response.json()["id"]
+
+    delete_response = api_client.delete(f"/api/v1/interview-templates/{template_id}")
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"deleted": True, "template_id": template_id}
+
+    list_response = api_client.get(
+        f"/api/v1/jobs/{seeded_interview_domain['primary_job_id']}/interview-templates"
+    )
+    assert list_response.status_code == 200
+    assert {item["id"] for item in list_response.json()["items"]} == {
+        str(seeded_interview_domain["template_id"])
+    }
+
+
+def test_recruiter_can_revoke_pending_interview_invitation(
+    api_client: TestClient,
+    seeded_interview_domain,
+    monkeypatch,
+):
+    import worker.tasks as tasks_module
+
+    monkeypatch.setattr(
+        tasks_module,
+        "send_interview_invitation_email",
+        type("FakeTask", (), {"delay": staticmethod(lambda invitation_id: None)}),
+        raising=False,
+    )
+
+    create_response = api_client.post(
+        "/api/v1/interview-invitations",
+        json={
+            "job_id": str(seeded_interview_domain["primary_job_id"]),
+            "candidate_profile_id": str(seeded_interview_domain["candidate_id"]),
+            "interview_template_id": str(seeded_interview_domain["template_id"]),
+        },
+    )
+    assert create_response.status_code == 201
+    invitation_id = create_response.json()["id"]
+
+    revoke_response = api_client.post(f"/api/v1/interview-invitations/{invitation_id}/revoke")
+
+    assert revoke_response.status_code == 200
+    revoked = revoke_response.json()
+    assert revoked["id"] == invitation_id
+    assert revoked["status"] == "cancelled"
+    assert revoked["cancelled_at"] is not None
+
+
+def test_recruiter_cannot_delete_template_with_existing_invitation(
+    api_client: TestClient,
+    seeded_interview_domain,
+    monkeypatch,
+):
+    import worker.tasks as tasks_module
+
+    monkeypatch.setattr(
+        tasks_module,
+        "send_interview_invitation_email",
+        type("FakeTask", (), {"delay": staticmethod(lambda invitation_id: None)}),
+        raising=False,
+    )
+
+    create_response = api_client.post(
+        "/api/v1/interview-invitations",
+        json={
+            "job_id": str(seeded_interview_domain["primary_job_id"]),
+            "candidate_profile_id": str(seeded_interview_domain["candidate_id"]),
+            "interview_template_id": str(seeded_interview_domain["template_id"]),
+        },
+    )
+    assert create_response.status_code == 201
+
+    delete_response = api_client.delete(
+        f"/api/v1/interview-templates/{seeded_interview_domain['template_id']}"
+    )
+
+    assert delete_response.status_code == 409
 
 
 def test_create_interview_invitation_does_not_set_sent_at_until_email_success(

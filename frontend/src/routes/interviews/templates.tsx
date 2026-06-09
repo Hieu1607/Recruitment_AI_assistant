@@ -16,7 +16,7 @@ import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calendar, Plus } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, NavLink, useNavigate } from "react-router";
 import { toast } from "sonner";
 
 function formatDate(value: string) {
@@ -93,6 +93,30 @@ export default function InterviewTemplatesRoute() {
           >
             New template
           </Button>
+        </div>
+
+        <div className="flex items-center gap-2 border-b border-[color:var(--hairline)]">
+          <NavLink
+            to={routes.interviews}
+            end
+            className={({ isActive }) =>
+              isActive
+                ? "inline-flex border-b-2 border-accent px-1 py-3 text-sm font-medium text-fg"
+                : "inline-flex border-b-2 border-transparent px-1 py-3 text-sm text-fg-muted transition-colors hover:text-fg"
+            }
+          >
+            Interview links
+          </NavLink>
+          <NavLink
+            to={routes.interviewTemplates}
+            className={({ isActive }) =>
+              isActive
+                ? "inline-flex border-b-2 border-accent px-1 py-3 text-sm font-medium text-fg"
+                : "inline-flex border-b-2 border-transparent px-1 py-3 text-sm text-fg-muted transition-colors hover:text-fg"
+            }
+          >
+            Templates
+          </NavLink>
         </div>
 
         {!selectedJobId ? (

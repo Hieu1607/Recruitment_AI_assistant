@@ -968,20 +968,20 @@ export default function ChatRoute() {
             </div>
           ) : messages.length === 0 ? (
             /* Empty state */
-            <div className="flex flex-col items-center justify-center h-full px-8 gap-8">
-              <div className="text-center">
+            <div className="flex h-full flex-col items-center justify-center gap-8 px-8">
+              <div className="mx-auto flex max-w-[44rem] flex-col items-center text-center">
                 <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-accent/10 mb-5">
                   <MessageSquare size={28} strokeWidth={1.5} className="text-accent" />
                 </div>
                 <h1 className="font-display text-3xl font-medium text-fg mb-3">
                   Ask anything about your candidates
                 </h1>
-                <p className="text-sm text-fg-muted font-sans max-w-sm">
+                <p className="mx-auto max-w-sm text-sm font-sans text-fg-muted">
                   Search, compare, and analyse your candidate pool using natural language.
                 </p>
               </div>
 
-              <div className="flex flex-wrap justify-center gap-2 max-w-lg">
+              <div className="mx-auto flex max-w-lg flex-wrap justify-center gap-2">
                 {PROMPT_SUGGESTIONS.map((s) => (
                   <button
                     key={s}

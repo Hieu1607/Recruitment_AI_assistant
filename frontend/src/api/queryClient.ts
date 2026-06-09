@@ -14,9 +14,10 @@ import { ApiError } from "./errors";
  * - Network failures get a friendly generic message.
  * - All other ApiErrors show the normalized `detail` string.
  */
-function notifyOnError(error: unknown): void {
+function notifyOnError(error: unknown, source?: { meta?: Record<string, unknown> }): void {
   if (!isApiError(error)) return;
   if (error.kind === "validation" || error.kind === "auth") return;
+  if (source?.meta?.suppressGlobalErrorToast === true) return;
 
   const message =
     error.kind === "network"
@@ -27,8 +28,8 @@ function notifyOnError(error: unknown): void {
 }
 
 export const queryClient = new QueryClient({
-  queryCache: new QueryCache({ onError: notifyOnError }),
-  mutationCache: new MutationCache({ onError: notifyOnError }),
+  queryCache: new QueryCache({ onError: (error, query) => notifyOnError(error, query) }),
+  mutationCache: new MutationCache({ onError: (error, _variables, _context, mutation) => notifyOnError(error, mutation) }),
   defaultOptions: {
     queries: {
       staleTime: 30_000,
