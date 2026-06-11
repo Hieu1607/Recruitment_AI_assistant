@@ -8,6 +8,7 @@ from src.api.v1.endpoints import (
     interview_templates,
     jobDescription,
     jobs,
+    outreach_assets,
     outreach,
     public_jobs,
     resume,
@@ -28,4 +29,5 @@ api_router.include_router(shortlist.router, prefix="/shortlist", tags=["shortlis
 api_router.include_router(interview_questions.router, prefix="/interview-questions", tags=["interview-questions"])
 api_router.include_router(interview_templates.router, tags=["interview-templates"])
 api_router.include_router(interview_reports.router, tags=["interview-reports"])
+api_router.include_router(outreach_assets.router, prefix="/outreach-assets", tags=["outreach-assets"])
 api_router.include_router(outreach.router, prefix="/outreach", tags=["outreach"])

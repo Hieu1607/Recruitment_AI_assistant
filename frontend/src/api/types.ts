@@ -498,8 +498,10 @@ export interface DispatchSummaryResponse {
 export interface OutreachDraftBatchRequest {
   candidate_profile_ids: string[];
   subject_template: string;
-  body_template: string;
+  body_text_template?: string | null;
+  body_html_template?: string | null;
   content_source?: ContentSource;
+  template_id?: string | null;
   force_update?: boolean;
 }
 
@@ -538,7 +540,10 @@ export interface OutreachResponse {
   created_by_user_id: string;           // UUID
   content_source: ContentSource;
   subject: string;
-  body: string;
+  body_text: string;
+  body_html: string;
+  template_id: string | null;
+  render_variables: Record<string, string> | null;
   sent_status: SentStatus;
   sent_at: string | null;               // ISO 8601 datetime
   created_at: string;                    // ISO 8601 datetime
@@ -554,13 +559,65 @@ export interface OutreachCreateRequest {
   created_by_user_id: string;           // UUID
   content_source: ContentSource;
   subject: string;
-  body: string;
+  body_text: string;
+  body_html: string;
+  template_id?: string | null;
+  render_variables?: Record<string, string> | null;
 }
 
 export interface OutreachUpdateRequest {
   subject?: string;
-  body?: string;
+  body_text?: string;
+  body_html?: string;
   sent_status?: SentStatus;
+}
+
+export interface OutreachTemplateResponse {
+  id: string;
+  created_by_user_id: string;
+  job_id: string | null;
+  name: string;
+  content_source: ContentSource;
+  subject_template: string;
+  body_text_template: string;
+  body_html_template: string;
+  editor_json: Record<string, unknown> | null;
+  variables_used: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutreachTemplateListResponse {
+  total: number;
+  items: OutreachTemplateResponse[];
+}
+
+export interface OutreachTemplateCreateRequest {
+  created_by_user_id: string;
+  job_id?: string | null;
+  name: string;
+  content_source?: ContentSource;
+  subject_template: string;
+  body_text_template: string;
+  body_html_template: string;
+  editor_json?: Record<string, unknown> | null;
+  variables_used?: string[];
+}
+
+export interface OutreachTemplateUpdateRequest {
+  name?: string;
+  subject_template?: string;
+  body_text_template?: string;
+  body_html_template?: string;
+  editor_json?: Record<string, unknown> | null;
+  variables_used?: string[];
+}
+
+export interface OutreachAssetUploadResponse {
+  storage_uri: string;
+  asset_url: string;
+  content_type: string;
+  filename: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -184,7 +184,7 @@ def send_interview_invitation_email(self, invitation_id: str):
             sender=user.email,
             to_email=candidate_email,
             subject=subject,
-            body=body,
+            body_text=body,
             identity=identity,
         )
         invitation.sent_at = datetime.now(timezone.utc)
@@ -259,12 +259,17 @@ def send_outreach_email(self, message_id: str):
         ):
             return {"sent": False, "reason": "gmail_not_connected"}
 
-        subject, body = build_outreach_email(subject=message.subject, body=message.body)
+        subject, body_text, body_html = build_outreach_email(
+            subject=message.subject,
+            body_text=message.body_text,
+            body_html=message.body_html,
+        )
         send_email(
             sender=user.email,
             to_email=candidate_email,
             subject=subject,
-            body=body,
+            body_text=body_text,
+            body_html=body_html,
             identity=identity,
         )
         message.sent_status = SentStatus.SENT

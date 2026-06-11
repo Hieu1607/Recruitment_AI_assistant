@@ -42,12 +42,7 @@ function buildPdfBuffer(lines: string[]) {
   return Buffer.from(pdf, "utf8");
 }
 
-async function createAccountAndJob(
-  request: APIRequestContext,
-  title: string,
-  options?: { createJobDescription?: boolean },
-): Promise<AuthSetup> {
-  const createJobDescription = options?.createJobDescription ?? true;
+async function createAccountAndJob(request: APIRequestContext, title: string): Promise<AuthSetup> {
   const registerResponse = await request.post(`${API_BASE_URL}/auth/register`, {
     data: {
       email: randomEmail("playwright"),
@@ -73,20 +68,16 @@ async function createAccountAndJob(
   expect(jobResponse.ok()).toBeTruthy();
   const job = await jobResponse.json();
 
-  let jobDescriptionId: string | undefined;
-  if (createJobDescription) {
-    const jdResponse = await request.post(`${API_BASE_URL}/jobs/${job.id}/job-description`, {
-      headers: authHeaders,
-      data: {
-        title: `${title} JD`,
-        jd_text: `${title} requires strong testing, Python, recruiter workflow, and browser automation experience.`,
-        is_active: true,
-      },
-    });
-    expect(jdResponse.ok()).toBeTruthy();
-    const jd = await jdResponse.json();
-    jobDescriptionId = jd.id;
-  }
+  const jdResponse = await request.post(`${API_BASE_URL}/jobs/${job.id}/job-description`, {
+    headers: authHeaders,
+    data: {
+      title: `${title} JD`,
+      jd_text: `${title} requires strong testing, Python, recruiter workflow, and browser automation experience.`,
+      is_active: true,
+    },
+  });
+  expect(jdResponse.ok()).toBeTruthy();
+  const jd = await jdResponse.json();
 
   const linkResponse = await request.get(`${API_BASE_URL}/jobs/${job.id}/application-link`, {
     headers: authHeaders,
@@ -99,15 +90,8 @@ async function createAccountAndJob(
     accessToken,
     jobId: job.id,
     publicApplyToken,
-    jobDescriptionId,
+    jobDescriptionId: jd.id,
   };
-}
-
-export async function seedEmptyWorkspace(
-  request: APIRequestContext,
-  title: string,
-): Promise<AuthSetup> {
-  return createAccountAndJob(request, title, { createJobDescription: false });
 }
 
 export async function seedWorkspace(

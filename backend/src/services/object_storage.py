@@ -139,6 +139,13 @@ class ObjectStorageService:
             expires=timedelta(seconds=expiry),
         )
 
+    def public_object_url(self, storage_uri: str) -> str:
+        bucket_name, object_key = parse_storage_uri(storage_uri)
+        if settings.MINIO_PUBLIC_BASE_URL:
+            return f"{settings.MINIO_PUBLIC_BASE_URL.rstrip('/')}/{bucket_name}/{object_key}"
+        scheme = "https" if settings.MINIO_SECURE else "http"
+        return f"{scheme}://{settings.MINIO_ENDPOINT}/{bucket_name}/{object_key}"
+
 
 @lru_cache(maxsize=1)
 def get_object_storage() -> ObjectStorageService:

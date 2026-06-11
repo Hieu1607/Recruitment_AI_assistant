@@ -54,6 +54,7 @@ def _create_test_tables(engine):
         Base.metadata.tables["interview_question_sets"],
         Base.metadata.tables["oauth_identities"],
         Base.metadata.tables["outreach_messages"],
+        Base.metadata.tables["outreach_templates"],
         Base.metadata.tables["interview_templates"],
         Base.metadata.tables["interview_invitations"],
         Base.metadata.tables["query_sessions"],
@@ -301,7 +302,8 @@ def test_dispatch_summary_includes_candidate_status_and_blockers(
             created_by_user_id=user.id,
             content_source=ContentSource.TEMPLATE,
             subject="Intro",
-            body="Hello",
+            body_text="Hello",
+            body_html="<p>Hello</p>",
             sent_status=SentStatus.SENT,
             sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
@@ -355,7 +357,8 @@ def test_create_outreach_drafts_skips_duplicates_and_missing_email(
         shortlist_module.OutreachDraftBatchRequest(
             candidate_profile_ids=[candidate.id, missing_email_candidate.id],
             subject_template="Invitation for {{candidate_name}}",
-            body_template="Hi {{candidate_name}}, let's talk.",
+            body_text_template="Hi {{candidate_name}}, let's talk.",
+            body_html_template="<p>Hi <strong>{{candidate_name}}</strong>, let's talk.</p>",
         ),
     )
 
@@ -364,12 +367,19 @@ def test_create_outreach_drafts_skips_duplicates_and_missing_email(
     assert result.results[0].status == "created"
     assert result.results[1].status == "skipped_missing_email"
 
+    with db_session_factory() as db:
+        created = db.query(OutreachMessage).filter(OutreachMessage.candidate_profile_id == candidate.id).first()
+        assert created is not None
+        assert created.body_text == "Hi Candidate One, let's talk."
+        assert "<p>" in created.body_html
+
     duplicate_result = shortlist_module.create_collection_outreach_drafts(
         uuid.UUID(collection.id),
         shortlist_module.OutreachDraftBatchRequest(
             candidate_profile_ids=[candidate.id],
             subject_template="Second {{candidate_name}}",
-            body_template="Second body",
+            body_text_template="Second body",
+            body_html_template="<p>Second body</p>",
         ),
     )
 
