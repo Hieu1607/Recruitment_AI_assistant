@@ -1,5 +1,7 @@
-import { api, type BatchActionResponse, type DispatchCandidateResponse } from "@/api";
+import { api, type BatchActionResponse, type DispatchCandidateResponse, type OutreachTemplateResponse } from "@/api";
 import { parseAxiosError } from "@/api/errors";
+import { OutreachRichEditor } from "@/components/outreach/OutreachRichEditor";
+import { htmlToPlainText } from "@/components/outreach/rich-text";
 import {
     Avatar,
     Badge,
@@ -16,6 +18,7 @@ import {
     Tooltip
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { useUserId } from "@/lib/auth";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -37,6 +40,12 @@ import { toast } from "sonner";
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 20;
+const TEMPLATE_VARIABLES = [
+  { key: "candidate_name", label: "Candidate Name" },
+  { key: "candidate_email", label: "Candidate Email" },
+  { key: "company_name", label: "Company Name" },
+  { key: "job_title", label: "Job Title" },
+];
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -252,18 +261,32 @@ function OutreachDraftModal({
   open,
   onOpenChange,
   collectionId,
+  jobId,
   candidates,
   onComplete,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   collectionId: string;
+  jobId: string | null;
   candidates: DispatchCandidateResponse[];
   onComplete: () => void;
 }) {
+  const userId = useUserId();
   const [subjectTemplate, setSubjectTemplate] = useState("Following up on {{job_title}}");
-  const [bodyTemplate, setBodyTemplate] = useState("Hi {{candidate_name}},\n\nI reviewed your profile and would like to discuss the {{job_title}} role.\n\nBest regards,");
+  const [bodyHtmlTemplate, setBodyHtmlTemplate] = useState("<p>Hi {{candidate_name}},</p><p>I reviewed your profile and would like to discuss the <strong>{{job_title}}</strong> role.</p><p>Best regards,</p>");
+  const [bodyTextTemplate, setBodyTextTemplate] = useState("Hi {{candidate_name}},\n\nI reviewed your profile and would like to discuss the {{job_title}} role.\n\nBest regards,");
+  const [templateId, setTemplateId] = useState("");
+  const [templateName, setTemplateName] = useState("");
   const [result, setResult] = useState<BatchActionResponse | null>(null);
+
+  const { data: templatesData } = useQuery({
+    queryKey: ["outreach-templates", userId, jobId],
+    queryFn: () => api.outreach.listTemplates({ created_by_user_id: userId ?? undefined, job_id: jobId ?? undefined, limit: 100 }),
+    enabled: open && !!userId,
+  });
+
+  const templates = templatesData?.items ?? [];
 
   useEffect(() => {
     if (open) setResult(null);
@@ -274,8 +297,10 @@ function OutreachDraftModal({
       api.shortlist.dispatch.createOutreachDrafts(collectionId, {
         candidate_profile_ids: candidates.map((candidate) => candidate.candidate_profile_id),
         subject_template: subjectTemplate,
-        body_template: bodyTemplate,
+        body_text_template: bodyTextTemplate,
+        body_html_template: bodyHtmlTemplate,
         content_source: "template",
+        template_id: templateId || null,
       }),
     onSuccess: (response) => {
       setResult(response);
@@ -283,6 +308,26 @@ function OutreachDraftModal({
       onComplete();
     },
     onError: () => toast.error("Failed to create outreach drafts"),
+  });
+
+  const saveTemplateMutation = useMutation({
+    mutationFn: () =>
+      api.outreach.createTemplate({
+        created_by_user_id: userId ?? "",
+        job_id: jobId ?? null,
+        name: templateName.trim(),
+        content_source: "template",
+        subject_template: subjectTemplate.trim(),
+        body_text_template: bodyTextTemplate.trim() || htmlToPlainText(bodyHtmlTemplate),
+        body_html_template: bodyHtmlTemplate.trim(),
+        variables_used: TEMPLATE_VARIABLES.map((item) => item.key),
+      }),
+    onSuccess: (created: OutreachTemplateResponse) => {
+      toast.success("Template saved");
+      setTemplateId(created.id);
+      setTemplateName("");
+    },
+    onError: () => toast.error("Failed to save template"),
   });
 
   return (
@@ -313,13 +358,62 @@ function OutreachDraftModal({
               className="h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
             />
           </label>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+            <div>
+              <span className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-fg-muted">Template</span>
+              <select
+                value={templateId}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setTemplateId(next);
+                  const selected = templates.find((item) => item.id === next);
+                  if (selected) {
+                    setSubjectTemplate(selected.subject_template);
+                    setBodyTextTemplate(selected.body_text_template);
+                    setBodyHtmlTemplate(selected.body_html_template);
+                  }
+                }}
+                className="h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+              >
+                <option value="">Blank template</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <span className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-fg-muted">Save current</span>
+              <div className="flex gap-2">
+                <input
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                  placeholder="Template name"
+                  className="h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!templateName.trim() || !subjectTemplate.trim() || !bodyHtmlTemplate.trim()}
+                  loading={saveTemplateMutation.isPending}
+                  onClick={() => saveTemplateMutation.mutate()}
+                >
+                  Save
+                </Button>
+              </div>
+            </div>
+          </div>
           <label className="space-y-1.5 block">
             <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">Body template</span>
-            <textarea
-              value={bodyTemplate}
-              onChange={(event) => setBodyTemplate(event.target.value)}
-              rows={7}
-              className="w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2 text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
+            <OutreachRichEditor
+              value={bodyHtmlTemplate}
+              onChange={({ html, text }) => {
+                setBodyHtmlTemplate(html);
+                setBodyTextTemplate(text);
+              }}
+              variableOptions={TEMPLATE_VARIABLES}
             />
           </label>
           <BatchResultSummary result={result} />
@@ -328,7 +422,7 @@ function OutreachDraftModal({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
           <Button
             loading={mutation.isPending}
-            disabled={!candidates.length || !subjectTemplate.trim() || !bodyTemplate.trim()}
+            disabled={!candidates.length || !subjectTemplate.trim() || !bodyHtmlTemplate.trim()}
             onClick={() => mutation.mutate()}
           >
             Create drafts
@@ -804,6 +898,7 @@ export default function ShortlistCollectionRoute() {
           open={outreachOpen}
           onOpenChange={setOutreachOpen}
           collectionId={id}
+          jobId={dispatchSummary?.job?.id ?? null}
           candidates={selectedCandidates}
           onComplete={() => {
             qc.invalidateQueries({ queryKey: ["collection-dispatch", id] });

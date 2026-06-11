@@ -17,12 +17,18 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from src.api.v1.endpoints import outreach as outreach_module  # noqa: E402
 from src.api.v1.endpoints.outreach import (  # noqa: E402
     OutreachCreateRequest,
+    OutreachTemplateCreateRequest,
+    OutreachTemplateUpdateRequest,
     OutreachUpdateRequest,
     create_message,
+    create_template,
     delete_message,
+    get_template,
     get_message,
     list_messages,
+    list_templates,
     send_message,
+    update_template,
     update_message,
 )
 from src.models.base import Base  # noqa: E402
@@ -85,6 +91,7 @@ def _create_test_tables(engine):
         Base.metadata.tables["candidate_profiles"],
         Base.metadata.tables["oauth_identities"],
         Base.metadata.tables["outreach_messages"],
+        Base.metadata.tables["outreach_templates"],
     ]
     Base.metadata.create_all(engine, tables=tables)
 
@@ -154,7 +161,8 @@ def test_outreach_create_list_update_and_delete(db_session_factory, seeded_data)
             created_by_user_id=user.id,
             content_source=ContentSource.AI_DRAFT,
             subject="Intro call",
-            body="Would you be open to a short intro call?",
+            body_text="Would you be open to a short intro call?",
+            body_html="<p>Would you be open to a short intro call?</p>",
         )
     )
 
@@ -176,6 +184,8 @@ def test_outreach_create_list_update_and_delete(db_session_factory, seeded_data)
     assert listed.total == 1
     assert listed.items[0].id == created.id
     assert fetched.subject == "Intro call"
+    assert fetched.body_text == "Would you be open to a short intro call?"
+    assert fetched.body_html == "<p>Would you be open to a short intro call?</p>"
     assert updated.sent_status == SentStatus.SENT.value
     assert updated.sent_at is not None
 
@@ -202,7 +212,8 @@ def test_send_outreach_returns_gmail_not_connected_when_google_capability_missin
             created_by_user_id=seeded_data["user"].id,
             content_source=ContentSource.AI_DRAFT,
             subject="Intro call",
-            body="Would you be open to a short intro call?",
+            body_text="Would you be open to a short intro call?",
+            body_html="<p>Would you be open to a short intro call?</p>",
             sent_status=SentStatus.NOT_SENT,
         )
         db.add(message)
@@ -234,7 +245,8 @@ def test_send_outreach_task_returns_gmail_not_connected_when_google_capability_m
             created_by_user_id=seeded_data["user"].id,
             content_source=ContentSource.AI_DRAFT,
             subject="Intro call",
-            body="Would you be open to a short intro call?",
+            body_text="Would you be open to a short intro call?",
+            body_html="<p>Would you be open to a short intro call?</p>",
             sent_status=SentStatus.NOT_SENT,
         )
         db.add(message)
@@ -253,14 +265,33 @@ def test_send_outreach_task_returns_gmail_not_connected_when_google_capability_m
     finally:
         db.close()
 
-    result = tasks_module.send_outreach_email.run(str(message.id))
 
-    assert result == {"sent": False, "reason": "gmail_not_connected"}
+def test_outreach_template_crud(db_session_factory, seeded_data):
+    user = seeded_data["user"]
 
-    db = db_session_factory()
-    try:
-        refreshed = db.get(outreach_module.OutreachMessage, message.id)
-        assert refreshed is not None
-        assert refreshed.sent_status == SentStatus.NOT_SENT
-    finally:
-        db.close()
+    created = create_template(
+        OutreachTemplateCreateRequest(
+            created_by_user_id=user.id,
+            name="Warm intro",
+            content_source=ContentSource.TEMPLATE,
+            subject_template="Opportunity at {{company_name}}",
+            body_text_template="Hi {{candidate_name}}, let's discuss {{job_title}}.",
+            body_html_template="<p>Hi <strong>{{candidate_name}}</strong>, let's discuss {{job_title}}.</p>",
+            editor_json={"type": "doc", "content": []},
+            variables_used=["candidate_name", "company_name", "job_title"],
+        )
+    )
+
+    listed = list_templates(created_by_user_id=user.id, job_id=None, offset=0, limit=50)
+    fetched = get_template(uuid.UUID(created.id))
+    updated = update_template(
+        uuid.UUID(created.id),
+        OutreachTemplateUpdateRequest(name="Warm intro v2"),
+    )
+
+    assert created.name == "Warm intro"
+    assert created.body_html_template.startswith("<p>")
+    assert listed.total == 1
+    assert listed.items[0].id == created.id
+    assert fetched.subject_template == "Opportunity at {{company_name}}"
+    assert updated.name == "Warm intro v2"

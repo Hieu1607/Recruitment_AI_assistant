@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.services.outreach_service import normalize_rich_message
+
 
 def build_interview_invitation_email(
     *,
@@ -23,5 +25,14 @@ def build_interview_invitation_email(
     return subject, body
 
 
-def build_outreach_email(*, subject: str, body: str) -> tuple[str, str]:
-    return subject.strip(), body.strip()
+def build_outreach_email(
+    *,
+    subject: str,
+    body_text: str | None,
+    body_html: str | None,
+) -> tuple[str, str, str]:
+    normalized_text, normalized_html = normalize_rich_message(
+        body_text=body_text,
+        body_html=body_html,
+    )
+    return subject.strip(), normalized_text, normalized_html

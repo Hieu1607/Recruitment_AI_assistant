@@ -399,7 +399,7 @@ function OutreachTab({ items }: { items: OutreachResponse[] }) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="font-medium text-fg">{item.subject}</h3>
-              <p className="mt-2 text-sm text-fg-muted">{item.body}</p>
+              <p className="mt-2 text-sm text-fg-muted">{item.body_text}</p>
             </div>
             <Badge variant={statusVariant(item.sent_status)}>{item.sent_status}</Badge>
           </div>

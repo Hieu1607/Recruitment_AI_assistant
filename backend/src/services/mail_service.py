@@ -9,7 +9,8 @@ def send_email(
     sender: str,
     to_email: str,
     subject: str,
-    body: str,
+    body_text: str,
+    body_html: str | None = None,
     identity: OAuthIdentity,
 ) -> dict:
     return send_gmail_message(
@@ -17,5 +18,6 @@ def send_email(
         sender=sender,
         to_email=to_email,
         subject=subject,
-        body=body,
+        body_text=body_text,
+        body_html=body_html,
     )

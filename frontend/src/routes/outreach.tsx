@@ -1,6 +1,8 @@
-import type { CandidateProfileResponse, ContentSource, OutreachResponse, SentStatus } from "@/api";
+import type { CandidateProfileResponse, ContentSource, OutreachResponse, OutreachTemplateResponse, SentStatus } from "@/api";
 import { api } from "@/api";
 import { parseAxiosError } from "@/api/errors";
+import { OutreachRichEditor } from "@/components/outreach/OutreachRichEditor";
+import { htmlToPlainText } from "@/components/outreach/rich-text";
 import { Badge, Button, EmptyState, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle, Skeleton } from "@/components/ui";
 import { useAuthStore, useSelectedJobId, useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
@@ -24,6 +26,13 @@ const STATUS_VARIANT: Record<SentStatus, "neutral" | "success" | "danger"> = {
   sent:     "success",
   failed:   "danger",
 };
+
+const TEMPLATE_VARIABLES = [
+  { key: "candidate_name", label: "Candidate Name" },
+  { key: "candidate_email", label: "Candidate Email" },
+  { key: "company_name", label: "Company Name" },
+  { key: "job_title", label: "Job Title" },
+];
 
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -175,7 +184,7 @@ function MessageListItem({
       </span>
       <div className="flex justify-between items-center gap-2 w-full">
         <span className="text-xs font-sans text-fg-muted truncate flex-1">
-          {message.body.slice(0, 80)}
+          {message.body_text.slice(0, 80)}
         </span>
         <span className="text-[11px] font-sans text-fg-subtle shrink-0 tabular-nums">
           {relativeTime(message.created_at)}
@@ -255,23 +264,30 @@ function MessageDetailPanel({
 
   // Local edit state
   const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  const [bodyHtml, setBodyHtml] = useState("");
+  const [bodyText, setBodyText] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   // Sync local state when message loads or messageId changes
   useEffect(() => {
     if (message) {
       setSubject(message.subject);
-      setBody(message.body);
+      setBodyHtml(message.body_html);
+      setBodyText(message.body_text);
       setDeleteConfirm(false);
     }
   }, [message]);
 
-  const isDirty = message ? (subject !== message.subject || body !== message.body) : false;
+  const isDirty = message ? (subject !== message.subject || bodyHtml !== message.body_html) : false;
 
   // Edit save mutation
   const editMutation = useMutation({
-    mutationFn: () => api.outreach.update(messageId!, { subject: subject.trim(), body: body.trim() }),
+    mutationFn: () =>
+      api.outreach.update(messageId!, {
+        subject: subject.trim(),
+        body_html: bodyHtml.trim(),
+        body_text: bodyText.trim() || htmlToPlainText(bodyHtml),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
       qc.invalidateQueries({ queryKey: ["outreach-message", messageId] });
@@ -455,17 +471,13 @@ function MessageDetailPanel({
           <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
             Body
           </label>
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={12}
-            className={cn(
-              "w-full px-3 py-2 text-[14px] font-sans text-fg bg-bg",
-              "border-none outline-none resize-none leading-[1.6]",
-              "placeholder:text-fg-subtle",
-            )}
-            placeholder="Write your message here…"
-            style={{ fieldSizing: "content" } as React.CSSProperties}
+          <OutreachRichEditor
+            value={bodyHtml}
+            onChange={({ html, text }) => {
+              setBodyHtml(html);
+              setBodyText(text);
+            }}
+            variableOptions={TEMPLATE_VARIABLES}
           />
         </div>
 
@@ -496,15 +508,31 @@ function ComposeModal({
 }) {
   const qc = useQueryClient();
   const userId = useUserId();
+  const selectedJobId = useSelectedJobId();
   const [candidateId, setCandidateId] = useState("");
   const [contentSource, setContentSource] = useState<ContentSource>("ai_draft");
   const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  const [bodyHtml, setBodyHtml] = useState("");
+  const [bodyText, setBodyText] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [templateName, setTemplateName] = useState("");
   const [discardWarning, setDiscardWarning] = useState(false);
   const [candidateError, setCandidateError] = useState(false);
 
-  const hasContent = !!subject.trim() || !!body.trim() || !!candidateId;
-  const canSave = !!candidateId && !!subject.trim() && !!body.trim();
+  const { data: templatesData } = useQuery({
+    queryKey: ["outreach-templates", userId, selectedJobId],
+    queryFn: () =>
+      api.outreach.listTemplates({
+        created_by_user_id: userId ?? undefined,
+        job_id: selectedJobId ?? undefined,
+        limit: 100,
+      }),
+    enabled: !!userId,
+  });
+
+  const templates = templatesData?.items ?? [];
+  const hasContent = !!subject.trim() || !!bodyHtml.trim() || !!candidateId;
+  const canSave = !!candidateId && !!subject.trim() && !!bodyHtml.trim();
 
   const composeMutation = useMutation({
     mutationFn: () =>
@@ -513,7 +541,9 @@ function ComposeModal({
         created_by_user_id: userId ?? "",
         content_source: contentSource,
         subject: subject.trim(),
-        body: body.trim(),
+        body_html: bodyHtml.trim(),
+        body_text: bodyText.trim() || htmlToPlainText(bodyHtml),
+        template_id: templateId || null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
@@ -541,6 +571,27 @@ function ComposeModal({
   function candidateLabel(candidate: CandidateProfileResponse): string {
     return candidate.full_name || candidate.current_job_title || candidate.email || candidate.id;
   }
+
+  const saveTemplateMutation = useMutation({
+    mutationFn: () =>
+      api.outreach.createTemplate({
+        created_by_user_id: userId ?? "",
+        job_id: selectedJobId ?? null,
+        name: templateName.trim(),
+        content_source: "template",
+        subject_template: subject.trim(),
+        body_text_template: bodyText.trim() || htmlToPlainText(bodyHtml),
+        body_html_template: bodyHtml.trim(),
+        variables_used: TEMPLATE_VARIABLES.map((item) => item.key),
+      }),
+    onSuccess: (created: OutreachTemplateResponse) => {
+      toast.success("Template saved");
+      setTemplateId(created.id);
+      setTemplateName("");
+      qc.invalidateQueries({ queryKey: ["outreach-templates", userId, selectedJobId] });
+    },
+    onError: () => toast.error("Failed to save template"),
+  });
 
   return (
     <Modal open onOpenChange={(open) => !open && handleDiscard()}>
@@ -605,6 +656,59 @@ function ComposeModal({
             </div>
           </div>
 
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+            <div>
+              <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+                Template
+              </label>
+              <select
+                value={templateId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setTemplateId(next);
+                  const selected = templates.find((item) => item.id === next);
+                  if (selected) {
+                    setSubject(selected.subject_template);
+                    setBodyHtml(selected.body_html_template);
+                    setBodyText(selected.body_text_template);
+                    setContentSource("template");
+                  }
+                }}
+                className="w-full h-9 px-3 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)] border border-[color:var(--hairline)] focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none"
+              >
+                <option value="">Blank message</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
+                Save as template
+              </label>
+              <div className="flex gap-2">
+                <input
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  placeholder="Template name"
+                  className="w-full h-9 px-3 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)] border border-[color:var(--hairline)] focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!templateName.trim() || !subject.trim() || !bodyHtml.trim()}
+                  loading={saveTemplateMutation.isPending}
+                  onClick={() => saveTemplateMutation.mutate()}
+                >
+                  Save
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {/* Subject */}
           <div>
             <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
@@ -629,17 +733,13 @@ function ComposeModal({
             <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
               Body
             </label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Write your message here…"
-              className={cn(
-                "w-full px-3 py-2 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)]",
-                "border border-[color:var(--hairline)] focus:border-[color:var(--hairline-strong)]",
-                "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none",
-                "resize-none leading-[1.6] min-h-[120px] max-h-[300px] overflow-y-auto",
-              )}
-              style={{ fieldSizing: "content" } as React.CSSProperties}
+            <OutreachRichEditor
+              value={bodyHtml}
+              onChange={({ html, text }) => {
+                setBodyHtml(html);
+                setBodyText(text);
+              }}
+              variableOptions={TEMPLATE_VARIABLES}
             />
           </div>
 

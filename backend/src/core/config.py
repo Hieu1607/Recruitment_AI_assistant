@@ -156,6 +156,8 @@ class Settings(BaseSettings):
     }
     MINIO_REGION: str = os.getenv("MINIO_REGION", "us-east-1")
     MINIO_RESUME_BUCKET: str = os.getenv("MINIO_RESUME_BUCKET", "resumes")
+    MINIO_OUTREACH_BUCKET: str = os.getenv("MINIO_OUTREACH_BUCKET", "outreach-assets")
+    MINIO_PUBLIC_BASE_URL: str = os.getenv("MINIO_PUBLIC_BASE_URL", "")
     MINIO_PRESIGNED_GET_EXPIRY_SECONDS: int = int(
         os.getenv("MINIO_PRESIGNED_GET_EXPIRY_SECONDS", "3600")
     )

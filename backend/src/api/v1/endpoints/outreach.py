@@ -22,8 +22,10 @@ from src.models.deps import get_current_user, get_db
 from src.models.enums import ContentSource, SentStatus
 from src.models.oauth_identity import GMAIL_SEND_SCOPE, OAuthIdentity
 from src.models.outreach import OutreachMessage
+from src.models.outreach_template import OutreachTemplate
 from src.models.user_account import UserAccount
 from src.models.session import SessionLocal
+from src.services.outreach_service import normalize_rich_message
 
 router = APIRouter()
 
@@ -67,12 +69,16 @@ class OutreachCreateRequest(BaseModel):
     created_by_user_id: uuid.UUID
     content_source: ContentSource
     subject: str = Field(..., min_length=1, max_length=255)
-    body: str = Field(..., min_length=1)
+    body_text: str = Field(..., min_length=1)
+    body_html: str = Field(..., min_length=1)
+    template_id: Optional[uuid.UUID] = None
+    render_variables: Optional[dict] = None
 
 
 class OutreachUpdateRequest(BaseModel):
     subject: Optional[str] = Field(None, min_length=1, max_length=255)
-    body: Optional[str] = Field(None, min_length=1)
+    body_text: Optional[str] = Field(None, min_length=1)
+    body_html: Optional[str] = Field(None, min_length=1)
     sent_status: Optional[SentStatus] = None
 
 
@@ -83,7 +89,10 @@ class OutreachResponse(BaseModel):
     created_by_user_id: str
     content_source: str
     subject: str
-    body: str
+    body_text: str
+    body_html: str
+    template_id: Optional[str]
+    render_variables: Optional[dict]
     sent_status: str
     sent_at: Optional[datetime]
     created_at: datetime
@@ -92,6 +101,47 @@ class OutreachResponse(BaseModel):
 class OutreachListResponse(BaseModel):
     total: int
     items: List[OutreachResponse]
+
+
+class OutreachTemplateCreateRequest(BaseModel):
+    created_by_user_id: uuid.UUID
+    job_id: Optional[uuid.UUID] = None
+    name: str = Field(..., min_length=1, max_length=255)
+    content_source: ContentSource = ContentSource.TEMPLATE
+    subject_template: str = Field(..., min_length=1, max_length=255)
+    body_text_template: str = Field(..., min_length=1)
+    body_html_template: str = Field(..., min_length=1)
+    editor_json: Optional[dict] = None
+    variables_used: Optional[list[str]] = None
+
+
+class OutreachTemplateUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    subject_template: Optional[str] = Field(None, min_length=1, max_length=255)
+    body_text_template: Optional[str] = Field(None, min_length=1)
+    body_html_template: Optional[str] = Field(None, min_length=1)
+    editor_json: Optional[dict] = None
+    variables_used: Optional[list[str]] = None
+
+
+class OutreachTemplateResponse(BaseModel):
+    id: str
+    created_by_user_id: str
+    job_id: Optional[str]
+    name: str
+    content_source: str
+    subject_template: str
+    body_text_template: str
+    body_html_template: str
+    editor_json: Optional[dict]
+    variables_used: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class OutreachTemplateListResponse(BaseModel):
+    total: int
+    items: list[OutreachTemplateResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -106,10 +156,30 @@ def _ser(m: OutreachMessage) -> OutreachResponse:
         created_by_user_id=str(m.created_by_user_id),
         content_source=m.content_source.value,
         subject=m.subject,
-        body=m.body,
+        body_text=m.body_text,
+        body_html=m.body_html,
+        template_id=str(m.template_id) if m.template_id else None,
+        render_variables=m.render_variables,
         sent_status=m.sent_status.value,
         sent_at=m.sent_at,
         created_at=m.created_at,
+    )
+
+
+def _ser_template(template: OutreachTemplate) -> OutreachTemplateResponse:
+    return OutreachTemplateResponse(
+        id=str(template.id),
+        created_by_user_id=str(template.created_by_user_id),
+        job_id=str(template.job_id) if template.job_id else None,
+        name=template.name,
+        content_source=template.content_source.value,
+        subject_template=template.subject_template,
+        body_text_template=template.body_text_template,
+        body_html_template=template.body_html_template,
+        editor_json=template.editor_json,
+        variables_used=template.variables_used or [],
+        created_at=template.created_at,
+        updated_at=template.updated_at,
     )
 
 
@@ -128,7 +198,10 @@ def create_message(body: OutreachCreateRequest):
             created_by_user_id=body.created_by_user_id,
             content_source=body.content_source,
             subject=body.subject,
-            body=body.body,
+            body_text=normalize_rich_message(body_text=body.body_text, body_html=body.body_html)[0],
+            body_html=normalize_rich_message(body_text=body.body_text, body_html=body.body_html)[1],
+            template_id=body.template_id,
+            render_variables=body.render_variables,
             sent_status=SentStatus.NOT_SENT,
         )
         db.add(msg)
@@ -166,6 +239,91 @@ def list_messages(
         db.close()
 
 
+@router.post("/templates", response_model=OutreachTemplateResponse, status_code=201)
+def create_template(body: OutreachTemplateCreateRequest):
+    db = SessionLocal()
+    try:
+        body_text, body_html = normalize_rich_message(
+            body_text=body.body_text_template,
+            body_html=body.body_html_template,
+        )
+        template = OutreachTemplate(
+            created_by_user_id=body.created_by_user_id,
+            job_id=body.job_id,
+            name=body.name,
+            content_source=body.content_source,
+            subject_template=body.subject_template.strip(),
+            body_text_template=body_text,
+            body_html_template=body_html,
+            editor_json=body.editor_json,
+            variables_used=body.variables_used or [],
+        )
+        db.add(template)
+        db.commit()
+        db.refresh(template)
+        return _ser_template(template)
+    finally:
+        db.close()
+
+
+@router.get("/templates", response_model=OutreachTemplateListResponse)
+def list_templates(
+    created_by_user_id: Optional[uuid.UUID] = Query(None),
+    job_id: Optional[uuid.UUID] = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+):
+    db = SessionLocal()
+    try:
+        query = db.query(OutreachTemplate)
+        if created_by_user_id is not None:
+            query = query.filter(OutreachTemplate.created_by_user_id == created_by_user_id)
+        if job_id is not None:
+            query = query.filter(OutreachTemplate.job_id == job_id)
+        total = query.count()
+        rows = query.order_by(OutreachTemplate.updated_at.desc()).offset(offset).limit(limit).all()
+        return OutreachTemplateListResponse(total=total, items=[_ser_template(row) for row in rows])
+    finally:
+        db.close()
+
+
+@router.get("/templates/{template_id}", response_model=OutreachTemplateResponse)
+def get_template(template_id: uuid.UUID):
+    db = SessionLocal()
+    try:
+        template = _get_or_404(db, OutreachTemplate, template_id, "OutreachTemplate")
+        return _ser_template(template)
+    finally:
+        db.close()
+
+
+@router.patch("/templates/{template_id}", response_model=OutreachTemplateResponse)
+def update_template(template_id: uuid.UUID, body: OutreachTemplateUpdateRequest):
+    db = SessionLocal()
+    try:
+        template = _get_or_404(db, OutreachTemplate, template_id, "OutreachTemplate")
+        if body.name is not None:
+            template.name = body.name.strip()
+        if body.subject_template is not None:
+            template.subject_template = body.subject_template.strip()
+        if body.body_text_template is not None or body.body_html_template is not None:
+            normalized_text, normalized_html = normalize_rich_message(
+                body_text=body.body_text_template if body.body_text_template is not None else template.body_text_template,
+                body_html=body.body_html_template if body.body_html_template is not None else template.body_html_template,
+            )
+            template.body_text_template = normalized_text
+            template.body_html_template = normalized_html
+        if body.editor_json is not None:
+            template.editor_json = body.editor_json
+        if body.variables_used is not None:
+            template.variables_used = body.variables_used
+        db.commit()
+        db.refresh(template)
+        return _ser_template(template)
+    finally:
+        db.close()
+
+
 @router.get("/{message_id}", response_model=OutreachResponse)
 def get_message(message_id: uuid.UUID):
     db = SessionLocal()
@@ -184,8 +342,13 @@ def update_message(message_id: uuid.UUID, body: OutreachUpdateRequest):
 
         if body.subject is not None:
             msg.subject = body.subject
-        if body.body is not None:
-            msg.body = body.body
+        if body.body_text is not None or body.body_html is not None:
+            body_text, body_html = normalize_rich_message(
+                body_text=body.body_text if body.body_text is not None else msg.body_text,
+                body_html=body.body_html if body.body_html is not None else msg.body_html,
+            )
+            msg.body_text = body_text
+            msg.body_html = body_html
         if body.sent_status is not None:
             msg.sent_status = body.sent_status
             if body.sent_status == SentStatus.SENT and msg.sent_at is None:

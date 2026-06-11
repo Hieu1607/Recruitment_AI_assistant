@@ -23,12 +23,21 @@ class GmailTokenMissingError(RuntimeError):
     pass
 
 
-def build_raw_message(*, sender: str, to_email: str, subject: str, body: str) -> str:
+def build_raw_message(
+    *,
+    sender: str,
+    to_email: str,
+    subject: str,
+    body_text: str,
+    body_html: str | None = None,
+) -> str:
     message = EmailMessage()
     message["From"] = sender
     message["To"] = to_email
     message["Subject"] = subject
-    message.set_content(body)
+    message.set_content(body_text)
+    if body_html:
+        message.add_alternative(body_html, subtype="html")
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
 
 
@@ -82,13 +91,20 @@ def send_gmail_message(
     sender: str,
     to_email: str,
     subject: str,
-    body: str,
+    body_text: str,
+    body_html: str | None = None,
 ) -> dict[str, Any]:
     if not settings.GMAIL_SEND_ENABLED:
         raise GmailSendDisabledError("Gmail sending is disabled by GMAIL_SEND_ENABLED.")
 
     access_token = get_access_token(identity)
-    raw = build_raw_message(sender=sender, to_email=to_email, subject=subject, body=body)
+    raw = build_raw_message(
+        sender=sender,
+        to_email=to_email,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+    )
     response = httpx.post(
         GMAIL_SEND_URL,
         headers={

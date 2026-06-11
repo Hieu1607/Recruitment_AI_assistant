@@ -19,6 +19,7 @@ from src.models.enums import ContentSource, ProfileStatus, SentStatus, UploadSta
 from src.models.job import Job
 from src.models.oauth_identity import OAuthIdentity
 from src.models.outreach import OutreachMessage
+from src.services import gmail_service
 from src.models.resume_document import ResumeDocument
 from src.models.user_account import UserAccount
 
@@ -31,6 +32,7 @@ def _create_test_tables(engine):
         Base.metadata.tables["candidate_profiles"],
         Base.metadata.tables["oauth_identities"],
         Base.metadata.tables["outreach_messages"],
+        Base.metadata.tables["outreach_templates"],
     ]
     Base.metadata.create_all(engine, tables=tables)
 
@@ -87,7 +89,8 @@ def seeded_outreach_message(db_session: Session):
         created_by_user_id=user.id,
         content_source=ContentSource.AI_DRAFT,
         subject="Intro call",
-        body="Would you be open to a short intro call?",
+        body_text="Would you be open to a short intro call?",
+        body_html="<p>Would you be open to a short intro call?</p>",
         sent_status=SentStatus.NOT_SENT,
     )
     db_session.add(message)
@@ -194,3 +197,16 @@ def test_send_outreach_queues_task_for_owner_with_gmail_capability(
     assert response.status_code == 202
     assert response.json()["sent_status"] == SentStatus.NOT_SENT.value
     assert queued == [str(message.id)]
+
+
+def test_build_raw_message_includes_html_alternative():
+    raw = gmail_service.build_raw_message(
+        sender="owner@example.com",
+        to_email="candidate@example.com",
+        subject="Intro call",
+        body_text="Plain body",
+        body_html="<p><strong>Rich</strong> body</p>",
+    )
+
+    assert isinstance(raw, str)
+    assert raw

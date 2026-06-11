@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, JSON, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,7 @@ _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
 
 if TYPE_CHECKING:
     from src.models.candidate_profile import CandidateProfile
+    from src.models.outreach_template import OutreachTemplate
 
 
 class OutreachMessage(Base):
@@ -34,7 +35,15 @@ class OutreachMessage(Base):
         nullable=False,
     )
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    body_html: Mapped[str] = mapped_column(Text, nullable=False)
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("outreach_templates.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    render_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     sent_status: Mapped[SentStatus] = mapped_column(
         SqlEnum(SentStatus, name="sent_status_enum", values_callable=_ENUM_VALUES),
         nullable=False,
@@ -45,3 +54,4 @@ class OutreachMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     candidate_profile: Mapped["CandidateProfile"] = relationship(back_populates="outreach_messages")
+    template: Mapped["OutreachTemplate | None"] = relationship(back_populates="outreach_messages")

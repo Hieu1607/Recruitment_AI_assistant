@@ -43,6 +43,7 @@ from src.models.interview_template import InterviewTemplate
 from src.models.job import Job
 from src.models.oauth_identity import GMAIL_SEND_SCOPE, OAuthIdentity
 from src.models.outreach import OutreachMessage
+from src.models.outreach_template import OutreachTemplate
 from src.models.query_shortlist import (
     QuerySession,
     QueryTurn,
@@ -54,6 +55,11 @@ from src.models.session import SessionLocal
 from src.services.interview_template_service import (
     get_job_scoped_interview_question_set,
     materialize_question_set_template,
+)
+from src.services.outreach_service import (
+    build_render_variables,
+    normalize_rich_message,
+    render_template_string,
 )
 
 router = APIRouter()
@@ -231,8 +237,10 @@ class DispatchSummaryResponse(BaseModel):
 class OutreachDraftBatchRequest(BaseModel):
     candidate_profile_ids: list[uuid.UUID] = Field(..., min_length=1)
     subject_template: str = Field(..., min_length=1, max_length=255)
-    body_template: str = Field(..., min_length=1)
+    body_text_template: str | None = Field(None, min_length=1)
+    body_html_template: str | None = Field(None, min_length=1)
     content_source: ContentSource = ContentSource.TEMPLATE
+    template_id: uuid.UUID | None = None
     force_update: bool = False
 
 
@@ -319,13 +327,16 @@ def _ser_item(i: ShortlistItem) -> ItemResponse:
     )
 
 
-def _render_candidate_template(template: str, candidate: CandidateProfile, job: Job | None) -> str:
-    candidate_name = candidate.full_name or "candidate"
-    job_title = job.title if job is not None else ""
-    return (
-        template.replace("{{candidate_name}}", candidate_name)
-        .replace("{{candidate_email}}", candidate.email or "")
-        .replace("{{job_title}}", job_title)
+def _render_candidate_template(
+    template: str,
+    *,
+    candidate: CandidateProfile,
+    job: Job | None,
+    company_name: str | None = None,
+) -> str:
+    return render_template_string(
+        template,
+        build_render_variables(candidate, job, company_name),
     )
 
 
@@ -773,6 +784,20 @@ def create_collection_outreach_drafts(
     try:
         collection, candidates = _load_collection_candidates(db, collection_id)
         job = _collection_job(candidates)
+        template = None
+        if body.template_id is not None:
+            template = _get_or_404(db, OutreachTemplate, body.template_id, "OutreachTemplate")
+        source_subject = template.subject_template if template is not None else body.subject_template
+        source_text = (
+            template.body_text_template
+            if template is not None
+            else (body.body_text_template or body.body_html_template or "")
+        )
+        source_html = (
+            template.body_html_template
+            if template is not None
+            else (body.body_html_template or body.body_text_template or "")
+        )
         selected, missing_ids = _selected_collection_candidates(
             candidates, body.candidate_profile_ids
         )
@@ -820,9 +845,36 @@ def create_collection_outreach_drafts(
                 created_by_user_id=collection.created_by_user_id,
                 content_source=body.content_source,
                 subject=_render_candidate_template(
-                    body.subject_template, candidate, job
+                    source_subject,
+                    candidate=candidate,
+                    job=job,
                 ).strip(),
-                body=_render_candidate_template(body.body_template, candidate, job).strip(),
+                body_text=normalize_rich_message(
+                    body_text=_render_candidate_template(
+                        source_text,
+                        candidate=candidate,
+                        job=job,
+                    ).strip(),
+                    body_html=_render_candidate_template(
+                        source_html,
+                        candidate=candidate,
+                        job=job,
+                    ).strip(),
+                )[0],
+                body_html=normalize_rich_message(
+                    body_text=_render_candidate_template(
+                        source_text,
+                        candidate=candidate,
+                        job=job,
+                    ).strip(),
+                    body_html=_render_candidate_template(
+                        source_html,
+                        candidate=candidate,
+                        job=job,
+                    ).strip(),
+                )[1],
+                template_id=template.id if template is not None else None,
+                render_variables=build_render_variables(candidate, job),
                 sent_status=SentStatus.NOT_SENT,
             )
             db.add(message)
@@ -954,7 +1006,9 @@ def create_collection_interview_invitations(
             if body.send_email:
                 from worker.tasks import send_interview_invitation_email
 
-                send_interview_invitation_email.delay(str(invitation.id))
+                delay = getattr(send_interview_invitation_email, "delay", None)
+                if callable(delay):
+                    delay(str(invitation.id))
             results.append(
                 BatchCandidateResult(
                     candidate_profile_id=str(candidate.id),
