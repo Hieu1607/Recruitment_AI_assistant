@@ -17,13 +17,20 @@ depends_on = None
 
 
 def upgrade() -> None:
+    content_source_enum = postgresql.ENUM(
+        "ai_draft",
+        "template",
+        name="content_source_enum",
+        create_type=False,
+    )
+
     op.create_table(
         "outreach_templates",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_by_user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("job_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("content_source", sa.Enum("ai_draft", "template", name="content_source_enum", create_type=False), nullable=False),
+        sa.Column("content_source", content_source_enum, nullable=False),
         sa.Column("subject_template", sa.String(length=255), nullable=False),
         sa.Column("body_text_template", sa.Text(), nullable=False),
         sa.Column("body_html_template", sa.Text(), nullable=False),
