@@ -1,7 +1,8 @@
 import { api } from "@/api";
 import { useAuthStore } from "@/lib/auth";
+import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Bell, Command, ChevronRight } from "lucide-react";
+import { Search, Bell, Command, ChevronRight, BriefcaseBusiness, ChevronDown, PanelLeftOpen } from "lucide-react";
 import { Link, useMatches, useLocation } from "react-router";
 import { UserMenu } from "./UserMenu";
 import { routes } from "@/routes";
@@ -10,14 +11,20 @@ import { routes } from "@/routes";
 // Order matters: longer prefixes first so /shortlists/collections/:id wins over /shortlists.
 const BREADCRUMB_RULES: Array<[string, string]> = [
   ["/dashboard", "Dashboard"],
+  ["/jobs/new", "Jobs / New"],
+  ["/jobs/", "Jobs / Edit"],
+  ["/jobs", "Jobs"],
   ["/candidates", "Candidates"],
-  ["/job-descriptions/new", "Job Descriptions / New"],
-  ["/job-descriptions", "Job Descriptions"],
+  ["/job-descriptions/new", "Jobs / Job Description"],
+  ["/job-descriptions", "Jobs / Job Description"],
   ["/scoring", "Scoring"],
   ["/chat", "AI Chat"],
   ["/shortlists/collections", "Shortlists / Collection"],
   ["/shortlists", "Shortlists"],
   ["/outreach", "Outreach"],
+  ["/interviews/reports", "Interview Reports"],
+  ["/interviews/templates", "Interview Templates"],
+  ["/interviews", "Interviews"],
   ["/interview-questions", "Interview Prep"],
   ["/settings", "Settings"]
 ];
@@ -29,7 +36,13 @@ function resolveBreadcrumb(pathname: string): string {
   return "";
 }
 
-export function TopBar() {
+export function TopBar({
+  navSidebarCollapsed,
+  onExpandNavSidebar,
+}: {
+  navSidebarCollapsed: boolean;
+  onExpandNavSidebar: () => void;
+}) {
   const { pathname } = useLocation();
   const selectedJobId = useAuthStore((s) => s.selectedJobId);
   const setSelectedJobId = useAuthStore((s) => s.setSelectedJobId);
@@ -43,12 +56,24 @@ export function TopBar() {
   useMatches();
   const crumb = resolveBreadcrumb(pathname);
   const jobs = jobsData?.items ?? [];
+  const selectedJobExists = selectedJobId ? jobs.some((job) => job.id === selectedJobId) : false;
 
   return (
     <header
       className="hairline-b bg-bg flex items-center px-6 gap-6"
       style={{ height: "var(--topbar-height)" }}
     >
+      {navSidebarCollapsed && (
+        <button
+          type="button"
+          onClick={onExpandNavSidebar}
+          aria-label="Expand navigation sidebar"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-[color:var(--hairline)] hover:text-fg"
+        >
+          <PanelLeftOpen size={16} strokeWidth={1.75} />
+        </button>
+      )}
+
       {/* Wordmark — keeps brand visible above the content area even though
           the Sidebar already shows it (FOUND-09 / SC#2 require both). */}
       <Link
@@ -68,18 +93,40 @@ export function TopBar() {
       </nav>
 
       {jobs.length > 0 && (
-        <select
-          value={selectedJobId ?? ""}
-          onChange={(e) => setSelectedJobId(e.target.value || null)}
-          className="h-9 px-3 rounded-md border border-[color:var(--hairline)] bg-bg-elevated text-sm text-fg"
-          aria-label="Selected job"
-        >
-          {jobs.map((job) => (
-            <option key={job.id} value={job.id}>
-              {job.title}
+        <div className="relative hidden min-w-[210px] max-w-[280px] shrink-0 sm:block">
+          <BriefcaseBusiness
+            size={15}
+            strokeWidth={1.75}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-success"
+            aria-hidden="true"
+          />
+          <select
+            value={selectedJobExists && selectedJobId ? selectedJobId : ""}
+            onChange={(e) => setSelectedJobId(e.target.value || null)}
+            className={cn(
+              "h-10 w-full appearance-none rounded-[var(--radius-md)] border border-[rgba(74,124,89,0.34)]",
+              "bg-bg-elevated py-0 pl-9 pr-9 font-sans text-sm font-medium text-fg shadow-[0_1px_0_rgba(255,255,255,0.55)_inset]",
+              "transition-colors hover:border-[rgba(74,124,89,0.55)] hover:bg-bg-sidebar",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            )}
+            aria-label="Selected job"
+          >
+            <option value="" disabled>
+              Select job
             </option>
-          ))}
-        </select>
+            {jobs.map((job) => (
+              <option key={job.id} value={job.id}>
+                {job.title}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={15}
+            strokeWidth={1.75}
+            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+            aria-hidden="true"
+          />
+        </div>
       )}
 
       {/* Search */}

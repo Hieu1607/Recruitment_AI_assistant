@@ -21,75 +21,119 @@ services:
     ports:
       - "6379:6379"
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
   backend:
     build:
       context: ./backend
+    env_file:
+      - ./.env
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-recruitment_db}
       - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin123}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - MINIO_REGION=${MINIO_REGION:-us-east-1}
+      - MINIO_RESUME_BUCKET=${MINIO_RESUME_BUCKET:-resumes}
+      - MINIO_PRESIGNED_GET_EXPIRY_SECONDS=${MINIO_PRESIGNED_GET_EXPIRY_SECONDS:-3600}
       - SECRET_KEY=${SECRET_KEY:-super-secret-key}
       - LLM_PROVIDER=${LLM_PROVIDER:-groq}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.2}
-      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1024}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+      - APP_UI_LANGUAGE=${APP_UI_LANGUAGE:-en}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-llama-3.1-8b-instant}
       - GROQ_VISION_MODEL_NAME=${GROQ_VISION_MODEL_NAME:-meta-llama/llama-4-scout-17b-16e-instruct}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
-      - BACKEND_CORS_ORIGINS=["http://localhost:5173"]
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
-      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
+      - GOOGLE_OAUTH_SCOPES=${GOOGLE_OAUTH_SCOPES:-openid email profile https://www.googleapis.com/auth/gmail.send}
+      - GOOGLE_OAUTH_ACCESS_TYPE=${GOOGLE_OAUTH_ACCESS_TYPE:-offline}
+      - GOOGLE_OAUTH_PROMPT=${GOOGLE_OAUTH_PROMPT:-consent}
+      - GOOGLE_TOKEN_ENCRYPTION_KEY=${GOOGLE_TOKEN_ENCRYPTION_KEY:-}
+      - GMAIL_SEND_ENABLED=${GMAIL_SEND_ENABLED:-false}
+      - GMAIL_SEND_TIMEOUT_SECONDS=${GMAIL_SEND_TIMEOUT_SECONDS:-20}
+      - LANGGRAPH_TRACE_LOG_DIR=/logs
+      - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
       - WATCHFILES_FORCE_POLLING=true
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
+      minio:
+        condition: service_started
     command: >
       sh -c "alembic -c alembic.ini upgrade head &&
              uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src --reload-dir /app/migrations"
     volumes:
       - ./backend:/app
+      - ./logs:/logs
 
   worker:
     build:
       context: ./backend
+    env_file:
+      - ./.env
     command: celery -A worker.celery_app worker --loglevel=info
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-recruitment_db}
       - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin123}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - MINIO_REGION=${MINIO_REGION:-us-east-1}
+      - MINIO_RESUME_BUCKET=${MINIO_RESUME_BUCKET:-resumes}
+      - MINIO_PRESIGNED_GET_EXPIRY_SECONDS=${MINIO_PRESIGNED_GET_EXPIRY_SECONDS:-3600}
       - SECRET_KEY=${SECRET_KEY:-super-secret-key}
       - LLM_PROVIDER=${LLM_PROVIDER:-groq}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.2}
-      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1024}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+      - APP_UI_LANGUAGE=${APP_UI_LANGUAGE:-en}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROQ_MODEL_NAME=${GROQ_MODEL_NAME:-llama-3.1-8b-instant}
       - GROQ_VISION_MODEL_NAME=${GROQ_VISION_MODEL_NAME:-meta-llama/llama-4-scout-17b-16e-instruct}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-llama3.1:8b}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
-      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
+      - GOOGLE_OAUTH_SCOPES=${GOOGLE_OAUTH_SCOPES:-openid email profile https://www.googleapis.com/auth/gmail.send}
+      - GOOGLE_OAUTH_ACCESS_TYPE=${GOOGLE_OAUTH_ACCESS_TYPE:-offline}
+      - GOOGLE_OAUTH_PROMPT=${GOOGLE_OAUTH_PROMPT:-consent}
+      - GOOGLE_TOKEN_ENCRYPTION_KEY=${GOOGLE_TOKEN_ENCRYPTION_KEY:-}
+      - GMAIL_SEND_ENABLED=${GMAIL_SEND_ENABLED:-false}
+      - GMAIL_SEND_TIMEOUT_SECONDS=${GMAIL_SEND_TIMEOUT_SECONDS:-20}
+      - LANGGRAPH_TRACE_LOG_DIR=/logs
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
+      minio:
+        condition: service_started
       backend:
         condition: service_started
     volumes:
       - ./backend:/app
+      - ./logs:/logs
 
   frontend:
     build:
@@ -97,11 +141,17 @@ services:
       target: dev
       args:
         VITE_API_BASE_URL: http://localhost:8000/api/v1
+    command: >
+      sh -c "[ -d /app/node_modules/@tailwindcss/vite ] && [ -d /app/node_modules/qrcode ] || npm install;
+             npm run dev"
     ports:
       - "5173:5173"
+    environment:
+      - VITE_UI_LANGUAGE=${VITE_UI_LANGUAGE:-en}
     volumes:
       - ./frontend:/app
       - /app/node_modules
 
 volumes:
   postgres_data:
+  minio_data:

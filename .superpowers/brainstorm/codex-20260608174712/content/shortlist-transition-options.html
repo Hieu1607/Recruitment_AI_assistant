@@ -1,0 +1,81 @@
+<h2>Chon cach chuyen tu Shortlist sang Outreach / Interview Prep</h2>
+<p class="subtitle">Muc tieu la bien shortlist tu noi luu ung vien thanh buoc dieu phoi tiep theo: lien he, moi interview, va theo doi trang thai.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. Candidate row actions</div>
+        <div class="mockup-body">
+          <div style="display:grid; gap:8px">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+              <div><strong>Nguyen Van A</strong><br><span style="color:#777">Backend Engineer</span></div>
+              <div style="display:flex; gap:6px">
+                <button class="mock-button">Email</button>
+                <button class="mock-button">Interview</button>
+              </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+              <div><strong>Tran Thi B</strong><br><span style="color:#777">Data Analyst</span></div>
+              <div style="display:flex; gap:6px">
+                <button class="mock-button">Email</button>
+                <button class="mock-button">Interview</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Action theo tung ung vien</h3>
+      <p>Nhanh, it thay doi backend. Hop khi recruiter xu ly tung nguoi va can context ro tren row.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. Shortlist action bar</div>
+        <div class="mockup-body">
+          <div style="display:flex; justify-content:space-between; padding:10px; border:1px solid #ddd; border-radius:8px; margin-bottom:10px">
+            <strong>12 selected</strong>
+            <div style="display:flex; gap:6px">
+              <button class="mock-button">Create outreach batch</button>
+              <button class="mock-button">Send interview invites</button>
+            </div>
+          </div>
+          <div class="placeholder">Candidate table with checkboxes + status chips</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Batch tu shortlist</h3>
+      <p>Tot nhat cho luong tuyen dung that: chon nhieu ung vien, tao draft hang loat, moi interview hang loat, theo doi tien do.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. Pipeline workspace</div>
+        <div class="mockup-body">
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px">
+            <div class="placeholder">Shortlisted</div>
+            <div class="placeholder">Outreach</div>
+            <div class="placeholder">Interview</div>
+          </div>
+          <div style="margin-top:10px" class="placeholder">Candidate detail + next best action</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Pipeline dieu phoi</h3>
+      <p>Manh nhat ve UX dai han, nhung can mo rong data model voi stage/status/history ro rang.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>De xuat mac dinh</h3>
+  <p>Chon B lam MVP: them action bar tren shortlist collection, dung query params de mo Outreach/Interview dung candidate context, va them backend summary endpoint de biet ai da duoc gui email/moi interview.</p>
+</div>

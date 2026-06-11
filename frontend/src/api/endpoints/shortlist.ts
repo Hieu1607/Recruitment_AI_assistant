@@ -14,6 +14,10 @@ import type {
   ShortlistItemResponse,
   ShortlistItemListResponse,
   ShortlistItemCreateRequest,
+  DispatchSummaryResponse,
+  OutreachDraftBatchRequest,
+  InterviewInvitationBatchRequest,
+  BatchActionResponse,
 } from "../types";
 
 /**
@@ -253,9 +257,41 @@ const items = {
   },
 };
 
+const dispatch = {
+  async summary(collectionId: string): Promise<DispatchSummaryResponse> {
+    const { data } = await client.get<DispatchSummaryResponse>(
+      `/shortlist/collections/${collectionId}/dispatch-summary`,
+    );
+    return data;
+  },
+
+  async createOutreachDrafts(
+    collectionId: string,
+    body: OutreachDraftBatchRequest,
+  ): Promise<BatchActionResponse> {
+    const { data } = await client.post<BatchActionResponse>(
+      `/shortlist/collections/${collectionId}/outreach-drafts`,
+      body,
+    );
+    return data;
+  },
+
+  async createInterviewInvitations(
+    collectionId: string,
+    body: InterviewInvitationBatchRequest,
+  ): Promise<BatchActionResponse> {
+    const { data } = await client.post<BatchActionResponse>(
+      `/shortlist/collections/${collectionId}/interview-invitations`,
+      body,
+    );
+    return data;
+  },
+};
+
 export const shortlistApi = {
   sessions,
   turns,
   collections,
   items,
+  dispatch,
 };

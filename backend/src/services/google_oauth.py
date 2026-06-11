@@ -1,7 +1,10 @@
 import logging
 import secrets
 import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -16,11 +19,14 @@ from src.core.config import settings
 from src.models.oauth_identity import OAuthIdentity
 from src.models.user_account import UserAccount, RoleAssignment
 from src.models.enums import RoleName, UserStatus
+from src.services.token_crypto import encrypt_token
 
 GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
+GOOGLE_BASIC_SCOPES = "openid email profile"
+GOOGLE_GMAIL_SCOPES = "openid email profile https://www.googleapis.com/auth/gmail.send"
 
 # In-memory JWKs cache: (keyset, fetched_at)
 _jwks_cache: tuple[Optional[object], float] = (None, 0.0)
@@ -31,29 +37,53 @@ def _get_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(settings.SECRET_KEY, salt="google-oauth-state")
 
 
-def build_authorize_url(redirect_path: str) -> tuple[str, str]:
+def _get_scopes_for_flow(flow: str) -> str:
+    if flow == "connect_gmail":
+        return GOOGLE_GMAIL_SCOPES
+    return GOOGLE_BASIC_SCOPES
+
+
+def build_authorize_url(
+    redirect_path: str,
+    flow: str = "login",
+    initiating_user_id: str | None = None,
+) -> tuple[str, str]:
     """Returns (authorize_url, state). redirect_path is the frontend path after login."""
-    payload = {"redirect": redirect_path, "nonce": secrets.token_urlsafe(16)}
+    payload = {
+        "redirect": redirect_path,
+        "flow": flow,
+        "nonce": secrets.token_urlsafe(16),
+    }
+    if initiating_user_id is not None:
+        payload["initiating_user_id"] = initiating_user_id
     state = _get_serializer().dumps(payload)
 
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
         "response_type": "code",
-        "scope": "openid email profile",
+        "scope": _get_scopes_for_flow(flow),
         "state": state,
-        "access_type": "online",
+        "access_type": settings.GOOGLE_OAUTH_ACCESS_TYPE,
+        "prompt": settings.GOOGLE_OAUTH_PROMPT,
+        "include_granted_scopes": "true",
     }
-    query = "&".join(f"{k}={v}" for k, v in params.items())
+    query = urlencode(params)
     url = f"{GOOGLE_AUTH_URL}?{query}"
     return url, state
 
 
-def verify_state(state: str) -> str:
-    """Returns the original redirect_path. Raises ValueError if invalid/expired."""
+def verify_state(state: str) -> dict:
+    """Returns the redirect path and flow. Raises ValueError if invalid/expired."""
     try:
         payload = _get_serializer().loads(state, max_age=settings.OAUTH_STATE_TTL_SECONDS)
-        return payload["redirect"]
+        verified_payload = {
+            "redirect": payload["redirect"],
+            "flow": payload.get("flow", "login"),
+        }
+        if "initiating_user_id" in payload:
+            verified_payload["initiating_user_id"] = payload["initiating_user_id"]
+        return verified_payload
     except SignatureExpired:
         raise ValueError("state_expired")
     except BadSignature:
@@ -122,7 +152,26 @@ def verify_id_token(id_token: str) -> dict:
     return dict(claims)
 
 
-def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
+def _apply_google_tokens(identity: OAuthIdentity, tokens: dict | None) -> None:
+    if not tokens:
+        return
+
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    expires_in = tokens.get("expires_in")
+    scope = tokens.get("scope")
+
+    if access_token:
+        identity.access_token_encrypted = encrypt_token(access_token)
+    if refresh_token:
+        identity.refresh_token_encrypted = encrypt_token(refresh_token)
+    if expires_in:
+        identity.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    if scope:
+        identity.scope = str(scope)
+
+
+def upsert_user_from_google(db: Session, claims: dict, tokens: dict | None = None) -> UserAccount:
     """Implements email linking rule. Raises ValueError('google_email_not_verified') when appropriate."""
     google_sub = claims["sub"]
     email = claims["email"]
@@ -137,6 +186,8 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
     ).scalar_one_or_none()
 
     if identity is not None:
+        _apply_google_tokens(identity, tokens)
+        db.commit()
         return identity.user
 
     # 2. Look up by email
@@ -155,6 +206,7 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
             provider_subject=google_sub,
             email=email,
         )
+        _apply_google_tokens(new_identity, tokens)
         db.add(new_identity)
         db.commit()
         logger.info("Google OAuth: linked google identity to existing user_id=%s email=%s", user.id, email)
@@ -180,8 +232,68 @@ def upsert_user_from_google(db: Session, claims: dict) -> UserAccount:
         provider_subject=google_sub,
         email=email,
     )
+    _apply_google_tokens(identity, tokens)
     db.add(identity)
     db.commit()
     db.refresh(new_user)
     logger.info("Google OAuth: created new user user_id=%s email=%s", new_user.id, email)
     return new_user
+
+
+def connect_google_identity_to_user(
+    db: Session,
+    target_user_id: uuid.UUID | str,
+    claims: dict,
+    tokens: dict | None = None,
+) -> UserAccount:
+    google_sub = claims["sub"]
+    email = claims["email"]
+    email_verified = claims.get("email_verified", False)
+
+    if isinstance(target_user_id, str):
+        target_user_id = uuid.UUID(target_user_id)
+
+    target_user = db.execute(
+        select(UserAccount).where(UserAccount.id == target_user_id)
+    ).scalar_one_or_none()
+    if target_user is None:
+        raise ValueError("google_user_not_found")
+
+    identity = db.execute(
+        select(OAuthIdentity).where(
+            OAuthIdentity.provider == "google",
+            OAuthIdentity.provider_subject == google_sub,
+        )
+    ).scalar_one_or_none()
+    if identity is not None:
+        if identity.user_id != target_user.id:
+            raise ValueError("google_account_mismatch")
+        _apply_google_tokens(identity, tokens)
+        db.commit()
+        return target_user
+
+    existing_google_identity = db.execute(
+        select(OAuthIdentity).where(
+            OAuthIdentity.provider == "google",
+            OAuthIdentity.user_id == target_user.id,
+        )
+    ).scalar_one_or_none()
+    if existing_google_identity is not None:
+        raise ValueError("google_account_mismatch")
+
+    if target_user.email != email:
+        raise ValueError("google_account_mismatch")
+    if not email_verified:
+        raise ValueError("google_email_not_verified")
+
+    identity = OAuthIdentity(
+        user_id=target_user.id,
+        provider="google",
+        provider_subject=google_sub,
+        email=email,
+    )
+    _apply_google_tokens(identity, tokens)
+    db.add(identity)
+    db.commit()
+    db.refresh(target_user)
+    return target_user

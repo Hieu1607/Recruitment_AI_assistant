@@ -1,4 +1,12 @@
 from src.models.candidate_profile import CandidateProfile
+from src.models.interview_invitation import InterviewInvitation
+from src.models.interview_session import (
+    InterviewReport,
+    InterviewResponseItem,
+    InterviewSession,
+    InterviewTranscriptTurn,
+)
+from src.models.interview_template import InterviewTemplate
 from src.models.job import Job
 from src.models.job_matching import InterviewQuestionSet, JobDescription, MatchResult, MatchRun
 from src.models.outreach import OutreachMessage
@@ -11,6 +19,12 @@ __all__ = [
     "ResumeDocument",
     "ExtractionTrace",
     "CandidateProfile",
+    "InterviewInvitation",
+    "InterviewReport",
+    "InterviewResponseItem",
+    "InterviewSession",
+    "InterviewTemplate",
+    "InterviewTranscriptTurn",
     "Job",
     "JobDescription",
     "MatchRun",

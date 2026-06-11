@@ -1,8 +1,12 @@
 import { api, type CollectionResponse, type ResumeResponse } from "@/api";
 import { UploadModal } from "@/components/candidates/UploadModal";
+import { DashboardIntroGallery } from "@/components/dashboard/DashboardIntroGallery";
+import { Button } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore, useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { routes } from "@/routes";
+import { isVietnameseUi } from "@/lib/ui-language";
 import { useQuery } from "@tanstack/react-query";
 import {
     ArrowRight,
@@ -25,15 +29,22 @@ import { Link, useNavigate } from "react-router";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
+const viUi = isVietnameseUi();
+
 function timeGreeting(): string {
   const h = new Date().getHours();
+  if (viUi) {
+    if (h < 12) return "Chào buổi sáng";
+    if (h < 17) return "Chào buổi chiều";
+    return "Chào buổi tối";
+  }
   if (h < 12) return "Good morning";
   if (h < 17) return "Good afternoon";
   return "Good evening";
 }
 
 function todayLabel(): string {
-  return new Date().toLocaleDateString(undefined, {
+  return new Date().toLocaleDateString(viUi ? "vi-VN" : undefined, {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -45,14 +56,14 @@ function relativeTime(iso: string | null): string {
   if (!iso) return "—";
   const diff = Date.now() - new Date(iso).getTime();
   const s = Math.floor(diff / 1000);
-  if (s < 60) return "just now";
+  if (s < 60) return viUi ? "vừa xong" : "just now";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return viUi ? `${m} phút trước` : `${m}m ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return viUi ? `${h} giờ trước` : `${h}h ago`;
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
+  if (d < 30) return viUi ? `${d} ngày trước` : `${d}d ago`;
+  return new Date(iso).toLocaleDateString(viUi ? "vi-VN" : undefined);
 }
 
 function dayKey(iso: string): string {
@@ -322,24 +333,40 @@ function EditorialInsight({
   activeJDs: number;
   pendingOutreach: number;
 }) {
-  let headline = "Your talent pool is growing steadily.";
-  let body = "Keep uploading resumes and scoring candidates to surface top matches.";
+  let headline = viUi
+    ? "Danh sách ứng viên của bạn đang tăng trưởng ổn định."
+    : "Your talent pool is growing steadily.";
+  let body = viUi
+    ? "Hãy tiếp tục tải hồ sơ lên và chấm điểm ứng viên để làm nổi bật các hồ sơ phù hợp nhất."
+    : "Keep uploading resumes and scoring candidates to surface top matches.";
 
   if (totalCandidates === 0) {
-    headline = "Start by uploading your first resumes.";
-    body = "Parse PDFs to build candidate profiles and unlock AI scoring.";
+    headline = viUi ? "Hãy bắt đầu bằng việc tải những hồ sơ đầu tiên lên." : "Start by uploading your first resumes.";
+    body = viUi ? "Phân tích PDF để tạo hồ sơ ứng viên và mở khóa tính năng chấm điểm AI." : "Parse PDFs to build candidate profiles and unlock AI scoring.";
   } else if (pendingOutreach > 5) {
-    headline = `${pendingOutreach} outreach messages are waiting to be sent.`;
-    body = "Review and send your drafted messages to keep candidates engaged.";
+    headline = viUi
+      ? `Có ${pendingOutreach} tin nhắn liên hệ đang chờ gửi.`
+      : `${pendingOutreach} outreach messages are waiting to be sent.`;
+    body = viUi
+      ? "Hãy rà soát và gửi các bản nháp để giữ ứng viên luôn tương tác."
+      : "Review and send your drafted messages to keep candidates engaged.";
   } else if (processedToday > 0) {
-    headline = `${processedToday} resume${processedToday > 1 ? "s" : ""} processed today.`;
+    headline = viUi
+      ? `Đã xử lý ${processedToday} hồ sơ hôm nay.`
+      : `${processedToday} resume${processedToday > 1 ? "s" : ""} processed today.`;
     body =
       activeJDs > 0
-        ? `Score them against your ${activeJDs} active job description${activeJDs > 1 ? "s" : ""} to rank candidates.`
-        : "Create a job description to start scoring your new candidates.";
+        ? (viUi
+            ? `Hãy chấm các hồ sơ này với ${activeJDs} mô tả công việc đang hoạt động để xếp hạng ứng viên.`
+            : `Score them against your ${activeJDs} active job description${activeJDs > 1 ? "s" : ""} to rank candidates.`)
+        : (viUi
+            ? "Hãy tạo một mô tả công việc để bắt đầu chấm điểm các ứng viên mới."
+            : "Create a job description to start scoring your new candidates.");
   } else if (activeJDs === 0 && totalCandidates > 0) {
-    headline = "No active job descriptions yet.";
-    body = "Create a JD to start the AI scoring workflow and surface your best-fit candidates.";
+    headline = viUi ? "Chưa có mô tả công việc nào đang hoạt động." : "No active job descriptions yet.";
+    body = viUi
+      ? "Hãy tạo JD để bắt đầu quy trình chấm điểm AI và làm nổi bật các ứng viên phù hợp nhất."
+      : "Create a JD to start the AI scoring workflow and surface your best-fit candidates.";
   }
 
   return (
@@ -372,23 +399,107 @@ const ONBOARDING_STEPS = [
   },
   {
     id: "jd",
-    label: "Create a job description",
-    sub: "Define the role you're hiring for",
+    label: "Add the full job description",
+    sub: "Capture responsibilities, requirements, and hiring notes",
     href: "/job-descriptions",
   },
   {
     id: "score",
     label: "Run AI scoring",
-    sub: "Rank candidates against the JD with weighted criteria",
+    sub: "Compare candidates once resumes and the JD are ready",
     href: "/scoring",
   },
   {
     id: "chat",
     label: "Ask the AI Recruiter",
-    sub: "Query your candidate pool in natural language",
+    sub: "Interrogate your candidate pool after data starts flowing in",
     href: "/chat",
   },
 ];
+
+function FirstRunDashboardState({
+  jobTitle,
+  onUpload,
+  onAddJobDescription,
+}: {
+  jobTitle: string;
+  onUpload: () => void;
+  onAddJobDescription: () => void;
+}) {
+  return (
+    <div className="mx-auto max-w-7xl">
+      <div
+        className={cn(
+          "rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8",
+        )}
+      >
+        <div className="grid gap-8 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)] xl:items-start">
+          <div className="xl:pr-4">
+            <p className="text-xs font-sans font-semibold uppercase tracking-[0.22em] text-fg-subtle">
+              Workspace Ready
+            </p>
+            <h2 className="mt-3 font-display text-3xl leading-tight text-fg sm:text-4xl">
+              {jobTitle ? `"${jobTitle}" is ready.` : "Your workspace is ready."}
+            </h2>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-fg-muted sm:text-base">
+              Upload resumes, define the role, and let the workspace carry recruiters from setup
+              to ranking to fast AI-assisted review.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button
+                icon={<FileUp size={16} strokeWidth={1.75} />}
+                onClick={onUpload}
+              >
+                Upload resumes
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<FileText size={16} strokeWidth={1.75} />}
+                onClick={onAddJobDescription}
+              >
+                Add job description
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+            <p className="text-xs font-sans font-semibold uppercase tracking-[0.22em] text-fg-subtle">
+              Recommended Flow
+            </p>
+            <div className="mt-4 space-y-3">
+              {[
+                "Upload resumes to build candidate profiles.",
+                "Add the full job description to define fit.",
+                "Run scoring after both are available.",
+                "Use AI chat to explore the candidate pool.",
+              ].map((item) => (
+                <div key={item} className="flex items-start gap-3">
+                  <CheckCircle2
+                    size={16}
+                    strokeWidth={1.75}
+                    className="mt-0.5 shrink-0 text-accent"
+                  />
+                  <p className="text-sm leading-6 text-fg-muted">{item}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <DashboardIntroGallery />
+        </div>
+      </div>
+
+      <div className="mt-8">
+        <OnboardingChecklist
+          hasCandidates={false}
+          hasJDs={false}
+          hasScored={false}
+          hasChatted={false}
+        />
+      </div>
+    </div>
+  );
+}
 
 function OnboardingChecklist({
   hasCandidates,
@@ -423,7 +534,7 @@ function OnboardingChecklist({
           />
         </div>
         <p className="text-xs font-sans text-fg-subtle mt-1.5 tabular-nums">
-          {done} of {ONBOARDING_STEPS.length} complete
+          {viUi ? `Hoàn thành ${done}/${ONBOARDING_STEPS.length} bước` : `${done} of ${ONBOARDING_STEPS.length} complete`}
         </p>
       </div>
       <div className="space-y-2">
@@ -475,18 +586,25 @@ export default function DashboardRoute() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const selectedJobId = useSelectedJobId();
   const user = useAuthStore((s) => s.user);
-  const firstName = user?.display_name?.split(" ")[0] ?? "there";
+  const firstName = user?.display_name?.split(" ")[0] ?? (viUi ? "bạn" : "there");
 
   // ── data queries ──────────────────────────────────────────────────────────
 
   const { data: uploadsData, isLoading: uploadsLoading } = useQuery({
-    queryKey: ["dashboard-uploads"],
+    queryKey: ["dashboard-uploads", selectedJobId],
     queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 500 }) : Promise.resolve({ items: [], total: 0 })),
+    enabled: !!selectedJobId,
+    staleTime: 60_000,
+  });
+
+  const { data: currentJob } = useQuery({
+    queryKey: ["dashboard-job", selectedJobId],
+    queryFn: () => (selectedJobId ? api.jobs.get(selectedJobId) : Promise.resolve(null)),
     staleTime: 60_000,
   });
 
   const { data: jdsData, isLoading: jdsLoading } = useQuery({
-    queryKey: ["dashboard-jds"],
+    queryKey: ["dashboard-jds", selectedJobId],
     queryFn: async () => {
       if (!selectedJobId) return { items: [], total: 0 };
       try {
@@ -496,6 +614,7 @@ export default function DashboardRoute() {
         return { items: [], total: 0 };
       }
     },
+    enabled: !!selectedJobId,
     staleTime: 60_000,
   });
 
@@ -521,17 +640,26 @@ export default function DashboardRoute() {
     staleTime: 60_000,
   });
 
+  const { data: setupStatusData } = useQuery({
+    queryKey: ["jobs", selectedJobId, "setup-status"],
+    queryFn: () => api.jobs.setupStatus.get(selectedJobId!),
+    enabled: !!selectedJobId,
+    staleTime: 30_000,
+  });
+
   // ── derived values ────────────────────────────────────────────────────────
 
   const allUploads: ResumeResponse[] = uploadsData?.items ?? [];
-  const totalCandidates = uploadsData?.total ?? allUploads.length;
+  const totalCandidates = setupStatusData?.resume_count ?? uploadsData?.total ?? allUploads.length;
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const processedToday = allUploads.filter(
     (r) => r.uploaded_at && dayKey(r.uploaded_at) === todayStr,
   ).length;
 
-  const activeJDs = (jdsData?.items ?? []).filter((j) => j.is_active).length;
+  const activeJDs = setupStatusData?.has_active_job_description
+    ? Math.max((jdsData?.items ?? []).filter((j) => j.is_active).length, 1)
+    : (jdsData?.items ?? []).filter((j) => j.is_active).length;
   const pendingOutreach = pendingOutreachData?.total ?? 0;
 
   const isMetricLoading = uploadsLoading || jdsLoading || outreachLoading;
@@ -580,8 +708,8 @@ export default function DashboardRoute() {
       label: `Resume uploaded: ${fileToName(r.original_file_name)}`,
       sub:
         r.upload_status === "processed"
-          ? "Profile parsed successfully"
-          : `Status: ${r.upload_status}`,
+          ? (viUi ? "Đã phân tích hồ sơ thành công" : "Profile parsed successfully")
+          : (viUi ? `Trạng thái: ${r.upload_status}` : `Status: ${r.upload_status}`),
       timestamp: r.uploaded_at,
     });
   }
@@ -590,7 +718,7 @@ export default function DashboardRoute() {
     activityEntries.push({
       id: `outreach-${o.id}`,
       kind: "outreach",
-      label: `Outreach drafted: ${o.subject}`,
+      label: viUi ? `Đã tạo nháp liên hệ: ${o.subject}` : `Outreach drafted: ${o.subject}`,
       sub: o.candidate_full_name ?? undefined,
       timestamp: o.created_at,
     });
@@ -606,22 +734,17 @@ export default function DashboardRoute() {
 
   // ── onboarding tracking ─────────────────────────────────────────────────
 
-  const [hasScored] = useState(
-    () => localStorage.getItem("recruiter_onboarding_scored") === "true",
-  );
-  const [hasChatted] = useState(
-    () => localStorage.getItem("recruiter_onboarding_chatted") === "true",
-  );
-
-  const hasCandidates = totalCandidates > 0;
-  const hasJDs = (jdsData?.items ?? []).length > 0;
+  const hasCandidates = setupStatusData?.has_uploaded_resumes ?? totalCandidates > 0;
+  const hasJDs = setupStatusData?.has_active_job_description ?? (jdsData?.items ?? []).length > 0;
+  const hasScored = setupStatusData?.has_completed_score_run ?? false;
+  const hasChatted = setupStatusData?.has_chat_turn ?? false;
   const onboardingDone = [hasCandidates, hasJDs, hasScored, hasChatted].filter(Boolean).length;
   const onboardingComplete = onboardingDone === ONBOARDING_STEPS.length;
 
   // ── empty state detection ─────────────────────────────────────────────────
 
   const isEmpty =
-    !isMetricLoading && totalCandidates === 0 && (jdsData?.items ?? []).length === 0;
+    !isMetricLoading && !hasCandidates && !hasJDs;
 
   const collections = collectionsData?.items ?? [];
 
@@ -639,11 +762,10 @@ export default function DashboardRoute() {
 
       {isEmpty ? (
         /* ── Onboarding empty state ── */
-        <OnboardingChecklist
-          hasCandidates={hasCandidates}
-          hasJDs={hasJDs}
-          hasScored={hasScored}
-          hasChatted={hasChatted}
+        <FirstRunDashboardState
+          jobTitle={currentJob?.title ?? ""}
+          onUpload={() => setUploadOpen(true)}
+          onAddJobDescription={() => navigate(routes.jobDescriptions)}
         />
       ) : (
         <>
@@ -771,7 +893,7 @@ export default function DashboardRoute() {
                     icon={FileText}
                     label="Create JD"
                     description="Write a new job description"
-                    onClick={() => navigate("/job-descriptions/new")}
+                    onClick={() => navigate(routes.jobDescriptions)}
                   />
                   <QuickActionButton
                     icon={BarChart3}

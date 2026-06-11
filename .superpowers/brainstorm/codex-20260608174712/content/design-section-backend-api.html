@@ -1,0 +1,52 @@
+<h2>Design section 2: Backend/API cho shortlist dispatch</h2>
+<p class="subtitle">Them lop workflow nho quanh shortlist, dung lai OutreachMessage va InterviewInvitation hien co.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Proposed API boundary</div>
+  <div class="mockup-body">
+    <div style="display:grid; gap:10px">
+      <div style="padding:12px; border:1px solid #ddd; border-radius:8px">
+        <strong>GET /shortlist/collections/{id}/dispatch-summary</strong><br>
+        <span style="color:#777">Returns collection, candidate snapshot, latest outreach status, latest interview status, eligibility blockers.</span>
+      </div>
+      <div style="padding:12px; border:1px solid #ddd; border-radius:8px">
+        <strong>POST /shortlist/collections/{id}/outreach-drafts</strong><br>
+        <span style="color:#777">Creates missing drafts for selected candidates. Skips existing draft/sent messages unless force_update is true.</span>
+      </div>
+      <div style="padding:12px; border:1px solid #ddd; border-radius:8px">
+        <strong>POST /shortlist/collections/{id}/interview-invitations</strong><br>
+        <span style="color:#777">Creates queued interview invitations for selected candidates using an active template, with per-candidate result.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Dispatch summary response</h3>
+  <pre style="white-space:pre-wrap; font-size:12px; background:#f7f7f7; padding:12px; border-radius:8px">{
+  collection: { id, name, item_count },
+  job: { id, title },
+  candidates: [
+    {
+      candidate_profile_id,
+      full_name,
+      email,
+      contact_status: "ready" | "missing_email",
+      outreach: { latest_message_id, status, created_at, sent_at },
+      interview: { latest_invitation_id, status, template_name, sent_at, completed_at },
+      blockers: ["missing_email", "gmail_not_connected", "no_active_template"]
+    }
+  ],
+  capabilities: { gmail_connected, active_interview_templates_count }
+}</pre>
+</div>
+
+<div class="section">
+  <h3>Batch command behavior</h3>
+  <p>Moi batch endpoint tra ve result tung candidate: created, skipped_duplicate, skipped_missing_email, skipped_no_template, failed. UI dung ket qua nay de update row va hien success summary.</p>
+</div>
+
+<div class="section">
+  <h3>Why this shape</h3>
+  <p>Noi dung batch can audit duoc va co duplicate detection vi workflow tuyen dung de gay nham lan khi communication bi tach khoi pipeline. Summary endpoint giu UI nhanh va tranh N+1 candidate calls.</p>
+</div>

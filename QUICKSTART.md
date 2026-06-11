@@ -57,6 +57,10 @@ docker compose exec backend alembic -c alembic.ini upgrade head
 - Swagger UI: http://localhost:8000/docs
 - Frontend: http://localhost:5173/
 
+## Configure Gmail Sending
+
+To send candidate emails from the recruiter's real Gmail account, follow [docs/GOOGLE_OAUTH_GMAIL_API_SETUP.md](docs/GOOGLE_OAUTH_GMAIL_API_SETUP.md). Gmail sending requires `GMAIL_SEND_ENABLED=true`, `GOOGLE_TOKEN_ENCRYPTION_KEY`, and a Google OAuth consent screen that includes `https://www.googleapis.com/auth/gmail.send`.
+
 ## 6. Seed Initial User And Roles
 
 Run seed script after first successful migration:

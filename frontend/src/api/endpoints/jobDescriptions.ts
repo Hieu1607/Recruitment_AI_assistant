@@ -9,7 +9,8 @@ import type {
 
 export const jobDescriptionsApi = {
   /**
-   * List job descriptions with optional filters.
+   * Deprecated compatibility endpoint.
+   * Primary UI flows should use jobsApi.jobDescription scoped to the selected job.
    * GET /job-descriptions/
    */
   async list(params?: {
@@ -25,7 +26,7 @@ export const jobDescriptionsApi = {
   },
 
   /**
-   * Get a single job description by UUID.
+   * Deprecated compatibility endpoint.
    * GET /job-descriptions/{jd_id}
    */
   async get(jdId: string): Promise<JobDescriptionResponse> {
@@ -36,7 +37,7 @@ export const jobDescriptionsApi = {
   },
 
   /**
-   * Create a new job description.
+   * Deprecated compatibility endpoint.
    * POST /job-descriptions/
    */
   async create(
@@ -50,7 +51,7 @@ export const jobDescriptionsApi = {
   },
 
   /**
-   * Partially update a job description.
+   * Deprecated compatibility endpoint.
    * PATCH /job-descriptions/{jd_id}
    */
   async update(
@@ -65,7 +66,7 @@ export const jobDescriptionsApi = {
   },
 
   /**
-   * Delete a job description.
+   * Deprecated compatibility endpoint.
    * DELETE /job-descriptions/{jd_id}
    * Returns 200 with { deleted, job_description_id }.
    */

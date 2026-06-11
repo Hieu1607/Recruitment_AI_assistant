@@ -1,9 +1,16 @@
 import { client } from "../client";
+import {
+  clearAuthenticatedSession,
+  getAccessToken,
+  isAuthenticatedSession,
+  storeAccessToken,
+} from "@/lib/session";
 
 export interface UserProfile {
   id: string;
   email: string;
   display_name: string;
+  gmail_connected: boolean;
 }
 
 export interface UpdateProfileRequest {
@@ -27,7 +34,9 @@ export interface TokenResponse {
   token_type: string;
 }
 
-const TOKEN_KEY = "recruitai.token";
+interface GoogleConnectGmailResponse {
+  authorize_url: string;
+}
 
 export const authApi = {
   async login(body: LoginRequest): Promise<TokenResponse> {
@@ -41,19 +50,19 @@ export const authApi = {
   },
 
   storeToken(token: string): void {
-    localStorage.setItem(TOKEN_KEY, token);
+    storeAccessToken(token);
   },
 
   getToken(): string | null {
-    return localStorage.getItem(TOKEN_KEY);
+    return getAccessToken();
   },
 
   clearToken(): void {
-    localStorage.removeItem(TOKEN_KEY);
+    clearAuthenticatedSession();
   },
 
   isAuthenticated(): boolean {
-    return localStorage.getItem(TOKEN_KEY) !== null;
+    return isAuthenticatedSession();
   },
 
   async me(): Promise<UserProfile> {
@@ -70,5 +79,12 @@ export const authApi = {
     const base = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
     const qs = new URLSearchParams({ redirect });
     return `${base}/auth/google/login?${qs.toString()}`;
+  },
+
+  async getGoogleConnectGmailUrl(redirect: string = "/outreach"): Promise<string> {
+    const { data } = await client.get<GoogleConnectGmailResponse>("/auth/google/connect-gmail", {
+      params: { redirect },
+    });
+    return data.authorize_url;
   },
 };

@@ -1,16 +1,15 @@
-import { api, type JobDescriptionResponse, type ScoreResponse } from "@/api";
+import { api, type ScoreResponse } from "@/api";
 import {
     Avatar,
     Badge,
     Button,
-    ScoreDonut,
     ScoreRadar,
     Skeleton,
-    type ScoreSegment,
 } from "@/components/ui";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useScoringStore } from "@/lib/scoring-store";
+import { useQuery } from "@tanstack/react-query";
 import {
     BarChart2,
     Check,
@@ -23,7 +22,6 @@ import {
     X,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -84,17 +82,84 @@ function scoreColor(n: number) {
   return "var(--danger)";
 }
 
+function formatCriterionLabel(
+  criterionKey: string,
+  requirementText?: string | null,
+) {
+  if (requirementText && requirementText.trim()) return requirementText.trim();
+
+  return criterionKey
+    .replace(/[._]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+function formatRadarCriterionLabel(
+  criterionKey: string,
+  requirementText?: string | null,
+) {
+  const fullLabel = formatCriterionLabel(criterionKey, requirementText);
+  const normalized = fullLabel.toLowerCase();
+
+  const keywordLabels: Array<[RegExp, string]> = [
+    [/\b(bachelor|master|degree|phd|final-year student)\b/, "Degree"],
+    [/\b(machine learning|deep learning|ml|dl)\b/, "ML / DL"],
+    [/\bpython\b/, "Python"],
+    [/\b(llms?|rag|embedding|semantic search)\b/, "LLMs / RAG"],
+    [/\b(pytorch|tensorflow|scikit-learn|frameworks?)\b/, "AI frameworks"],
+    [/\b(rest api|rest apis|backend)\b/, "REST / backend"],
+    [/\bgit\b/, "Git"],
+    [/\b(problem-solving|analytical thinking|analytical)\b/, "Problem-solving"],
+    [/\b(chatbots?|assistants?)\b/, "AI chatbots"],
+    [/\b(vector databases?|weaviate|pinecone|chromadb|faiss)\b/, "Vector DBs"],
+    [/\b(fastapi|docker|microservice)\b/, "FastAPI / Docker"],
+    [/\b(mlops|monitoring|observability)\b/, "MLOps"],
+    [/\b(aws|gcp|azure|cloud)\b/, "Cloud platforms"],
+    [/\b(research papers?|technical documentation)\b/, "Research implementation"],
+  ];
+
+  const keywordMatch = keywordLabels.find(([pattern]) => pattern.test(normalized));
+  if (keywordMatch) return keywordMatch[1];
+
+  const compact = fullLabel
+    .replace(/^[A-Za-z'()-]+\s+degree.*?\bin\b\s*/i, "")
+    .replace(/^(good knowledge of|strong|familiarity with|experience with|experience using|experience building|understanding of|knowledge of|ability to)\s+/i, "")
+    .replace(/\s+such as.*$/i, "")
+    .replace(/[.,;:()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const words = compact.split(" ").filter(Boolean).slice(0, 3);
+  return words.join(" ");
+}
+
+function candidateDisplayLabel(score: ScoreResponse["scores"][number]) {
+  const candidateName = score.candidateName?.trim();
+  if (candidateName) return candidateName;
+
+  const resumeFileName = score.resumeFileName?.trim();
+  if (resumeFileName) return fileToName(resumeFileName);
+
+  return score.candidateDisplayName?.trim() || truncateId(score.candidateId);
+}
+
 // ── main component ───────────────────────────────────────────────────────────
 
 export default function ScoringSetupRoute() {
-  const [searchParams] = useSearchParams();
   const selectedJobId = useSelectedJobId();
+  const scoringRun = useScoringStore((state) =>
+    selectedJobId ? state.runs[selectedJobId] ?? null : null
+  );
+  const startRun = useScoringStore((state) => state.startRun);
+  const clearRunError = useScoringStore((state) => state.clearError);
 
   // ── step state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>(1);
 
   // ── step-1 state ──────────────────────────────────────────────────────────
-  const [selectedJdId, setSelectedJdId] = useState(searchParams.get("jd") ?? "");
+  const [hiddenText, setHiddenText] = useState("");
+  const [hiddenDirty, setHiddenDirty] = useState(false);
+  const [savingHidden, setSavingHidden] = useState(false);
   const [candidateMode, setCandidateMode] = useState<"all" | "specific">("all");
   const [candSearch, setCandSearch] = useState("");
   const [selectedCandIds, setSelectedCandIds] = useState<Set<string>>(new Set());
@@ -108,7 +173,6 @@ export default function ScoringSetupRoute() {
   const [elapsed, setElapsed] = useState(0);
 
   // ── step-3 state ──────────────────────────────────────────────────────────
-  const [scoreResult, setScoreResult] = useState<ScoreResponse | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
   const [resultSort, setResultSort] = useState<{
@@ -119,34 +183,66 @@ export default function ScoringSetupRoute() {
 
   // ── data ──────────────────────────────────────────────────────────────────
 
-  const { data: jdData, isLoading: jdsLoading } = useQuery({
-    queryKey: ["jobDescriptions"],
+  const { data: workspaceJd, isLoading: jdLoading } = useQuery({
+    queryKey: ["jobs", selectedJobId, "job-description", "scoring"],
     queryFn: async () => {
-      if (!selectedJobId) return { items: [], total: 0 };
+      if (!selectedJobId) return null;
       try {
-        const jd = await api.jobs.jobDescription.get(selectedJobId);
-        return { items: [jd], total: 1 };
+        return await api.jobs.jobDescription.get(selectedJobId);
       } catch {
-        return { items: [], total: 0 };
+        return null;
       }
     },
   });
 
   const { data: resumeData, isLoading: resumesLoading } = useQuery({
-    queryKey: ["resumes", 200],
+    queryKey: ["resumes", selectedJobId, 200],
     queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 200 }) : Promise.resolve({ items: [], total: 0 })),
-    enabled: candidateMode === "specific",
+    enabled: candidateMode === "specific" && !!selectedJobId,
   });
 
-  const jds: JobDescriptionResponse[] = jdData?.items ?? [];
-  const resumes = resumeData?.items ?? [];
-  const selectedJd = jds.find((j) => j.id === selectedJdId);
+  const resumes = useMemo(() => resumeData?.items ?? [], [resumeData?.items]);
 
   useEffect(() => {
-    if (!selectedJdId && jds.length > 0) {
-      setSelectedJdId(jds[0].id);
+    if (!workspaceJd) {
+      setHiddenText("");
+      setHiddenDirty(false);
+      return;
     }
-  }, [jds, selectedJdId]);
+    setHiddenText(workspaceJd.hidden_text ?? "");
+    setHiddenDirty(false);
+  }, [workspaceJd]);
+
+  useEffect(() => {
+    if (workspaceJd && !hiddenDirty) {
+      setHiddenText(workspaceJd.hidden_text ?? "");
+    }
+  }, [workspaceJd, hiddenDirty]);
+
+  useEffect(() => {
+    if (!selectedJobId) {
+      setStep(1);
+      return;
+    }
+
+    if (scoringRun?.status === "running") {
+      setStep(2);
+      return;
+    }
+
+    if (scoringRun?.latestResult) {
+      setStep(3);
+      return;
+    }
+
+    setStep(1);
+  }, [selectedJobId, scoringRun?.latestResult, scoringRun?.status]);
+
+  useEffect(() => {
+    if (!selectedJobId || !scoringRun?.lastError) return;
+    toast.error(scoringRun.lastError);
+    clearRunError(selectedJobId);
+  }, [clearRunError, scoringRun?.lastError, selectedJobId]);
 
   // ── processing timers ─────────────────────────────────────────────────────
 
@@ -167,42 +263,7 @@ export default function ScoringSetupRoute() {
 
   // ── mutation ──────────────────────────────────────────────────────────────
 
-  const scoreMutation = useMutation({
-    mutationFn: () => {
-      const sw: Record<string, number> = {};
-      sections.forEach((s) => {
-        sw[s.key] = s.value;
-      });
-      return api.jobs.score(selectedJobId!, {
-        score_threshold: threshold,
-        batch_size: batchSize,
-        section_weights: sw,
-        candidate_profile_ids:
-          candidateMode === "specific" && selectedCandIds.size > 0
-            ? [...selectedCandIds]
-            : undefined,
-      });
-    },
-    onSuccess: (data) => {
-      setScoreResult(data);
-      setStep(3);
-      localStorage.setItem("recruiter_onboarding_scored", "true");
-    },
-    onError: () => {
-      toast.error("Scoring failed — please try again");
-      setStep(1);
-    },
-  });
-
   // ── weight helpers ────────────────────────────────────────────────────────
-
-  const totalWeight = sections.reduce((sum, s) => sum + s.value, 0);
-
-  const donutSegments: ScoreSegment[] = sections.map((s, i) => ({
-    label: s.label,
-    value: totalWeight > 0 ? Math.round((s.value / totalWeight) * 100) : 0,
-    color: SEG_COLORS[i % SEG_COLORS.length],
-  }));
 
   const availableToAdd = EXTRA_SECTIONS.filter(
     (es) => !sections.find((s) => s.key === es.key)
@@ -220,9 +281,26 @@ export default function ScoringSetupRoute() {
     );
   }, [resumes, candSearch]);
 
+  async function saveHiddenInformation() {
+    if (!selectedJobId || !workspaceJd || !hiddenDirty) return;
+    setSavingHidden(true);
+    try {
+      await api.jobs.jobDescription.patch(selectedJobId, {
+        hidden_text: hiddenText,
+      });
+      setHiddenDirty(false);
+    } catch (error) {
+      toast.error("Hidden information could not be saved");
+      throw error;
+    } finally {
+      setSavingHidden(false);
+    }
+  }
+
   // ── result helpers ────────────────────────────────────────────────────────
 
   const sortedScores = useMemo(() => {
+    const scoreResult = scoringRun?.latestResult;
     if (!scoreResult) return [];
     return [...scoreResult.scores].sort((a, b) => {
       const av =
@@ -231,7 +309,9 @@ export default function ScoringSetupRoute() {
         resultSort.key === "totalScore" ? b.totalScore : b.passedThreshold ? 1 : 0;
       return resultSort.dir === "desc" ? bv - av : av - bv;
     });
-  }, [scoreResult, resultSort]);
+  }, [resultSort, scoringRun?.latestResult]);
+
+  const scoreResult = scoringRun?.latestResult ?? null;
 
   const avgScore =
     scoreResult && scoreResult.scores.length > 0
@@ -257,7 +337,8 @@ export default function ScoringSetupRoute() {
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
       const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   }
@@ -265,7 +346,8 @@ export default function ScoringSetupRoute() {
   function toggleSel(id: string) {
     setSelIds((prev) => {
       const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   }
@@ -279,17 +361,36 @@ export default function ScoringSetupRoute() {
   }
 
   function startScoring() {
-    if (!selectedJobId || !selectedJdId) {
-      toast.error("Please select a job description");
+    if (!selectedJobId || !workspaceJd) {
+      toast.error("Please create or select the current workspace job description");
       return;
     }
     setStep(2);
-    scoreMutation.mutate();
+    void saveHiddenInformation()
+      .then(() => {
+        const sectionWeights: Record<string, number> = {};
+        sections.forEach((s) => {
+          sectionWeights[s.key] = s.value;
+        });
+
+        return startRun(selectedJobId, {
+          scoreThreshold: threshold,
+          batchSize,
+          sectionWeights,
+          candidateProfileIds:
+            candidateMode === "specific" && selectedCandIds.size > 0
+              ? [...selectedCandIds]
+              : undefined,
+          hiddenTextSnapshot: hiddenText,
+        });
+      })
+      .catch(() => {
+        setStep(scoreResult ? 3 : 1);
+      });
   }
 
   function resetToSetup() {
     setStep(1);
-    setScoreResult(null);
     setExpandedIds(new Set());
     setSelIds(new Set());
   }
@@ -303,10 +404,10 @@ export default function ScoringSetupRoute() {
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="px-8 py-8 min-h-full">
+    <div className="px-8 py-6 min-h-full">
 
       {/* Stepper */}
-      <div className="flex items-center gap-0 mb-10">
+      <div className="flex items-center gap-0 mb-6">
         {[
           { n: 1, label: "Setup" },
           { n: 2, label: "Processing" },
@@ -347,46 +448,50 @@ export default function ScoringSetupRoute() {
 
       {/* ── STEP 1: Setup ── */}
       {step === 1 && (
-        <div className="grid grid-cols-5 gap-10">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(260px,320px)] gap-8 items-start">
 
           {/* Left: JD + Candidates */}
-          <div className="col-span-3 space-y-8">
+          <div className="space-y-7">
 
-            {/* JD Selector */}
+            {/* Hidden information */}
             <div>
               <h2 className="font-display text-xl font-medium text-fg mb-4">
-                Job Description
+                Hidden Information
               </h2>
-              {jdsLoading ? (
-                <Skeleton className="h-10 w-full" />
+              {jdLoading ? (
+                <Skeleton className="h-32 w-full" />
+              ) : !workspaceJd ? (
+                <div
+                  className={cn(
+                    "rounded-[var(--radius-md)] border border-[color:var(--hairline)]",
+                    "bg-bg-elevated p-4 text-sm text-fg-muted font-sans",
+                  )}
+                >
+                  Create a workspace job description before scoring.
+                </div>
               ) : (
-                <div className="space-y-3">
-                  <select
-                    value={selectedJdId}
-                    onChange={(e) => setSelectedJdId(e.target.value)}
+                <div className="space-y-2">
+                  <textarea
+                    aria-label="Hidden Information"
+                    value={hiddenText}
+                    onChange={(e) => {
+                      setHiddenText(e.target.value);
+                      setHiddenDirty(true);
+                    }}
+                    onBlur={() => {
+                      if (hiddenDirty) void saveHiddenInformation();
+                    }}
+                    placeholder="Internal criteria, preferred signals, red flags, compensation constraints..."
                     className={cn(
-                      "w-full h-10 px-3 text-sm font-sans rounded-[var(--radius-md)]",
+                      "w-full min-h-32 resize-y px-3 py-2.5 text-sm font-sans leading-relaxed rounded-[var(--radius-md)]",
                       "border border-[color:var(--hairline-strong)] bg-bg text-fg",
+                      "placeholder:text-fg-subtle",
                       "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
                     )}
-                  >
-                    <option value="">Select a job description…</option>
-                    {jds.map((j) => (
-                      <option key={j.id} value={j.id}>
-                        {j.title ?? "Untitled position"}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedJd && (
-                    <div
-                      className={cn(
-                        "p-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)]",
-                        "bg-bg-elevated text-sm text-fg-muted font-sans leading-relaxed line-clamp-4"
-                      )}
-                    >
-                      {selectedJd.jd_text}
-                    </div>
-                  )}
+                  />
+                  <div className="h-4 text-[11px] font-sans text-fg-subtle">
+                    {savingHidden ? "Saving..." : hiddenDirty ? "Unsaved" : ""}
+                  </div>
                 </div>
               )}
             </div>
@@ -455,7 +560,8 @@ export default function ScoringSetupRoute() {
                             onChange={() =>
                               setSelectedCandIds((prev) => {
                                 const n = new Set(prev);
-                                n.has(r.id) ? n.delete(r.id) : n.add(r.id);
+                                if (n.has(r.id)) n.delete(r.id);
+                                else n.add(r.id);
                                 return n;
                               })
                             }
@@ -479,17 +585,14 @@ export default function ScoringSetupRoute() {
           </div>
 
           {/* Right: Weights + Config */}
-          <div className="col-span-2 space-y-8">
+          <div className="space-y-4">
 
             {/* Section Weights */}
             <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-4">
+              <h2 className="font-display text-xl font-medium text-fg mb-3">
                 Section Weights
               </h2>
-              <div className="flex justify-center mb-5">
-                <ScoreDonut score={100} segments={donutSegments} size={152} />
-              </div>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {sections.map((s, i) => (
                   <div key={s.key} className="flex items-center gap-2.5">
                     <div
@@ -551,7 +654,7 @@ export default function ScoringSetupRoute() {
               </div>
 
               {availableToAdd.length > 0 && (
-                <div className="relative mt-3">
+                <div className="relative mt-2">
                   <button
                     type="button"
                     onClick={() => setAddSectionOpen((v) => !v)}
@@ -592,10 +695,10 @@ export default function ScoringSetupRoute() {
 
             {/* Config */}
             <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-4">
+              <h2 className="font-display text-xl font-medium text-fg mb-3">
                 Configuration
               </h2>
-              <div className="space-y-5">
+              <div className="space-y-3">
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-sans font-medium text-fg-muted">
@@ -663,7 +766,8 @@ export default function ScoringSetupRoute() {
               size="lg"
               className="w-full justify-center"
               icon={<BarChart2 size={16} strokeWidth={2} />}
-              disabled={!selectedJdId}
+              loading={scoringRun?.status === "running" || savingHidden}
+              disabled={!selectedJobId || !workspaceJd}
               onClick={startScoring}
             >
               Start scoring
@@ -704,8 +808,8 @@ export default function ScoringSetupRoute() {
           </p>
 
           <p className="text-xs text-fg-muted font-sans text-center max-w-xs">
-            Do not navigate away — the LLM is actively evaluating candidates.
-            This may take several minutes.
+            Scoring keeps running in the background, so you can switch tabs and
+            come back when the results are ready.
           </p>
 
           <Button variant="secondary" size="sm" disabled className="opacity-40 cursor-not-allowed">
@@ -755,11 +859,11 @@ export default function ScoringSetupRoute() {
                   <ClipboardCopy size={13} strokeWidth={1.75} />
                 )}
               </button>
-              {selectedJd && (
+              {workspaceJd && (
                 <span className="text-sm text-fg-muted font-sans">
                   vs{" "}
                   <span className="text-fg font-medium">
-                    {selectedJd.title ?? "Untitled position"}
+                    {workspaceJd.title ?? "Untitled position"}
                   </span>
                 </span>
               )}
@@ -773,6 +877,22 @@ export default function ScoringSetupRoute() {
               Score again
             </Button>
           </div>
+
+          {(scoringRun?.hiddenTextSnapshot || hiddenText.trim()) && (
+            <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+              <div className="flex items-center justify-between gap-4 mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted font-sans">
+                  Recruiter-only hidden information
+                </p>
+                <span className="text-[11px] text-fg-subtle font-sans">
+                  Snapshot used for this run
+                </span>
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg font-sans">
+                {scoringRun?.hiddenTextSnapshot || hiddenText.trim()}
+              </p>
+            </div>
+          )}
 
           {/* Results table */}
           <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] overflow-hidden">
@@ -862,9 +982,12 @@ export default function ScoringSetupRoute() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
-                          <Avatar name={score.candidateId} size="sm" />
-                          <span className="font-mono text-xs text-fg tabular-nums">
-                            {truncateId(score.candidateId)}
+                          <Avatar name={candidateDisplayLabel(score)} size="sm" />
+                          <span
+                            className="max-w-[220px] truncate text-sm font-medium text-fg"
+                            title={score.resumeFileName || score.candidateId}
+                          >
+                            {candidateDisplayLabel(score)}
                           </span>
                         </div>
                       </td>
@@ -924,7 +1047,7 @@ export default function ScoringSetupRoute() {
                     {expandedIds.has(score.candidateId) && (
                       <tr className="bg-bg-elevated">
                         <td colSpan={8} className="px-8 py-6">
-                          <div className="grid grid-cols-2 gap-8">
+                          <div className="grid gap-8 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
                             <div className="space-y-5">
                               <div>
                                 <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
@@ -958,8 +1081,20 @@ export default function ScoringSetupRoute() {
                                   <tbody>
                                     {score.componentScores.map((cs) => (
                                       <tr key={cs.criterionKey} className="hairline-b">
-                                        <td className="py-2 pr-3 text-fg font-medium capitalize">
-                                          {cs.criterionKey}
+                                        <td className="py-2 pr-3 text-fg">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-medium">
+                                              {formatCriterionLabel(cs.criterionKey, cs.requirementText)}
+                                            </span>
+                                            {cs.evaluationMode && (
+                                              <Badge
+                                                variant={cs.evaluationMode === "semantic" ? "neutral" : "success"}
+                                                size="sm"
+                                              >
+                                                {cs.evaluationMode === "semantic" ? "Semantic" : "Rule-based"}
+                                              </Badge>
+                                            )}
+                                          </div>
                                         </td>
                                         <td className="py-2 pr-3 text-right text-fg-muted tabular-nums">
                                           {cs.weight}
@@ -983,8 +1118,8 @@ export default function ScoringSetupRoute() {
                                           key={cs.criterionKey}
                                           className="text-[11px] text-fg-muted italic font-sans"
                                         >
-                                          <span className="not-italic font-medium text-fg-subtle capitalize">
-                                            {cs.criterionKey}:
+                                          <span className="not-italic font-medium text-fg-subtle">
+                                            {formatCriterionLabel(cs.criterionKey, cs.requirementText)}:
                                           </span>{" "}
                                           {cs.evidenceSummary}
                                         </p>
@@ -993,17 +1128,21 @@ export default function ScoringSetupRoute() {
                                 )}
                               </div>
                             </div>
-                            <div>
+                            <div className="min-w-0">
                               <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
                                 Score Radar
                               </p>
+                              <p className="mb-4 max-w-[42rem] text-[11px] leading-relaxed text-fg-subtle font-sans">
+                                Radar labels are shortened for readability. The full requirement text stays in
+                                Component Scores.
+                              </p>
                               <ScoreRadar
                                 data={score.componentScores.map((cs) => ({
-                                  subject: cs.criterionKey,
+                                  subject: formatRadarCriterionLabel(cs.criterionKey, cs.requirementText),
                                   value: cs.score,
                                   fullMark: 100,
                                 }))}
-                                size={280}
+                                size={420}
                               />
                             </div>
                           </div>

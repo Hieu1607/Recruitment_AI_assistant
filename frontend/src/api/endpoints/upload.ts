@@ -34,6 +34,13 @@ export const uploadApi = {
     return data;
   },
 
+  async getFile(resumeId: string): Promise<Blob> {
+    const { data } = await client.get<Blob>(`/upload/${resumeId}/file`, {
+      responseType: "blob",
+    });
+    return data;
+  },
+
   /**
    * Update a resume document (filename or status).
    * PATCH /upload/{resume_id}

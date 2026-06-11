@@ -12,10 +12,15 @@ export { queryClient } from "./queryClient";
 // Import endpoint modules
 import { authApi } from "./endpoints/auth";
 import { chatApi } from "./endpoints/chat";
+import { interviewInvitationsApi } from "./endpoints/interviewInvitations";
+import { interviewPublicApi } from "./endpoints/interviewPublic";
 import { interviewQuestionsApi } from "./endpoints/interviewQuestions";
+import { interviewReportsApi } from "./endpoints/interviewReports";
+import { interviewTemplatesApi } from "./endpoints/interviewTemplates";
 import { jobsApi } from "./endpoints/jobs";
 import { jobDescriptionsApi } from "./endpoints/jobDescriptions";
 import { outreachApi } from "./endpoints/outreach";
+import { publicJobsApi } from "./endpoints/publicJobs";
 import { scoringApi } from "./endpoints/scoring";
 import { shortlistApi } from "./endpoints/shortlist";
 import { uploadApi } from "./endpoints/upload";
@@ -32,6 +37,7 @@ import { uploadApi } from "./endpoints/upload";
 export const api = {
   auth: authApi,
   jobs: jobsApi,
+  publicJobs: publicJobsApi,
   upload: uploadApi,
   candidates: {
     getById: (profileId: string) => uploadApi.getProfileById(profileId),
@@ -42,4 +48,8 @@ export const api = {
   shortlist: shortlistApi,
   outreach: outreachApi,
   interviewQuestions: interviewQuestionsApi,
+  interviewTemplates: interviewTemplatesApi,
+  interviewInvitations: interviewInvitationsApi,
+  interviewPublic: interviewPublicApi,
+  interviewReports: interviewReportsApi,
 };

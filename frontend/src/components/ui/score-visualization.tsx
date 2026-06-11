@@ -32,10 +32,84 @@ const DEFAULT_SEGMENT_COLORS = [
   "#5A4A2A",
 ];
 
+const RADAR_LABEL_MIN_GUTTER = 72;
+
 function getScoreColor(score: number): string {
   if (score >= 80) return "var(--success)";
   if (score >= 60) return "var(--warning)";
   return "var(--danger)";
+}
+
+function wrapRadarLabel(label: string, maxCharsPerLine: number): string[] {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (candidate.length <= maxCharsPerLine) {
+      currentLine = candidate;
+      continue;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    currentLine = word;
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+function createRadarAxisTick(size: number) {
+  const labelGutter = Math.max(RADAR_LABEL_MIN_GUTTER, Math.round(size * 0.2));
+  const maxCharsPerLine = Math.max(16, Math.round(labelGutter / 6.8));
+  const horizontalOffset = Math.max(8, Math.round(size * 0.02));
+  const lineHeight = 13;
+
+  return function RadarAxisTick(props: {
+    x?: number | string;
+    y?: number | string;
+    textAnchor?: "inherit" | "start" | "middle" | "end";
+    payload?: { value?: string };
+  }) {
+    const { x = 0, y = 0, textAnchor = "middle", payload } = props;
+    const fullLabel = String(payload?.value ?? "").trim();
+    const lines = wrapRadarLabel(fullLabel, maxCharsPerLine);
+    const textOffset = textAnchor === "start" ? horizontalOffset : textAnchor === "end" ? -horizontalOffset : 0;
+    const firstLineDy = -((lines.length - 1) * lineHeight) / 2;
+
+    return (
+      <g transform={`translate(${Number(x)},${Number(y)})`}>
+        <text
+          x={textOffset}
+          y={0}
+          textAnchor={textAnchor}
+          fontSize={11}
+          fontFamily="var(--font-sans)"
+          fill="var(--fg-muted)"
+        >
+          <title>{fullLabel}</title>
+          {lines.map((line, index) => (
+            <tspan
+              key={`${line}-${index}`}
+              x={textOffset}
+              dy={index === 0 ? firstLineDy : lineHeight}
+            >
+              {line}
+            </tspan>
+          ))}
+        </text>
+      </g>
+    );
+  };
 }
 
 /* ── Mini Bar ─────────────────────────────────────────────────── */
@@ -165,14 +239,29 @@ export interface ScoreRadarProps {
 }
 
 export function ScoreRadar({ data, size = 400, className }: ScoreRadarProps) {
+  const tick = createRadarAxisTick(size);
+  const labelGutter = Math.max(RADAR_LABEL_MIN_GUTTER, Math.round(size * 0.2));
+  const outerRadius = Math.max(72, Math.round(size * 0.22));
+
   return (
-    <div className={cn("w-full", className)} style={{ maxWidth: size }}>
+    <div className={cn("mx-auto w-full", className)} style={{ maxWidth: size }}>
       <ResponsiveContainer width="100%" height={size}>
-        <RadarChart data={data} margin={{ top: 16, right: 24, bottom: 16, left: 24 }}>
+        <RadarChart
+          data={data}
+          cx="50%"
+          cy="50%"
+          margin={{
+            top: labelGutter,
+            right: labelGutter,
+            bottom: labelGutter,
+            left: labelGutter,
+          }}
+          outerRadius={outerRadius}
+        >
           <PolarGrid stroke="var(--hairline)" />
           <PolarAngleAxis
             dataKey="subject"
-            tick={{ fontSize: 11, fontFamily: "var(--font-sans)", fill: "var(--fg-muted)" }}
+            tick={tick}
           />
           <Radar
             name="Score"

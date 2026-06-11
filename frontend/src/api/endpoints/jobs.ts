@@ -1,9 +1,15 @@
 import { client } from "../client";
 import type {
+  CandidateProfileResponse,
   ChatResponse,
+  ChatSessionListResponse,
+  ChatSessionResponse,
+  ChatTurnResponse,
   JobDescriptionResponse,
+  JobApplicationLinkResponse,
   JobListResponse,
   JobResponse,
+  JobSetupStatusResponse,
   ResumeBatchParseResponse,
   ResumeListResponse,
   ResumeResponse,
@@ -16,7 +22,12 @@ export const jobsApi = {
     return data;
   },
 
-  async create(body: { title: string; status?: string }): Promise<JobResponse> {
+  async create(body: {
+    title: string;
+    status?: string;
+    candidate_message?: string | null;
+    public_apply_enabled?: boolean;
+  }): Promise<JobResponse> {
     const { data } = await client.post<JobResponse>("/jobs/", body);
     return data;
   },
@@ -26,9 +37,30 @@ export const jobsApi = {
     return data;
   },
 
-  async update(jobId: string, body: { title?: string; status?: string }): Promise<JobResponse> {
+  async update(jobId: string, body: {
+    title?: string;
+    status?: string;
+    candidate_message?: string | null;
+    public_apply_enabled?: boolean;
+  }): Promise<JobResponse> {
     const { data } = await client.patch<JobResponse>(`/jobs/${jobId}`, body);
     return data;
+  },
+
+  async remove(jobId: string): Promise<{ deleted: boolean; job_id: string }> {
+    const { data } = await client.delete<{ deleted: boolean; job_id: string }>(`/jobs/${jobId}`);
+    return data;
+  },
+
+  applicationLink: {
+    async get(jobId: string): Promise<JobApplicationLinkResponse> {
+      const { data } = await client.get<JobApplicationLinkResponse>(`/jobs/${jobId}/application-link`);
+      return data;
+    },
+    async rotate(jobId: string): Promise<JobApplicationLinkResponse> {
+      const { data } = await client.post<JobApplicationLinkResponse>(`/jobs/${jobId}/application-link/rotate`);
+      return data;
+    },
   },
 
   jobDescription: {
@@ -38,14 +70,14 @@ export const jobsApi = {
     },
     async upsert(
       jobId: string,
-      body: { title?: string; jd_text: string; is_active?: boolean },
+      body: { title?: string; jd_text: string; hidden_text?: string; is_active?: boolean },
     ): Promise<JobDescriptionResponse> {
       const { data } = await client.post<JobDescriptionResponse>(`/jobs/${jobId}/job-description`, body);
       return data;
     },
     async patch(
       jobId: string,
-      body: { title?: string; jd_text?: string; is_active?: boolean },
+      body: { title?: string; jd_text?: string; hidden_text?: string; is_active?: boolean },
     ): Promise<JobDescriptionResponse> {
       const { data } = await client.patch<JobDescriptionResponse>(`/jobs/${jobId}/job-description`, body);
       return data;
@@ -80,8 +112,8 @@ export const jobsApi = {
     },
   },
 
-  async listCandidates(jobId: string): Promise<{ items: any[]; total: number }> {
-    const { data } = await client.get<{ items: any[]; total: number }>(`/jobs/${jobId}/candidates`);
+  async listCandidates(jobId: string): Promise<{ items: CandidateProfileResponse[]; total: number }> {
+    const { data } = await client.get<{ items: CandidateProfileResponse[]; total: number }>(`/jobs/${jobId}/candidates`);
     return data;
   },
 
@@ -96,6 +128,42 @@ export const jobsApi = {
   chat: {
     async send(jobId: string, body: { message: string; session_id?: string; candidate_limit?: number }): Promise<ChatResponse> {
       const { data } = await client.post<ChatResponse>(`/jobs/${jobId}/chat`, body);
+      return data;
+    },
+
+    sessions: {
+      async list(jobId: string, params?: { limit?: number; offset?: number }): Promise<ChatSessionListResponse> {
+        const { data } = await client.get<ChatSessionListResponse>(`/jobs/${jobId}/chat/sessions`, { params });
+        return data;
+      },
+      async create(jobId: string, body?: { session_title?: string | null }): Promise<ChatSessionResponse> {
+        const { data } = await client.post<ChatSessionResponse>(`/jobs/${jobId}/chat/sessions`, body ?? {});
+        return data;
+      },
+      async get(jobId: string, sessionId: string): Promise<ChatSessionResponse> {
+        const { data } = await client.get<ChatSessionResponse>(`/jobs/${jobId}/chat/sessions/${sessionId}`);
+        return data;
+      },
+      async update(jobId: string, sessionId: string, body: { session_title?: string | null }): Promise<ChatSessionResponse> {
+        const { data } = await client.patch<ChatSessionResponse>(`/jobs/${jobId}/chat/sessions/${sessionId}`, body);
+        return data;
+      },
+      async remove(jobId: string, sessionId: string): Promise<void> {
+        await client.delete(`/jobs/${jobId}/chat/sessions/${sessionId}`);
+      },
+    },
+
+    turns: {
+      async list(jobId: string, sessionId: string, params?: { limit?: number; offset?: number }): Promise<ChatTurnResponse[]> {
+        const { data } = await client.get<ChatTurnResponse[]>(`/jobs/${jobId}/chat/sessions/${sessionId}/turns`, { params });
+        return data;
+      },
+    },
+  },
+
+  setupStatus: {
+    async get(jobId: string): Promise<JobSetupStatusResponse> {
+      const { data } = await client.get<JobSetupStatusResponse>(`/jobs/${jobId}/setup-status`);
       return data;
     },
   },

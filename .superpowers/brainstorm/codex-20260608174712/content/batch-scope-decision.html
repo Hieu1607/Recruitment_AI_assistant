@@ -1,0 +1,62 @@
+<h2>Pham vi MVP cho batch action tu Shortlist</h2>
+<p class="subtitle">Huong B da duoc chon. Buoc tiep theo la chot batch action dau tien nen lam sau khi recruiter tick nhieu ung vien.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Shortlist Collection - proposed MVP</div>
+  <div class="mockup-body">
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border:1px solid #ddd; border-radius:8px; margin-bottom:12px">
+      <div>
+        <strong>Frontend Engineer Shortlist</strong><br>
+        <span style="color:#777">12 candidates • 5 selected • Active job context</span>
+      </div>
+      <div style="display:flex; gap:8px">
+        <button class="mock-button">Create outreach drafts</button>
+        <button class="mock-button">Send interview invites</button>
+      </div>
+    </div>
+    <div style="display:grid; gap:8px">
+      <div style="display:grid; grid-template-columns:32px 1fr 130px 140px; gap:10px; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+        <input type="checkbox" checked>
+        <div><strong>Nguyen Van A</strong><br><span style="color:#777">nguyen@example.com</span></div>
+        <span>Outreach: draft</span>
+        <span>Interview: not invited</span>
+      </div>
+      <div style="display:grid; grid-template-columns:32px 1fr 130px 140px; gap:10px; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+        <input type="checkbox" checked>
+        <div><strong>Tran Thi B</strong><br><span style="color:#777">tran@example.com</span></div>
+        <span>Outreach: sent</span>
+        <span>Interview: invited</span>
+      </div>
+      <div style="display:grid; grid-template-columns:32px 1fr 130px 140px; gap:10px; align-items:center; padding:10px; border:1px solid #ddd; border-radius:8px">
+        <input type="checkbox">
+        <div><strong>Le Van C</strong><br><span style="color:#777">missing email</span></div>
+        <span>Outreach: blocked</span>
+        <span>Interview: not invited</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="outreach-first" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Outreach first</h3>
+      <p>Tao draft email hang loat, cho recruiter review, roi moi send. Day la buoc it rui ro nhat vi khong gui ngay.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="interview-first" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Interview invites first</h3>
+      <p>Phu hop neu san pham da xem voice interview la buoc screening chinh sau shortlist.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="both" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content">
+      <h3>Both, but staged</h3>
+      <p>Shortlist co 2 CTA: tao outreach drafts va gui interview invites. Backend them summary status de UI tranh gui trung.</p>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,45 @@
+<h2>3 cach trien khai "Both, staged"</h2>
+<p class="subtitle">Ca outreach va interview deu co trong shortlist, nhung muc do backend/state khac nhau. Chon cach phu hop voi toc do va do ben san pham.</p>
+
+<div class="options">
+  <div class="option" data-choice="url-state" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>URL handoff + existing endpoints</h3>
+      <p>Shortlist them checkbox va 2 CTA. Outreach/Interview nhan query params candidate ids, collection id. It backend nhat, nhanh nhat.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Nhanh lam</li><li>Tan dung endpoint hien co</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Kho batch status tot</li><li>De gui trung neu nhieu nguoi thao tac</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="summary-endpoints" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Shortlist action summary endpoints</h3>
+      <p>Them backend endpoint tra ve candidate snapshot + outreach latest status + interview latest status. Batch action tao drafts/invitations co preview va ket qua tung ung vien.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>UX ro rang</li><li>Tranh duplicate</li><li>Hop kien truc hien co</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Can them API va tests</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="pipeline-model" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Dedicated pipeline stage model</h3>
+      <p>Them bang candidate pipeline/stage history: shortlisted, outreach drafted, outreach sent, interview invited, completed. Manh nhat cho analytics.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Ben cho dai han</li><li>Analytics tot</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Scope lon</li><li>De cham MVP</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Khuyen nghi</h3>
+  <p>Chon B: them summary endpoint va batch endpoints nho. Day la diem can bang tot nhat giua toc do MVP va workflow thuc te: recruiter thay ai da co draft, ai da duoc moi interview, ai bi block vi thieu email/template/Gmail.</p>
+</div>

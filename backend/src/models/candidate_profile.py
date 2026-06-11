@@ -3,19 +3,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, Enum as SqlEnum, ForeignKey, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base
-from src.models.enums import ProfileStatus
+from src.models.enums import GraduationStatus, ProfileStatus
 
 
 _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
 
 if TYPE_CHECKING:
+    from src.models.interview_invitation import InterviewInvitation
     from src.models.job_matching import InterviewQuestionSet, MatchResult
     from src.models.outreach import OutreachMessage
     from src.models.query_shortlist import ShortlistItem
@@ -34,14 +35,21 @@ class CandidateProfile(Base):
     )
 
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    submitted_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    submitted_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     location_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
     contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
     current_job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    educated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     ever_studied_abroad: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    graduation_status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default=GraduationStatus.UNKNOWN.value,
+        server_default=GraduationStatus.UNKNOWN.value,
+    )
     major: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cpa: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
@@ -57,6 +65,10 @@ class CandidateProfile(Base):
     certifications_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     references_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structured_profile: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
 
     profile_status: Mapped[ProfileStatus] = mapped_column(
         SqlEnum(ProfileStatus, name="profile_status_enum", values_callable=_ENUM_VALUES),
@@ -75,5 +87,9 @@ class CandidateProfile(Base):
     resume_document: Mapped["ResumeDocument"] = relationship(back_populates="candidate_profile")
     match_results: Mapped[list["MatchResult"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
     outreach_messages: Mapped[list["OutreachMessage"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
+    interview_invitations: Mapped[list["InterviewInvitation"]] = relationship(
+        back_populates="candidate_profile",
+        cascade="all, delete-orphan",
+    )
     interview_question_sets: Mapped[list["InterviewQuestionSet"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")
     shortlist_items: Mapped[list["ShortlistItem"]] = relationship(back_populates="candidate_profile", cascade="all, delete-orphan")

@@ -1,6 +1,9 @@
 """
-upload_jobdescriptions.py
-REST endpoints for JobDescription CRUD.
+Deprecated compatibility endpoints for top-level JobDescription CRUD.
+
+Primary UI flows should use the job-scoped endpoints under
+/api/v1/jobs/{job_id}/job-description so the selected job remains the
+single source of truth in the product experience.
 """
 from __future__ import annotations
 
@@ -33,11 +36,13 @@ router = APIRouter()
 class JobDescriptionCreateRequest(BaseModel):
     title: Optional[str] = Field(None, max_length=255, description="Optional job title")
     jd_text: str = Field("", description="Full job description text")
+    hidden_text: str = Field("", description="Recruiter-only hidden scoring criteria")
 
 
 class JobDescriptionUpdateRequest(BaseModel):
     title: Optional[str] = Field(None, max_length=255, description="New title (omit to leave unchanged)")
     jd_text: Optional[str] = Field(None, min_length=1, description="Updated JD text (omit to leave unchanged)")
+    hidden_text: Optional[str] = Field(None, description="Updated recruiter-only hidden scoring criteria")
     is_active: Optional[bool] = Field(None, description="Set active/inactive status (omit to leave unchanged)")
 
 
@@ -45,6 +50,7 @@ class JobDescriptionResponse(BaseModel):
     id: str
     title: Optional[str]
     jd_text: str
+    hidden_text: str
     created_by_user_id: str
     created_at: str
     is_active: bool
@@ -85,6 +91,7 @@ def create_jd(
             db=db,
             job_id=first_job.id,
             jd_text=body.jd_text,
+            hidden_text=body.hidden_text,
             created_by_user_id=current_user.id,
             title=body.title,
         )
@@ -170,6 +177,7 @@ def update_jd(
             jd_id=jd_id,
             title=body.title,
             jd_text=body.jd_text,
+            hidden_text=body.hidden_text,
             is_active=body.is_active,
         )
     except ValueError as exc:

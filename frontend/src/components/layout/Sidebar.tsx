@@ -1,11 +1,9 @@
-import { api } from "@/api";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "react-router";
 import {
   LayoutDashboard,
+  BriefcaseBusiness,
   Users,
-  FileText,
   BarChart3,
   MessageSquare,
   ListChecks,
@@ -13,22 +11,23 @@ import {
   Mic2,
   Settings,
   HelpCircle,
-  FileUp
+  FileUp,
+  PanelLeftClose,
 } from "lucide-react";
 import { routes } from "@/routes";
-import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { UploadModal } from "@/components/candidates/UploadModal";
+import { Tooltip } from "@/components/ui/tooltip";
 
 const NAV_ITEMS = [
   { to: routes.dashboard, label: "Dashboard", icon: LayoutDashboard },
+  { to: routes.jobs, label: "Jobs", icon: BriefcaseBusiness },
   { to: routes.candidates, label: "Candidates", icon: Users },
-  { to: routes.jobDescriptions, label: "Job Descriptions", icon: FileText },
   { to: routes.scoring, label: "Scoring", icon: BarChart3 },
   { to: routes.chat, label: "AI Chat", icon: MessageSquare },
   { to: routes.shortlists, label: "Shortlists", icon: ListChecks },
   { to: routes.outreach, label: "Outreach", icon: Mail },
-  { to: routes.interviewQuestions, label: "Interview Prep", icon: Mic2 }
+  { to: routes.interviews, label: "Interviews", icon: Mic2 }
 ] as const;
 
 const SECONDARY_ITEMS = [
@@ -36,28 +35,37 @@ const SECONDARY_ITEMS = [
   { to: "#support", label: "Support", icon: HelpCircle }
 ] as const;
 
-export function Sidebar() {
+export function Sidebar({ onCollapse }: { onCollapse?: () => void }) {
   const [uploadOpen, setUploadOpen] = useState(false);
-  const selectedJobId = useAuthStore((s) => s.selectedJobId);
-  const { data: jobsData } = useQuery({
-    queryKey: ["jobs"],
-    queryFn: () => api.jobs.list(),
-    staleTime: 60_000,
-  });
-  const activeJob = (jobsData?.items ?? []).find((job) => job.id === selectedJobId);
   return (
     <aside
-      className="hairline-r flex flex-col bg-bg-sidebar"
-      style={{ width: "var(--sidebar-width)" }}
+      className="hairline-r flex h-full w-full flex-col bg-bg-sidebar"
     >
       {/* Brand */}
-      <div className="px-6 pt-6 pb-4">
-        <p className="font-display text-xl font-medium leading-none text-fg">RecruitAI</p>
-        <p className="font-mono text-[10px] text-fg-subtle uppercase tracking-widest mt-1">
+      <div className="px-5 pt-5 pb-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="font-display text-[1.35rem] font-medium leading-none text-fg">
+            RecruitAI
+          </p>
+          {onCollapse && (
+            <Tooltip content="Collapse navigation" side="right">
+              <button
+                type="button"
+                onClick={onCollapse}
+                aria-label="Collapse navigation sidebar"
+                className={cn(
+                  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)]",
+                  "border border-[color:var(--hairline)] bg-bg-elevated text-fg-muted shadow-[var(--shadow-sm)]",
+                  "transition-colors hover:border-[color:var(--hairline-strong)] hover:text-fg"
+                )}
+              >
+                <PanelLeftClose size={15} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+        <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-fg-subtle whitespace-nowrap">
           Editorial Intelligence
-        </p>
-        <p className="mt-3 text-xs font-sans text-fg-muted truncate">
-          {activeJob ? `Job: ${activeJob.title}` : "No job selected"}
         </p>
       </div>
 

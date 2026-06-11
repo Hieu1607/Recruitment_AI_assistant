@@ -1,5 +1,7 @@
 import json
+import logging
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -11,43 +13,407 @@ import requests
 from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.models.candidate_profile import CandidateProfile
-from src.models.enums import ProfileStatus, UploadStatus
+from src.models.enums import GraduationStatus, ProfileStatus, UploadStatus
 from src.models.resume_document import ExtractionTrace, ResumeDocument
 from src.prompts.build_prompts import build_prompts
+from src.services.ai_agent.langgraph_trace import format_exception_payload
 from src.services.llm_service import LLMProvider
+from src.services.object_storage import get_object_storage, parse_storage_uri
+from src.services.resume_parse_trace import get_resume_parse_trace_logger
+
+_HF_OCR_MAX_ATTEMPTS = 3
+_HF_OCR_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+_VISION_FALLBACK_MAX_PAGES = 3
+_RESUME_PARSE_MAX_TOKENS = 4096
+_STRUCTURED_SECTION_TEXT_FIELDS = {
+    "experience": "experience",
+    "education": "education",
+    "projects": "projects",
+    "skills": "skills",
+    "languages": "languages",
+    "achievements": "achievements",
+    "publications": "publications",
+    "certifications": "certifications",
+    "references": "references",
+    "other": "other",
+}
+logger = logging.getLogger(__name__)
+_RESUME_JSON_RETRY_SUFFIX = (
+    "\n\nIMPORTANT: Return one valid JSON object only. "
+    "Do not include markdown fences, commentary, or trailing commas."
+)
+
+_GRADUATION_STATUS_VALUES = {
+    GraduationStatus.UNKNOWN.value,
+    GraduationStatus.STUDYING.value,
+    GraduationStatus.FINAL_YEAR.value,
+    GraduationStatus.GRADUATED.value,
+}
+
+_MISSING_TEXT_PLACEHOLDERS = {
+    "-",
+    "--",
+    "n/a",
+    "na",
+    "none",
+    "null",
+    "not applicable",
+}
 
 
-def extract_text_from_pdf(filepath: str) -> str:
+def _is_missing_text_placeholder(value: str) -> bool:
+    normalized = value.strip().lower()
+    normalized = normalized.replace(".", "").replace(" ", "")
+    return normalized in _MISSING_TEXT_PLACEHOLDERS or normalized == "notapplicable"
+
+
+def _normalize_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    normalized = value.strip()
+    if normalized and _is_missing_text_placeholder(normalized):
+        return None
+    return normalized or None
+
+
+def _normalize_search_text(value: Any) -> str:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return ""
+    text = normalized.lower().replace("đ", "d")
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _infer_graduation_status_from_text(*values: Any) -> Optional[str]:
+    text = "\n".join(part for part in (_normalize_search_text(value) for value in values) if part)
+    if not text:
+        return None
+
+    final_year_markers = (
+        "final-year",
+        "final year",
+        "last-year student",
+        "sinh vien nam cuoi",
+        "hoc nam cuoi",
+        "nam cuoi",
+        "expected graduation",
+        "expected to graduate",
+        "du kien tot nghiep",
+        "sap tot nghiep",
+    )
+    if any(marker in text for marker in final_year_markers):
+        return GraduationStatus.FINAL_YEAR.value
+
+    studying_markers = (
+        "currently studying",
+        "still studying",
+        "undergraduate student",
+        "master student",
+        "phd student",
+        "chua tot nghiep",
+        "chua ra truong",
+        "dang hoc",
+        "dang hoc tai",
+        "dang la sinh vien",
+        "sinh vien",
+        "student at",
+    )
+    if any(marker in text for marker in studying_markers):
+        return GraduationStatus.STUDYING.value
+
+    graduated_markers = (
+        "graduated",
+        "bachelor of",
+        "master of",
+        "doctor of philosophy",
+        "phd",
+        "degree awarded",
+        "cử nhân",
+        "thạc sĩ",
+        "tiến sĩ",
+        "đã tốt nghiệp",
+        "tot nghiep",
+    )
+    if any(marker in text for marker in graduated_markers):
+        return GraduationStatus.GRADUATED.value
+
+    return None
+
+
+def _normalize_graduation_status(value: Any, parsed: Optional[Dict[str, Any]] = None) -> str:
+    normalized = _normalize_search_text(value).replace("-", "_").replace(" ", "_")
+    alias_map = {
+        "graduated": GraduationStatus.GRADUATED.value,
+        "graduate": GraduationStatus.GRADUATED.value,
+        "final_year": GraduationStatus.FINAL_YEAR.value,
+        "finalyear": GraduationStatus.FINAL_YEAR.value,
+        "studying": GraduationStatus.STUDYING.value,
+        "in_progress": GraduationStatus.STUDYING.value,
+        "current_student": GraduationStatus.STUDYING.value,
+        "unknown": GraduationStatus.UNKNOWN.value,
+    }
+    if normalized in alias_map:
+        return alias_map[normalized]
+
+    if isinstance(value, bool):
+        return GraduationStatus.GRADUATED.value if value else GraduationStatus.UNKNOWN.value
+
+    parsed = parsed or {}
+    inferred = _infer_graduation_status_from_text(
+        parsed.get("graduation_status"),
+        parsed.get("education"),
+        parsed.get("summary"),
+        parsed.get("current_job_title"),
+    )
+    if inferred:
+        return inferred
+
+    legacy_educated = parsed.get("educated")
+    if isinstance(legacy_educated, bool):
+        return GraduationStatus.GRADUATED.value if legacy_educated else GraduationStatus.UNKNOWN.value
+
+    return GraduationStatus.UNKNOWN.value
+
+
+def _resume_llm_provider() -> LLMProvider:
+    return LLMProvider(
+        model_name=settings.RESUME_PARSE_MODEL_NAME,
+        max_tokens=max(settings.LLM_MAX_TOKENS, settings.RESUME_PARSE_MAX_TOKENS, _RESUME_PARSE_MAX_TOKENS),
+    )
+
+
+def _normalize_string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    items: List[str] = []
+    for item in value:
+        normalized = _normalize_text(item)
+        if normalized:
+            items.append(normalized)
+    return items
+
+
+def _normalize_structured_link(value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(value, str):
+        normalized_url = _normalize_text(value)
+        if normalized_url:
+            return {"url": normalized_url, "label": None}
+        return None
+    if not isinstance(value, dict):
+        return None
+    normalized_url = _normalize_text(value.get("url"))
+    if not normalized_url:
+        return None
+    return {
+        "url": normalized_url,
+        "label": _normalize_text(value.get("label")),
+    }
+
+
+def _normalize_structured_links(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    links: List[Dict[str, Any]] = []
+    for item in value:
+        normalized = _normalize_structured_link(item)
+        if normalized is not None:
+            links.append(normalized)
+    return links
+
+
+def _normalize_structured_entry(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+
+    entry = {
+        "title": _normalize_text(value.get("title")),
+        "subtitle": _normalize_text(value.get("subtitle")),
+        "role": _normalize_text(value.get("role")),
+        "location": _normalize_text(value.get("location")),
+        "dateRange": _normalize_text(value.get("dateRange")),
+        "description": _normalize_text(value.get("description")),
+        "bullets": _normalize_string_list(value.get("bullets")),
+        "links": _normalize_structured_links(value.get("links")),
+        "metadata": _normalize_string_list(value.get("metadata")),
+    }
+
+    if any(
+        [
+            entry["title"],
+            entry["subtitle"],
+            entry["role"],
+            entry["location"],
+            entry["dateRange"],
+            entry["description"],
+            entry["bullets"],
+            entry["links"],
+            entry["metadata"],
+        ]
+    ):
+        return entry
+    return None
+
+
+def _normalize_structured_section(
+    value: Any,
+    *,
+    fallback_text: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    raw_text = _normalize_text(fallback_text)
+
+    if isinstance(value, dict):
+        if isinstance(value.get("entries"), list):
+            for item in value.get("entries", []):
+                normalized_item = _normalize_structured_entry(item)
+                if normalized_item is not None:
+                    entries.append(normalized_item)
+        raw_text = _normalize_text(value.get("rawText")) or raw_text
+
+    if not entries and raw_text is None:
+        return None
+
+    return {
+        "entries": entries,
+        "rawText": raw_text,
+    }
+
+
+def _normalize_structured_summary(
+    value: Any,
+    *,
+    fallback_text: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    text = _normalize_text(fallback_text)
+    links: List[Dict[str, Any]] = []
+
+    if isinstance(value, dict):
+        text = _normalize_text(value.get("text")) or text
+        links = _normalize_structured_links(value.get("links"))
+
+    if text is None and not links:
+        return None
+
+    return {
+        "text": text,
+        "links": links,
+    }
+
+
+def _normalize_structured_profile(
+    value: Any,
+    parsed: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    payload = value if isinstance(value, dict) else {}
+    structured: Dict[str, Any] = {}
+
+    summary = _normalize_structured_summary(
+        payload.get("summary"),
+        fallback_text=_normalize_text(parsed.get("summary")),
+    )
+    if summary is not None:
+        structured["summary"] = summary
+
+    for section_name, parsed_key in _STRUCTURED_SECTION_TEXT_FIELDS.items():
+        section = _normalize_structured_section(
+            payload.get(section_name),
+            fallback_text=_normalize_text(parsed.get(parsed_key)),
+        )
+        if section is not None:
+            structured[section_name] = section
+
+    return structured or None
+
+
+def extract_text_from_pdf(pdf_source: bytes | str) -> str:
     text = ""
+    source_name = pdf_source if isinstance(pdf_source, str) else "<in-memory-pdf>"
     try:
-        with fitz.open(filepath) as doc:
+        if isinstance(pdf_source, (bytes, bytearray)):
+            doc = fitz.open(stream=bytes(pdf_source), filetype="pdf")
+        else:
+            doc = fitz.open(pdf_source)
+        with doc:
             for page in doc:
                 text += page.get_text()
         return text
     except Exception as exc:
-        print(f"Error extracting text from {filepath}: {exc}")
+        print(f"Error extracting text from {source_name}: {exc}")
         return ""
 
 
-def extract_text_via_hf_ocr(filepath: str) -> str:
+def extract_text_via_hf_ocr(
+    pdf_source: bytes | str, filename: Optional[str] = None
+) -> str:
     """Fallback for image-based PDFs: submit to HF Tesseract OCR space and return text."""
     base_url = settings.HF_OCR_BASE_URL.rstrip("/")
-    with open(filepath, "rb") as f:
-        resp = requests.post(
+    if isinstance(pdf_source, (bytes, bytearray)):
+        upload_name = Path(filename or "resume.pdf").name
+        pdf_bytes = bytes(pdf_source)
+    else:
+        upload_name = Path(pdf_source).name
+        pdf_bytes = Path(pdf_source).read_bytes()
+
+    def _should_retry_http_error(exc: requests.HTTPError) -> bool:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        return status_code in _HF_OCR_RETRYABLE_STATUS_CODES
+
+    def _post_submit() -> requests.Response:
+        return requests.post(
             f"{base_url}/ocr/submit",
-            files={"file": (Path(filepath).name, f, "application/pdf")},
+            files={"file": (upload_name, pdf_bytes, "application/pdf")},
             timeout=60,
         )
-    resp.raise_for_status()
+
+    def _get_status(job_id: str) -> requests.Response:
+        return requests.get(f"{base_url}/ocr/status/{job_id}", timeout=10)
+
+    resp = None
+    last_error: Exception | None = None
+    for attempt in range(1, _HF_OCR_MAX_ATTEMPTS + 1):
+        try:
+            resp = _post_submit()
+            resp.raise_for_status()
+            last_error = None
+            break
+        except requests.HTTPError as exc:
+            last_error = exc
+            if attempt >= _HF_OCR_MAX_ATTEMPTS or not _should_retry_http_error(exc):
+                raise
+            time.sleep(attempt)
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= _HF_OCR_MAX_ATTEMPTS:
+                raise
+            time.sleep(attempt)
+
+    if resp is None:
+        raise RuntimeError(f"HF OCR submit failed without a response: {last_error}")
+
     job_id = resp.json()["job_id"]
 
     deadline = time.monotonic() + settings.HF_OCR_POLL_TIMEOUT
     while time.monotonic() < deadline:
-        status_resp = requests.get(f"{base_url}/ocr/status/{job_id}", timeout=10)
-        status_resp.raise_for_status()
+        try:
+            status_resp = _get_status(job_id)
+            status_resp.raise_for_status()
+        except requests.HTTPError as exc:
+            if not _should_retry_http_error(exc):
+                raise
+            time.sleep(settings.HF_OCR_POLL_INTERVAL)
+            continue
+        except requests.RequestException:
+            time.sleep(settings.HF_OCR_POLL_INTERVAL)
+            continue
         data = status_resp.json()
         if data["status"] == "done":
-            requests.delete(f"{base_url}/ocr/job/{job_id}", timeout=10)
+            try:
+                requests.delete(f"{base_url}/ocr/job/{job_id}", timeout=10)
+            except requests.RequestException:
+                pass
             return data.get("text") or ""
         if data["status"] == "error":
             raise RuntimeError(f"HF OCR job failed: {data.get('error')}")
@@ -56,6 +422,220 @@ def extract_text_via_hf_ocr(filepath: str) -> str:
     raise TimeoutError(
         f"HF OCR job {job_id} timed out after {settings.HF_OCR_POLL_TIMEOUT}s"
     )
+
+
+def _render_pdf_pages_as_images(
+    pdf_source: bytes | str, max_pages: int = _VISION_FALLBACK_MAX_PAGES
+) -> List[bytes]:
+    images: List[bytes] = []
+    if isinstance(pdf_source, (bytes, bytearray)):
+        doc = fitz.open(stream=bytes(pdf_source), filetype="pdf")
+    else:
+        doc = fitz.open(pdf_source)
+
+    with doc:
+        for page_index, page in enumerate(doc):
+            if page_index >= max_pages:
+                break
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+            images.append(pixmap.tobytes("jpeg"))
+
+    if not images:
+        raise ValueError("No PDF pages available for vision fallback")
+    return images
+
+
+def _log_resume_llm_attempt(
+    *,
+    trace_id: str,
+    attempt_number: int,
+    stage: str,
+    prompt: str,
+    response_text: str,
+    llm_response: Any,
+    parse_error: Exception | None = None,
+) -> None:
+    get_resume_parse_trace_logger().record_llm_attempt(
+        trace_id=trace_id,
+        payload={
+            "attempt_number": attempt_number,
+            "stage": stage,
+            "provider": getattr(llm_response, "provider", None),
+            "model": getattr(llm_response, "model", None),
+            "prompt": prompt,
+            "response_text": response_text,
+            "parse_error": (
+                format_exception_payload(parse_error) if parse_error is not None else None
+            ),
+        },
+    )
+
+
+def _generate_resume_json_with_retries(
+    *,
+    trace_id: str,
+    stage: str,
+    llm_provider: LLMProvider,
+    prompt: str,
+) -> tuple[Dict[str, Any], Any, int]:
+    prompts = [
+        prompt,
+        f"{prompt}{_RESUME_JSON_RETRY_SUFFIX}",
+        (
+            "Repair the following response into one valid JSON object only. "
+            "Do not add commentary or markdown.\n\n"
+            f"Original prompt:\n{prompt}\n\n"
+            "Broken response:\n"
+            "{broken_response}"
+        ),
+    ]
+    last_error: Exception | None = None
+    last_response_text = ""
+
+    for attempt_number, attempt_prompt in enumerate(prompts, start=1):
+        prompt_text = (
+            attempt_prompt.format(broken_response=last_response_text)
+            if "{broken_response}" in attempt_prompt
+            else attempt_prompt
+        )
+        llm_response = llm_provider.generate(prompt_text)
+        last_response_text = llm_response.text
+        try:
+            parsed = _extract_json_object(llm_response.text)
+        except Exception as exc:
+            last_error = exc
+            _log_resume_llm_attempt(
+                trace_id=trace_id,
+                attempt_number=attempt_number,
+                stage=stage,
+                prompt=prompt_text,
+                response_text=llm_response.text,
+                llm_response=llm_response,
+                parse_error=exc,
+            )
+            logger.warning(
+                "Resume parsing JSON parse failed on attempt %s using model %s: %s",
+                attempt_number,
+                getattr(llm_response, "model", "unknown"),
+                exc,
+            )
+            continue
+
+        _log_resume_llm_attempt(
+            trace_id=trace_id,
+            attempt_number=attempt_number,
+            stage=stage,
+            prompt=prompt_text,
+            response_text=llm_response.text,
+            llm_response=llm_response,
+        )
+        return parsed, llm_response, attempt_number
+
+    raise ValueError(f"resume parsing failed after retries: {last_error}") from last_error
+
+
+def _parse_resume_payload(
+    pdf_source: bytes | str,
+    display_name: str,
+    llm_provider: LLMProvider,
+    *,
+    trace_id: str,
+) -> tuple[Dict[str, Any], Any, str, int]:
+    trace_logger = get_resume_parse_trace_logger()
+    cv_text = extract_text_from_pdf(pdf_source)
+    trace_logger.record_event(
+        trace_id=trace_id,
+        event_type="embedded_text_extraction",
+        payload={
+            "file_name": display_name,
+            "text_length": len(cv_text),
+            "text": cv_text,
+        },
+    )
+    if cv_text.strip():
+        logger.info("Resume %s extracted via embedded PDF text", display_name)
+        prompt = build_prompts.build_cv_parsing_prompt(cv_text)
+        parsed, llm_response, attempt_count = _generate_resume_json_with_retries(
+            trace_id=trace_id,
+            stage="text",
+            llm_provider=llm_provider,
+            prompt=prompt,
+        )
+        return parsed, llm_response, "text", attempt_count
+
+    vision_error: Exception | None = None
+    try:
+        logger.info("Resume %s has no embedded text; trying vision fallback", display_name)
+        images = _render_pdf_pages_as_images(pdf_source)
+        trace_logger.record_event(
+            trace_id=trace_id,
+            event_type="vision_fallback_started",
+            payload={
+                "file_name": display_name,
+                "image_count": len(images),
+                "image_sizes": [len(image) for image in images],
+            },
+        )
+        vision_prompt = build_prompts.build_cv_vision_prompt()
+        llm_response = llm_provider.generate_with_images(vision_prompt, images)
+        try:
+            parsed = _extract_json_object(llm_response.text)
+        except Exception as exc:
+            _log_resume_llm_attempt(
+                trace_id=trace_id,
+                attempt_number=1,
+                stage="vision",
+                prompt=vision_prompt,
+                response_text=llm_response.text,
+                llm_response=llm_response,
+                parse_error=exc,
+            )
+            raise
+        _log_resume_llm_attempt(
+            trace_id=trace_id,
+            attempt_number=1,
+            stage="vision",
+            prompt=vision_prompt,
+            response_text=llm_response.text,
+            llm_response=llm_response,
+        )
+        return parsed, llm_response, "vision", 1
+    except Exception as exc:
+        vision_error = exc
+        trace_logger.record_event(
+            trace_id=trace_id,
+            event_type="vision_fallback_failed",
+            payload=format_exception_payload(exc),
+        )
+        logger.warning(
+            "Vision fallback failed for %s: %s. Falling back to OCR.",
+            display_name,
+            exc,
+        )
+
+    logger.info("Resume %s falling back to OCR extraction", display_name)
+    cv_text = extract_text_via_hf_ocr(pdf_source, display_name)
+    trace_logger.record_event(
+        trace_id=trace_id,
+        event_type="ocr_extraction",
+        payload={
+            "file_name": display_name,
+            "text_length": len(cv_text),
+            "text": cv_text,
+        },
+    )
+    if not cv_text.strip() and vision_error is not None:
+        raise RuntimeError(
+            f"Vision fallback failed ({vision_error}) and OCR returned empty text"
+        ) from vision_error
+    prompt = build_prompts.build_cv_parsing_prompt(cv_text)
+    parsed, llm_response, attempt_count = _generate_resume_json_with_retries(
+        trace_id=trace_id,
+        stage="ocr",
+        llm_provider=llm_provider,
+        prompt=prompt,
+    )
+    return parsed, llm_response, "ocr", attempt_count
 
 
 def _extract_json_object(raw_text: str) -> Dict[str, Any]:
@@ -105,65 +685,390 @@ def _normalize_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
-def _build_profile_from_parsed(
-    resume_document_id: uuid.UUID, parsed: Dict[str, Any]
+def _pick_candidate_name(parsed_name: Any, submitted_full_name: Optional[str]) -> str:
+    return (
+        _normalize_text(parsed_name)
+        or _normalize_text(submitted_full_name)
+        or "Unknown Candidate"
+    )
+
+
+def _pick_candidate_email(
+    parsed_email: Any, submitted_email: Optional[str]
+) -> Optional[str]:
+    return _normalize_text(parsed_email) or _normalize_text(submitted_email)
+
+
+def _display_name_from_storage_uri(storage_uri: str) -> str:
+    if storage_uri.startswith("s3://"):
+        _, object_key = parse_storage_uri(storage_uri)
+        return Path(object_key).name
+    return Path(storage_uri).name
+
+
+def _fallback_trace_payload(
+    parsed: Optional[Dict[str, Any]],
+    profile: CandidateProfile,
+) -> Dict[str, Any]:
+    parsed_name = _normalize_text(parsed.get("name")) if parsed else None
+    parsed_email = _normalize_text(parsed.get("email")) if parsed else None
+    return {
+        "candidateName": profile.full_name,
+        "candidateEmail": profile.email,
+        "parsedName": parsed_name,
+        "parsedEmail": parsed_email,
+        "submittedFullName": profile.submitted_full_name,
+        "submittedEmail": profile.submitted_email,
+        "usedSubmittedFullName": parsed_name is None
+        and profile.submitted_full_name is not None,
+        "usedSubmittedEmail": parsed_email is None
+        and profile.submitted_email is not None,
+    }
+
+
+def _build_failure_profile(
+    resume_document_id: uuid.UUID,
+    *,
+    submitted_full_name: Optional[str] = None,
+    submitted_email: Optional[str] = None,
 ) -> CandidateProfile:
-    full_name = parsed.get("name") or "Unknown Candidate"
+    return CandidateProfile(
+        resume_document_id=resume_document_id,
+        full_name=_pick_candidate_name(None, submitted_full_name),
+        submitted_full_name=_normalize_text(submitted_full_name),
+        email=_pick_candidate_email(None, submitted_email),
+        submitted_email=_normalize_text(submitted_email),
+        profile_status=ProfileStatus.DRAFT.value,
+    )
+
+
+def _build_profile_from_parsed(
+    resume_document_id: uuid.UUID,
+    parsed: Dict[str, Any],
+    *,
+    submitted_full_name: Optional[str] = None,
+    submitted_email: Optional[str] = None,
+) -> CandidateProfile:
+    normalized_submitted_full_name = _normalize_text(submitted_full_name)
+    normalized_submitted_email = _normalize_text(submitted_email)
+    structured_profile = _normalize_structured_profile(
+        parsed.get("structured_profile"),
+        parsed,
+    )
 
     return CandidateProfile(
         resume_document_id=resume_document_id,
-        full_name=str(full_name),
-        phone=parsed.get("phone"),
-        email=parsed.get("email"),
-        location_normalized=parsed.get("location"),
-        contact=parsed.get("contact"),
-        current_job_title=parsed.get("current_job_title"),
-        educated=_normalize_bool(parsed.get("educated")),
+        full_name=_pick_candidate_name(
+            parsed.get("name"), normalized_submitted_full_name
+        ),
+        submitted_full_name=normalized_submitted_full_name,
+        phone=_normalize_text(parsed.get("phone")),
+        email=_pick_candidate_email(parsed.get("email"), normalized_submitted_email),
+        submitted_email=normalized_submitted_email,
+        location_normalized=_normalize_text(parsed.get("location")),
+        contact=_normalize_text(parsed.get("contact")),
+        current_job_title=_normalize_text(parsed.get("current_job_title")),
         ever_studied_abroad=_normalize_bool(parsed.get("ever_studied_abroad")),
-        major=parsed.get("major"),
-        cpa=parsed.get("cpa"),
-        education_text=parsed.get("education"),
-        experience_text=parsed.get("experience"),
+        graduation_status=_normalize_graduation_status(parsed.get("graduation_status"), parsed),
+        major=_normalize_text(parsed.get("major")),
+        cpa=_normalize_text(parsed.get("cpa")),
+        education_text=_normalize_text(parsed.get("education")),
+        experience_text=_normalize_text(parsed.get("experience")),
         experience_years=_normalize_decimal(parsed.get("experience_years")),
-        skills_text=parsed.get("skills"),
-        languages_text=parsed.get("languages"),
-        projects_text=parsed.get("projects"),
-        summary_text=parsed.get("summary"),
-        achievements_text=parsed.get("achievements"),
-        publications_text=parsed.get("publications"),
-        certifications_text=parsed.get("certifications"),
-        references_text=parsed.get("references"),
-        other_text=parsed.get("other"),
+        skills_text=_normalize_text(parsed.get("skills")),
+        languages_text=_normalize_text(parsed.get("languages")),
+        projects_text=_normalize_text(parsed.get("projects")),
+        summary_text=_normalize_text(parsed.get("summary")),
+        achievements_text=_normalize_text(parsed.get("achievements")),
+        publications_text=_normalize_text(parsed.get("publications")),
+        certifications_text=_normalize_text(parsed.get("certifications")),
+        references_text=_normalize_text(parsed.get("references")),
+        other_text=_normalize_text(parsed.get("other")),
+        structured_profile=structured_profile,
         profile_status=ProfileStatus.REVIEWED.value,
     )
 
 
+def _latest_extraction_mode_from_traces(
+    traces: Sequence[ExtractionTrace],
+) -> Optional[str]:
+    for trace in reversed(list(traces)):
+        payload = trace.payload if isinstance(trace.payload, dict) else {}
+        mode = _normalize_text(payload.get("extractionMode")) if payload else None
+        if mode:
+            return mode
+    return None
+
+
+def _get_resume_extraction_mode(
+    db: Session,
+    resume_document_id: uuid.UUID,
+) -> Optional[str]:
+    traces = (
+        db.query(ExtractionTrace)
+        .filter(ExtractionTrace.resume_document_id == resume_document_id)
+        .order_by(ExtractionTrace.created_at.asc())
+        .all()
+    )
+    return _latest_extraction_mode_from_traces(traces)
+
+
+# ---------------------------------------------------------------------------
+# Async-friendly helpers (Celery path)
+# ---------------------------------------------------------------------------
+
+
+def create_resume_document(
+    *,
+    db: Session,
+    storage_uri: str,
+    original_file_name: str,
+    job_id: uuid.UUID,
+    uploaded_by_user_id: uuid.UUID,
+    retention_days: int = 365,
+) -> ResumeDocument:
+    """Create a ResumeDocument row with status=uploaded (no parsing)."""
+    resume = ResumeDocument(
+        original_file_name=original_file_name,
+        storage_uri=storage_uri,
+        upload_status=UploadStatus.UPLOADED.value,
+        job_id=job_id,
+        uploaded_by_user_id=uploaded_by_user_id,
+        retention_expires_at=datetime.now(timezone.utc)
+        + timedelta(days=retention_days),
+    )
+    db.add(resume)
+    db.commit()
+    db.refresh(resume)
+    return resume
+
+
+def process_single_resume(
+    resume_document_id: uuid.UUID,
+    *,
+    submitted_full_name: Optional[str] = None,
+    submitted_email: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run heavy parsing for one ResumeDocument **in its own DB session**.
+
+    Designed to be called from a Celery worker.  Transitions
+    ``upload_status`` through processing → processed / failed and
+    creates ``CandidateProfile`` + ``ExtractionTrace`` rows.
+    """
+    from src.models.session import SessionLocal
+
+    db: Session = SessionLocal()
+    try:
+        resume = db.get(ResumeDocument, resume_document_id)
+        if resume is None:
+            return {
+                "resume_document_id": str(resume_document_id),
+                "status": "failed",
+                "error": "ResumeDocument not found",
+            }
+
+        display_name = resume.original_file_name or "unknown.pdf"
+        storage_uri = resume.storage_uri
+
+        try:
+            resume.upload_status = UploadStatus.PROCESSING.value
+            db.add(
+                ExtractionTrace(
+                    resume_document_id=resume.id,
+                    stage="pipeline",
+                    status="processing",
+                    message="Started CV extraction and parsing",
+                )
+            )
+            db.commit()
+
+            object_storage = get_object_storage()
+            if storage_uri.startswith("s3://"):
+                pdf_source: bytes | str = object_storage.download_bytes(storage_uri)
+            else:
+                pdf_source = storage_uri
+
+            llm_provider = _resume_llm_provider()
+            trace_id = str(uuid.uuid4())
+            trace_logger = get_resume_parse_trace_logger()
+            trace_logger.start_trace(
+                trace_id=trace_id,
+                metadata={
+                    "resume_document_id": resume.id,
+                    "file_name": display_name,
+                    "storage_uri": storage_uri,
+                },
+                trace_input={
+                    "pdf_source_kind": (
+                        "bytes" if isinstance(pdf_source, (bytes, bytearray)) else "path"
+                    ),
+                    "llm_model_name": getattr(llm_provider, "model_name", None),
+                    "llm_provider": getattr(llm_provider, "provider", None),
+                },
+            )
+            parsed_payload, llm_response, extraction_mode, json_attempt_count = _parse_resume_payload(
+                pdf_source,
+                display_name,
+                llm_provider,
+                trace_id=trace_id,
+            )
+            trace_logger.update_metadata(
+                trace_id=trace_id,
+                metadata={"extraction_mode": extraction_mode},
+            )
+            trace_path = trace_logger.finalize_trace(
+                trace_id=trace_id,
+                status="success",
+                result={
+                    "llm": {
+                        "provider": llm_response.provider,
+                        "model": llm_response.model,
+                    },
+                    "extraction_mode": extraction_mode,
+                    "parsed_payload": parsed_payload,
+                },
+            )
+
+            profile = _build_profile_from_parsed(
+                resume.id,
+                parsed_payload,
+                submitted_full_name=submitted_full_name,
+                submitted_email=submitted_email,
+            )
+            resume.upload_status = UploadStatus.PROCESSED.value
+            resume.processed_at = datetime.now(timezone.utc)
+
+            db.add(profile)
+            db.add(
+                ExtractionTrace(
+                    resume_document_id=resume.id,
+                    stage="cv_parsing",
+                    status="success",
+                    message="CV parsed and profile created",
+                    payload={
+                        **_fallback_trace_payload(parsed_payload, profile),
+                        "extractionMode": extraction_mode,
+                        "llmProvider": llm_response.provider,
+                        "llmModel": llm_response.model,
+                        "jsonAttemptCount": json_attempt_count,
+                        "resumeParseTraceFile": str(trace_path),
+                    },
+                )
+            )
+            db.commit()
+            db.refresh(profile)
+
+            return {
+                "file_name": display_name,
+                "resume_document_id": str(resume.id),
+                "candidate_profile_id": str(profile.id),
+                "status": "processed",
+                "extraction_mode": extraction_mode,
+            }
+
+        except Exception as exc:
+            db.rollback()
+            resume_db = db.get(ResumeDocument, resume_document_id)
+            failure_profile_id = None
+            trace_path = None
+            trace_id = locals().get("trace_id")
+            if trace_id:
+                trace_path = get_resume_parse_trace_logger().finalize_trace(
+                    trace_id=trace_id,
+                    status="failed",
+                    error=exc,
+                )
+            if resume_db is not None:
+                resume_db.upload_status = UploadStatus.FAILED.value
+                minimal_profile = None
+                if submitted_full_name is not None or submitted_email is not None:
+                    minimal_profile = _build_failure_profile(
+                        resume_db.id,
+                        submitted_full_name=submitted_full_name,
+                        submitted_email=submitted_email,
+                    )
+                    db.add(minimal_profile)
+                db.add(
+                    ExtractionTrace(
+                        resume_document_id=resume_db.id,
+                        stage="cv_parsing",
+                        status="failed",
+                        message=str(exc),
+                        payload={
+                            **(
+                                _fallback_trace_payload(None, minimal_profile)
+                                if minimal_profile is not None
+                                else {
+                                    "submittedFullName": _normalize_text(
+                                        submitted_full_name
+                                    ),
+                                    "submittedEmail": _normalize_text(submitted_email),
+                                    "usedSubmittedFullName": False,
+                                    "usedSubmittedEmail": False,
+                                }
+                             ),
+                             "createdFallbackProfile": minimal_profile is not None,
+                             "resumeParseTraceFile": str(trace_path) if trace_path else None,
+                         },
+                     )
+                 )
+                db.commit()
+                if minimal_profile is not None:
+                    db.refresh(minimal_profile)
+                    failure_profile_id = str(minimal_profile.id)
+
+            return {
+                "file_name": display_name,
+                "resume_document_id": str(resume_document_id),
+                "candidate_profile_id": failure_profile_id,
+                "status": "failed",
+                "error": str(exc),
+            }
+    finally:
+        db.close()
+
+
 def parse_pdf_to_sections(
-    filepaths: Sequence[str],
+    storage_uris: Optional[Sequence[str]] = None,
+    *,
     db: Session,
     job_id: uuid.UUID,
     uploaded_by_user_id: Optional[uuid.UUID] = None,
     retention_days: int = 365,
     original_filenames: Optional[List[str]] = None,
+    submitted_full_names: Optional[List[str]] = None,
+    submitted_emails: Optional[List[str]] = None,
+    filepaths: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Extract CV text from PDFs, parse with LLM prompt, and persist results."""
-    if not filepaths:
+    source_locations = list(storage_uris or filepaths or [])
+    if not source_locations:
         return []
 
     actor_id = uploaded_by_user_id or uuid.UUID("00000000-0000-0000-0000-000000000000")
-    llm_provider = LLMProvider()
+    llm_provider = _resume_llm_provider()
+    object_storage = get_object_storage()
     results: List[Dict[str, Any]] = []
 
-    for idx, raw_path in enumerate(filepaths):
-        source_path = Path(raw_path)
+    for idx, storage_uri in enumerate(source_locations):
         display_name = (
             original_filenames[idx]
             if original_filenames and idx < len(original_filenames)
-            else source_path.name
+            else _display_name_from_storage_uri(storage_uri)
+        )
+        submitted_full_name = (
+            submitted_full_names[idx]
+            if submitted_full_names and idx < len(submitted_full_names)
+            else None
+        )
+        submitted_email = (
+            submitted_emails[idx]
+            if submitted_emails and idx < len(submitted_emails)
+            else None
         )
         resume = ResumeDocument(
             original_file_name=display_name,
-            storage_uri=str(source_path),
+            storage_uri=storage_uri,
             upload_status=UploadStatus.UPLOADED.value,
             job_id=job_id,
             uploaded_by_user_id=actor_id,
@@ -186,14 +1091,57 @@ def parse_pdf_to_sections(
             )
             db.commit()
 
-            cv_text = extract_text_from_pdf(str(source_path))
-            if not cv_text.strip():
-                cv_text = extract_text_via_hf_ocr(str(source_path))
-            prompt = build_prompts.build_cv_parsing_prompt(cv_text)
-            llm_response = llm_provider.generate(prompt)
-            parsed_payload = _extract_json_object(llm_response.text)
+            if storage_uri.startswith("s3://"):
+                pdf_source: bytes | str = object_storage.download_bytes(storage_uri)
+            else:
+                pdf_source = storage_uri
 
-            profile = _build_profile_from_parsed(resume.id, parsed_payload)
+            trace_id = str(uuid.uuid4())
+            trace_logger = get_resume_parse_trace_logger()
+            trace_logger.start_trace(
+                trace_id=trace_id,
+                metadata={
+                    "resume_document_id": resume.id,
+                    "file_name": display_name,
+                    "storage_uri": storage_uri,
+                },
+                trace_input={
+                    "pdf_source_kind": (
+                        "bytes" if isinstance(pdf_source, (bytes, bytearray)) else "path"
+                    ),
+                    "llm_model_name": getattr(llm_provider, "model_name", None),
+                    "llm_provider": getattr(llm_provider, "provider", None),
+                },
+            )
+            parsed_payload, llm_response, extraction_mode, json_attempt_count = _parse_resume_payload(
+                pdf_source,
+                display_name,
+                llm_provider,
+                trace_id=trace_id,
+            )
+            trace_logger.update_metadata(
+                trace_id=trace_id,
+                metadata={"extraction_mode": extraction_mode},
+            )
+            trace_path = trace_logger.finalize_trace(
+                trace_id=trace_id,
+                status="success",
+                result={
+                    "llm": {
+                        "provider": llm_response.provider,
+                        "model": llm_response.model,
+                    },
+                    "extraction_mode": extraction_mode,
+                    "parsed_payload": parsed_payload,
+                },
+            )
+
+            profile = _build_profile_from_parsed(
+                resume.id,
+                parsed_payload,
+                submitted_full_name=submitted_full_name,
+                submitted_email=submitted_email,
+            )
             resume.upload_status = UploadStatus.PROCESSED.value
             resume.processed_at = datetime.now(timezone.utc)
 
@@ -205,9 +1153,12 @@ def parse_pdf_to_sections(
                     status="success",
                     message="CV parsed and profile created",
                     payload={
-                        "candidateName": profile.full_name,
+                        **_fallback_trace_payload(parsed_payload, profile),
+                        "extractionMode": extraction_mode,
                         "llmProvider": llm_response.provider,
                         "llmModel": llm_response.model,
+                        "jsonAttemptCount": json_attempt_count,
+                        "resumeParseTraceFile": str(trace_path),
                     },
                 )
             )
@@ -220,28 +1171,65 @@ def parse_pdf_to_sections(
                     "resume_document_id": str(resume.id),
                     "candidate_profile_id": str(profile.id),
                     "status": "processed",
+                    "extraction_mode": extraction_mode,
                 }
             )
         except Exception as exc:
             db.rollback()
             resume_db = db.get(ResumeDocument, resume.id)
+            failure_profile_id = None
+            trace_path = None
+            trace_id = locals().get("trace_id")
+            if trace_id:
+                trace_path = get_resume_parse_trace_logger().finalize_trace(
+                    trace_id=trace_id,
+                    status="failed",
+                    error=exc,
+                )
             if resume_db is not None:
                 resume_db.upload_status = UploadStatus.FAILED.value
+                minimal_profile = None
+                if submitted_full_name is not None or submitted_email is not None:
+                    minimal_profile = _build_failure_profile(
+                        resume_db.id,
+                        submitted_full_name=submitted_full_name,
+                        submitted_email=submitted_email,
+                    )
+                    db.add(minimal_profile)
                 db.add(
                     ExtractionTrace(
                         resume_document_id=resume_db.id,
                         stage="cv_parsing",
                         status="failed",
                         message=str(exc),
-                    )
-                )
+                        payload={
+                            **(
+                                _fallback_trace_payload(None, minimal_profile)
+                                if minimal_profile is not None
+                                else {
+                                    "submittedFullName": _normalize_text(
+                                        submitted_full_name
+                                    ),
+                                    "submittedEmail": _normalize_text(submitted_email),
+                                    "usedSubmittedFullName": False,
+                                    "usedSubmittedEmail": False,
+                                }
+                             ),
+                             "createdFallbackProfile": minimal_profile is not None,
+                             "resumeParseTraceFile": str(trace_path) if trace_path else None,
+                         },
+                     )
+                 )
                 db.commit()
+                if minimal_profile is not None:
+                    db.refresh(minimal_profile)
+                    failure_profile_id = str(minimal_profile.id)
 
             results.append(
                 {
                     "file_name": display_name,
                     "resume_document_id": str(resume.id),
-                    "candidate_profile_id": None,
+                    "candidate_profile_id": failure_profile_id,
                     "status": "failed",
                     "error": str(exc),
                 }
@@ -260,7 +1248,11 @@ def batch_score_CVs():
 # ---------------------------------------------------------------------------
 
 
-def _resume_to_dict(resume: ResumeDocument) -> Dict[str, Any]:
+def _resume_to_dict(
+    resume: ResumeDocument,
+    *,
+    extraction_mode: Optional[str] = None,
+) -> Dict[str, Any]:
     return {
         "id": str(resume.id),
         "job_id": str(resume.job_id),
@@ -282,6 +1274,7 @@ def _resume_to_dict(resume: ResumeDocument) -> Dict[str, Any]:
             if resume.retention_expires_at
             else None
         ),
+        "extraction_mode": extraction_mode,
     }
 
 
@@ -297,7 +1290,10 @@ def get_resume(
         return None
     if job_id is not None and resume.job_id != job_id:
         return None
-    return _resume_to_dict(resume)
+    return _resume_to_dict(
+        resume,
+        extraction_mode=_get_resume_extraction_mode(db, resume.id),
+    )
 
 
 def list_resumes(
@@ -326,7 +1322,13 @@ def list_resumes(
         query = query.filter(ResumeDocument.uploaded_by_user_id == uploaded_by_user_id)
     query = query.order_by(ResumeDocument.uploaded_at.desc())
     resumes = query.offset(offset).limit(limit).all()
-    return [_resume_to_dict(r) for r in resumes]
+    return [
+        _resume_to_dict(
+            r,
+            extraction_mode=_get_resume_extraction_mode(db, r.id),
+        )
+        for r in resumes
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +1371,10 @@ def update_resume(
     db.add(resume)
     db.commit()
     db.refresh(resume)
-    return _resume_to_dict(resume)
+    return _resume_to_dict(
+        resume,
+        extraction_mode=_get_resume_extraction_mode(db, resume.id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +1391,7 @@ def delete_resume(
     """Hard-delete a ResumeDocument (and its cascade relations).
 
     Args:
-        delete_file: When True, also removes the physical PDF from disk.
+        delete_file: When True, also removes the stored PDF object or legacy local file.
 
     Returns True if deleted, False if not found.
     """
@@ -400,7 +1405,11 @@ def delete_resume(
 
     if delete_file and storage_uri:
         try:
-            Path(storage_uri).unlink(missing_ok=True)
+            if storage_uri.startswith("s3://"):
+                parse_storage_uri(storage_uri)
+                get_object_storage().delete_object(storage_uri)
+            else:
+                Path(storage_uri).unlink(missing_ok=True)
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not delete file {storage_uri}: {exc}")
 

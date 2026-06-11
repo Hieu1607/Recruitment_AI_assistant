@@ -16,7 +16,7 @@ import {
     type ColumnDef,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { useSelectedJobId } from "@/lib/auth";
+import { useSelectedJobId, useUserId } from "@/lib/auth";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -24,6 +24,7 @@ import {
     Eye,
     LayoutGrid,
     LayoutList,
+    Layers,
     Pencil,
     Search,
     Trash2,
@@ -31,7 +32,7 @@ import {
     X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -62,6 +63,14 @@ function relativeTime(iso: string | null): string {
 
 function truncateUserId(id: string): string {
   return `#${id.slice(0, 6)}…${id.slice(-4)}`;
+}
+
+function candidateDisplayName(resume: ResumeResponse): string {
+  return resume.candidate_display_name?.trim() || fileToDisplayName(resume.original_file_name);
+}
+
+function uploaderDisplayName(resume: ResumeResponse): string {
+  return resume.uploader_display_name?.trim() || truncateUserId(resume.uploaded_by_user_id);
 }
 
 type UploadStatusVariant = "neutral" | "warning" | "success" | "danger";
@@ -111,11 +120,30 @@ const SORT_OPTIONS: SortOption[] = [
   { label: "Name Z→A", key: "original_file_name", dir: "desc" },
 ];
 
+type ShortlistMode = "create" | "add";
+
+function errorStatus(err: unknown): number | undefined {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "response" in err &&
+    typeof err.response === "object" &&
+    err.response !== null &&
+    "status" in err.response &&
+    typeof err.response.status === "number"
+  ) {
+    return err.response.status;
+  }
+  return undefined;
+}
+
 // ─── main component ───────────────────────────────────────────────────────────
 
 export default function CandidatesListRoute() {
   const qc = useQueryClient();
   const selectedJobId = useSelectedJobId();
+  const userId = useUserId();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
 
   const view = (params.get("view") as "table" | "grid") ?? "table";
@@ -134,6 +162,12 @@ export default function CandidatesListRoute() {
   const [editTarget, setEditTarget] = useState<ResumeResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ResumeResponse | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [shortlistOpen, setShortlistOpen] = useState(false);
+  const [shortlistMode, setShortlistMode] = useState<ShortlistMode>("create");
+  const [shortlistName, setShortlistName] = useState("");
+  const [shortlistConflict, setShortlistConflict] = useState(false);
+  const [selectedCollectionId, setSelectedCollectionId] = useState("");
+  const [collectionSearch, setCollectionSearch] = useState("");
   const [editName, setEditName] = useState("");
   const [editStatus, setEditStatus] = useState<UploadStatus>("uploaded");
   const [sortOpen, setSortOpen] = useState(false);
@@ -163,7 +197,7 @@ export default function CandidatesListRoute() {
   // ── data ──────────────────────────────────────────────────────────────────
 
   const { data, isLoading } = useQuery({
-    queryKey: ["candidates", statusFilter, page, pageSize],
+    queryKey: ["candidates", selectedJobId, statusFilter, page, pageSize],
     queryFn: () =>
       selectedJobId
         ? api.jobs.resumes.list(selectedJobId, {
@@ -172,9 +206,26 @@ export default function CandidatesListRoute() {
             offset: (page - 1) * pageSize,
           })
         : Promise.resolve({ items: [], total: 0 }),
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some(
+        (resume) =>
+          resume.upload_status === "uploaded" || resume.upload_status === "processing",
+      )
+        ? 3000
+        : false;
+    },
   });
 
-  const allItems: ResumeResponse[] = data?.items ?? [];
+  const { data: collectionsData, isLoading: isCollectionsLoading } = useQuery({
+    queryKey: ["collections", userId],
+    queryFn: () => api.shortlist.collections.list({ user_id: userId ?? "", limit: 100 }),
+    enabled: shortlistOpen && !!userId,
+    staleTime: 30_000,
+  });
+
+  const allItems: ResumeResponse[] = useMemo(() => data?.items ?? [], [data?.items]);
+  const collections = useMemo(() => collectionsData?.items ?? [], [collectionsData?.items]);
   const serverTotal: number = data?.total ?? 0;
 
   const filteredItems = useMemo(() => {
@@ -182,6 +233,8 @@ export default function CandidatesListRoute() {
     const q = searchQuery.toLowerCase();
     return allItems.filter(
       (r) =>
+        candidateDisplayName(r).toLowerCase().includes(q) ||
+        uploaderDisplayName(r).toLowerCase().includes(q) ||
         r.original_file_name.toLowerCase().includes(q) ||
         fileToDisplayName(r.original_file_name).toLowerCase().includes(q),
     );
@@ -189,21 +242,59 @@ export default function CandidatesListRoute() {
 
   const sortedItems = useMemo(() => {
     return [...filteredItems].sort((a, b) => {
-      const av = String(a[sortOption.key] ?? "");
-      const bv = String(b[sortOption.key] ?? "");
+      const av =
+        sortOption.key === "original_file_name"
+          ? candidateDisplayName(a)
+          : String(a[sortOption.key] ?? "");
+      const bv =
+        sortOption.key === "original_file_name"
+          ? candidateDisplayName(b)
+          : String(b[sortOption.key] ?? "");
       const cmp = av.localeCompare(bv, undefined, { numeric: true });
       return sortOption.dir === "asc" ? cmp : -cmp;
     });
   }, [filteredItems, sortOption]);
 
   const displayTotal = searchQuery.trim() ? filteredItems.length : serverTotal;
+  const selectedResumeIdSet = useMemo(
+    () => new Set(selectedIds.map(String)),
+    [selectedIds],
+  );
+  const selectedResumes = useMemo(
+    () => allItems.filter((resume) => selectedResumeIdSet.has(String(resume.id))),
+    [allItems, selectedResumeIdSet],
+  );
+  const selectedCandidateProfileIds = useMemo(
+    () =>
+      [...new Set(
+        selectedResumes
+          .map((resume) => resume.candidate_profile_id)
+          .filter((id): id is string => Boolean(id)),
+      )],
+    [selectedResumes],
+  );
+  const selectedMissingProfileCount = selectedResumes.length - selectedCandidateProfileIds.length;
+  const filteredCollections = useMemo(() => {
+    const query = collectionSearch.trim().toLowerCase();
+    if (!query) return collections;
+    return collections.filter((collection) => collection.name.toLowerCase().includes(query));
+  }, [collectionSearch, collections]);
+
+  function closeShortlistModal() {
+    setShortlistOpen(false);
+    setShortlistMode("create");
+    setShortlistName("");
+    setShortlistConflict(false);
+    setSelectedCollectionId("");
+    setCollectionSearch("");
+  }
 
   // ── mutations ─────────────────────────────────────────────────────────────
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.jobs.resumes.remove(selectedJobId!, id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["candidates"] });
+      qc.invalidateQueries({ queryKey: ["candidates", selectedJobId] });
       toast.success("Resume deleted");
       setDeleteTarget(null);
     },
@@ -212,7 +303,7 @@ export default function CandidatesListRoute() {
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.jobs.resumes.remove(selectedJobId!, id))),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["candidates"] });
+      qc.invalidateQueries({ queryKey: ["candidates", selectedJobId] });
       toast.success(`${selectedIds.length} resumes deleted`);
       setSelectedIds([]);
       setBulkDeleteOpen(false);
@@ -230,9 +321,126 @@ export default function CandidatesListRoute() {
       status: UploadStatus;
     }) => api.jobs.resumes.update(selectedJobId!, id, { original_file_name: name, upload_status: status }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["candidates"] });
+      qc.invalidateQueries({ queryKey: ["candidates", selectedJobId] });
       toast.success("Resume updated");
       setEditTarget(null);
+    },
+  });
+
+  const createShortlistMutation = useMutation({
+    mutationFn: async (name: string) => {
+      if (!userId) {
+        throw new Error("Missing user session");
+      }
+      if (selectedCandidateProfileIds.length === 0) {
+        throw new Error("No candidate profiles available for shortlisting");
+      }
+
+      const collection = await api.shortlist.collections.create({
+        created_by_user_id: userId,
+        name: name.trim(),
+      });
+
+      await Promise.all(
+        selectedCandidateProfileIds.map((candidateProfileId) =>
+          api.shortlist.items.add(collection.id, {
+            candidate_profile_id: candidateProfileId,
+          }),
+        ),
+      );
+
+      return collection;
+    },
+    onSuccess: (collection) => {
+      qc.invalidateQueries({ queryKey: ["collections"] });
+      qc.invalidateQueries({ queryKey: ["collection", collection.id] });
+      qc.invalidateQueries({ queryKey: ["collection-items", collection.id] });
+
+      const addedCount = selectedCandidateProfileIds.length;
+      if (selectedMissingProfileCount > 0) {
+        toast.success(
+          `Collection created with ${addedCount} candidate${addedCount !== 1 ? "s" : ""}; ${selectedMissingProfileCount} skipped without candidate profiles`,
+        );
+      } else {
+        toast.success(
+          `Collection created with ${addedCount} candidate${addedCount !== 1 ? "s" : ""}`,
+        );
+      }
+
+      setSelectedIds([]);
+      closeShortlistModal();
+      navigate(routes.shortlistCollection(collection.id));
+    },
+    onError: (err: unknown) => {
+      const status = errorStatus(err);
+      if (status === 409) {
+        setShortlistConflict(true);
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : "Failed to create shortlist collection");
+    },
+  });
+
+  const addToShortlistMutation = useMutation({
+    mutationFn: async (collectionId: string) => {
+      if (!collectionId) {
+        throw new Error("Choose a collection");
+      }
+      if (selectedCandidateProfileIds.length === 0) {
+        throw new Error("No candidate profiles available for shortlisting");
+      }
+
+      const results = await Promise.allSettled(
+        selectedCandidateProfileIds.map((candidateProfileId) =>
+          api.shortlist.items.add(collectionId, {
+            candidate_profile_id: candidateProfileId,
+          }),
+        ),
+      );
+
+      let added = 0;
+      let duplicates = 0;
+      let failed = 0;
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          added += 1;
+          continue;
+        }
+        const status = errorStatus(result.reason);
+        if (status === 409) duplicates += 1;
+        else failed += 1;
+      }
+
+      if (failed > 0 && added === 0 && duplicates === 0) {
+        throw new Error("Failed to add candidates to collection");
+      }
+
+      return { collectionId, added, duplicates, failed };
+    },
+    onSuccess: ({ collectionId, added, duplicates, failed }) => {
+      qc.invalidateQueries({ queryKey: ["collections"] });
+      qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      qc.invalidateQueries({ queryKey: ["collection-items", collectionId] });
+
+      const summary: string[] = [];
+      if (added > 0) summary.push(`added ${added}`);
+      if (duplicates > 0) summary.push(`skipped ${duplicates} duplicate${duplicates !== 1 ? "s" : ""}`);
+      if (selectedMissingProfileCount > 0) {
+        summary.push(`skipped ${selectedMissingProfileCount} without profiles`);
+      }
+      if (failed > 0) summary.push(`${failed} failed`);
+
+      toast.success(`Updated shortlist: ${summary.join(", ")}`);
+      if (failed > 0) {
+        toast.error(`${failed} candidate${failed !== 1 ? "s" : ""} could not be added`);
+      }
+
+      setSelectedIds([]);
+      closeShortlistModal();
+      navigate(routes.shortlistCollection(collectionId));
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update shortlist collection");
     },
   });
 
@@ -255,11 +463,13 @@ export default function CandidatesListRoute() {
               to={routes.candidateDetail(row.id)}
               className="font-sans text-sm font-medium text-fg hover:text-accent transition-colors truncate"
             >
-              {fileToDisplayName(row.original_file_name)}
+              {candidateDisplayName(row)}
             </Link>
-            <span className="font-mono text-[0.6875rem] text-fg-subtle truncate">
-              {row.original_file_name}
-            </span>
+            {candidateDisplayName(row) !== row.original_file_name && (
+              <span className="font-mono text-[0.6875rem] text-fg-subtle truncate">
+                {row.original_file_name}
+              </span>
+            )}
           </div>
         ),
       },
@@ -272,10 +482,10 @@ export default function CandidatesListRoute() {
       {
         key: "uploaded_by_user_id",
         header: "Uploaded by",
-        width: 140,
+        width: 180,
         render: (row) => (
-          <span className="font-mono text-xs text-fg-muted">
-            {truncateUserId(row.uploaded_by_user_id)}
+          <span className="text-sm text-fg-muted truncate">
+            {uploaderDisplayName(row)}
           </span>
         ),
       },
@@ -379,7 +589,7 @@ export default function CandidatesListRoute() {
           />
           <input
             type="text"
-            placeholder="Search by name or file…"
+            placeholder="Search by candidate, uploader, or file…"
             value={searchQuery}
             onChange={(e) => setParam("q", e.target.value)}
             className={cn(
@@ -514,6 +724,20 @@ export default function CandidatesListRoute() {
             variant="ghost"
             size="sm"
             className="text-bg hover:bg-white/10 hover:text-bg"
+            icon={<Layers size={14} strokeWidth={2} />}
+            disabled={selectedCandidateProfileIds.length === 0}
+            onClick={() => {
+              setShortlistConflict(false);
+              setShortlistMode("create");
+              setShortlistOpen(true);
+            }}
+          >
+            Create/Add to shortlist
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-bg hover:bg-white/10 hover:text-bg"
             icon={<Trash2 size={14} strokeWidth={2} />}
             onClick={() => setBulkDeleteOpen(true)}
           >
@@ -615,7 +839,7 @@ export default function CandidatesListRoute() {
       <UploadModal
         open={uploadOpen}
         onOpenChange={setUploadOpen}
-        onComplete={() => qc.invalidateQueries({ queryKey: ["candidates"] })}
+        onComplete={() => qc.invalidateQueries({ queryKey: ["candidates", selectedJobId] })}
       />
 
       {/* Delete single */}
@@ -666,6 +890,169 @@ export default function CandidatesListRoute() {
               onClick={() => bulkDeleteMutation.mutate(selectedIds.map(String))}
             >
               Delete {selectedIds.length}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Create shortlist collection */}
+      <Modal open={shortlistOpen} onOpenChange={(o) => !o && closeShortlistModal()}>
+        <ModalContent>
+          <ModalHeader>
+            <ModalTitle>Create/Add to shortlist</ModalTitle>
+            <ModalDescription>
+              Save {selectedIds.length} selected resume
+              {selectedIds.length !== 1 ? "s" : ""}.
+              {selectedMissingProfileCount > 0
+                ? ` ${selectedMissingProfileCount} selected resume${selectedMissingProfileCount !== 1 ? "s do" : " does"} not have a candidate profile yet and will be skipped.`
+                : ""}
+            </ModalDescription>
+          </ModalHeader>
+          <div className="mt-2 space-y-4">
+            <div className="grid grid-cols-2 gap-2 rounded-[var(--radius-md)] bg-[color:var(--hairline)] p-1">
+              <button
+                type="button"
+                onClick={() => setShortlistMode("create")}
+                className={cn(
+                  "h-9 rounded-[var(--radius-sm)] text-sm font-sans font-medium transition-colors",
+                  shortlistMode === "create"
+                    ? "bg-bg text-fg shadow-[var(--shadow-sm)]"
+                    : "text-fg-muted hover:text-fg",
+                )}
+              >
+                Create new
+              </button>
+              <button
+                type="button"
+                onClick={() => setShortlistMode("add")}
+                className={cn(
+                  "h-9 rounded-[var(--radius-sm)] text-sm font-sans font-medium transition-colors",
+                  shortlistMode === "add"
+                    ? "bg-bg text-fg shadow-[var(--shadow-sm)]"
+                    : "text-fg-muted hover:text-fg",
+                )}
+              >
+                Add to existing
+              </button>
+            </div>
+
+            {shortlistMode === "create" ? (
+              <div>
+                <input
+                  type="text"
+                  placeholder="Collection name…"
+                  value={shortlistName}
+                  onChange={(e) => {
+                    setShortlistName(e.target.value);
+                    setShortlistConflict(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && shortlistName.trim() && selectedCandidateProfileIds.length > 0) {
+                      createShortlistMutation.mutate(shortlistName);
+                    }
+                    if (e.key === "Escape") closeShortlistModal();
+                  }}
+                  autoFocus
+                  className={cn(
+                    "w-full h-9 px-3 text-sm font-sans rounded-[var(--radius-md)]",
+                    "border bg-bg text-fg",
+                    shortlistConflict
+                      ? "border-danger focus:outline-danger"
+                      : "border-[color:var(--hairline-strong)] focus:outline-accent",
+                    "focus:outline focus:outline-2 focus:outline-offset-1 outline-none",
+                  )}
+                />
+                {shortlistConflict && (
+                  <p className="mt-1.5 text-xs font-sans text-danger">
+                    A collection with this name already exists. Please choose a different name.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative">
+                  <Search
+                    size={14}
+                    strokeWidth={1.75}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted pointer-events-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Search collections…"
+                    value={collectionSearch}
+                    onChange={(e) => setCollectionSearch(e.target.value)}
+                    className={cn(
+                      "w-full h-9 pl-8 pr-3 text-sm font-sans rounded-[var(--radius-md)]",
+                      "border border-[color:var(--hairline-strong)] bg-bg text-fg placeholder:text-fg-subtle",
+                      "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
+                    )}
+                  />
+                </div>
+
+                <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[color:var(--hairline)]">
+                  {isCollectionsLoading ? (
+                    <div className="px-4 py-6 text-sm text-fg-muted">Loading collections…</div>
+                  ) : filteredCollections.length === 0 ? (
+                    <div className="px-4 py-6 text-sm text-fg-muted">
+                      {collectionSearch.trim() ? "No matching collections." : "No collections yet."}
+                    </div>
+                  ) : (
+                    filteredCollections.map((collection) => (
+                      <label
+                        key={collection.id}
+                        className={cn(
+                          "flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors",
+                          "border-b border-[color:var(--hairline)] last:border-b-0 hover:bg-[color:var(--hairline)]",
+                          selectedCollectionId === collection.id && "bg-[rgba(31,58,46,0.06)]",
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name="selected-collection"
+                          value={collection.id}
+                          checked={selectedCollectionId === collection.id}
+                          onChange={() => setSelectedCollectionId(collection.id)}
+                          className="mt-0.5 h-4 w-4 accent-accent"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-fg">
+                            {collection.name}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-fg-muted">
+                            {collection.item_count} candidate{collection.item_count !== 1 ? "s" : ""}
+                          </span>
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          <ModalFooter>
+            <Button variant="ghost" onClick={closeShortlistModal}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              loading={
+                shortlistMode === "create"
+                  ? createShortlistMutation.isPending
+                  : addToShortlistMutation.isPending
+              }
+              disabled={
+                selectedCandidateProfileIds.length === 0 ||
+                (shortlistMode === "create"
+                  ? !shortlistName.trim()
+                  : !selectedCollectionId)
+              }
+              onClick={() =>
+                shortlistMode === "create"
+                  ? createShortlistMutation.mutate(shortlistName)
+                  : addToShortlistMutation.mutate(selectedCollectionId)
+              }
+            >
+              {shortlistMode === "create" ? "Create" : "Add to collection"}
             </Button>
           </ModalFooter>
         </ModalContent>
@@ -774,13 +1161,19 @@ function CandidateCard({
           to={routes.candidateDetail(resume.id)}
           className="font-display text-[0.9375rem] font-medium text-fg hover:text-accent transition-colors line-clamp-1 flex-1 min-w-0"
         >
-          {fileToDisplayName(resume.original_file_name)}
+          {candidateDisplayName(resume)}
         </Link>
         <UploadStatusBadge status={resume.upload_status} />
       </div>
 
-      <p className="font-mono text-[0.6875rem] text-fg-subtle truncate mb-4">
-        {resume.original_file_name}
+      {candidateDisplayName(resume) !== resume.original_file_name && (
+        <p className="font-mono text-[0.6875rem] text-fg-subtle truncate mb-3">
+          {resume.original_file_name}
+        </p>
+      )}
+
+      <p className="text-xs text-fg-muted truncate mb-4">
+        Uploaded by {uploaderDisplayName(resume)}
       </p>
 
       <div className="flex items-center justify-between">

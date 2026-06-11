@@ -1,5 +1,7 @@
 """Tests for src.services.google_oauth — no real network calls."""
 import time
+from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from sqlalchemy import create_engine
@@ -68,8 +70,64 @@ def _make_claims(
 def test_build_then_verify_state_roundtrip():
     url, state = google_oauth.build_authorize_url("/dashboard")
     assert "accounts.google.com" in url
-    redirect = google_oauth.verify_state(state)
-    assert redirect == "/dashboard"
+    payload = google_oauth.verify_state(state)
+    assert payload["redirect"] == "/dashboard"
+    assert payload["flow"] == "login"
+
+
+def test_verify_state_defaults_legacy_payload_flow_to_login():
+    legacy_state = google_oauth._get_serializer().dumps(
+        {"redirect": "/dashboard", "nonce": "legacy-nonce"}
+    )
+
+    payload = google_oauth.verify_state(legacy_state)
+
+    assert payload == {"redirect": "/dashboard", "flow": "login"}
+
+
+def test_build_login_authorize_url_uses_basic_scopes():
+    url, state = google_oauth.build_authorize_url(
+        redirect_path="/dashboard",
+        flow="login",
+    )
+
+    scope = parse_qs(urlparse(url).query)["scope"][0]
+    assert scope == "openid email profile"
+    assert "gmail.send" not in scope
+
+    payload = google_oauth.verify_state(state)
+    assert payload["redirect"] == "/dashboard"
+    assert payload["flow"] == "login"
+
+
+def test_build_connect_gmail_authorize_url_uses_gmail_scope():
+    url, state = google_oauth.build_authorize_url(
+        redirect_path="/outreach",
+        flow="connect_gmail",
+    )
+
+    scope = parse_qs(urlparse(url).query)["scope"][0]
+    assert scope == "openid email profile https://www.googleapis.com/auth/gmail.send"
+
+    payload = google_oauth.verify_state(state)
+    assert payload["redirect"] == "/outreach"
+    assert payload["flow"] == "connect_gmail"
+
+
+def test_build_connect_gmail_authorize_url_includes_initiating_user_id():
+    url, state = google_oauth.build_authorize_url(
+        redirect_path="/outreach",
+        flow="connect_gmail",
+        initiating_user_id="user-123",
+    )
+
+    scope = parse_qs(urlparse(url).query)["scope"][0]
+    assert "gmail.send" in scope
+
+    payload = google_oauth.verify_state(state)
+    assert payload["redirect"] == "/outreach"
+    assert payload["flow"] == "connect_gmail"
+    assert payload["initiating_user_id"] == "user-123"
 
 
 def test_verify_state_rejects_tampered():
@@ -167,3 +225,80 @@ def test_upsert_returns_existing_identity_user_on_second_login(db):
     assert user1.id == user2.id
     assert db.query(UserAccount).count() == 1
     assert db.query(OAuthIdentity).count() == 1
+
+
+def test_upsert_stores_encrypted_google_tokens(db, monkeypatch):
+    encrypted_values = []
+    monkeypatch.setattr(
+        google_oauth,
+        "encrypt_token",
+        lambda value: encrypted_values.append(value) or f"encrypted:{value}",
+    )
+    claims = _make_claims()
+    tokens = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "expires_in": 3600,
+        "scope": "openid email profile https://www.googleapis.com/auth/gmail.send",
+    }
+
+    user = google_oauth.upsert_user_from_google(db, claims, tokens=tokens)
+
+    identity = db.query(OAuthIdentity).filter_by(user_id=user.id).one()
+    assert identity.access_token_encrypted == "encrypted:access-token"
+    assert identity.refresh_token_encrypted == "encrypted:refresh-token"
+    assert identity.token_expires_at is not None
+    expires_at = identity.token_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    assert expires_at > datetime.now(timezone.utc)
+    assert "gmail.send" in identity.scope
+    assert encrypted_values == ["access-token", "refresh-token"]
+
+
+def test_upsert_preserves_existing_refresh_token_when_google_omits_it(db, monkeypatch):
+    monkeypatch.setattr(google_oauth, "encrypt_token", lambda value: f"encrypted:{value}")
+    claims = _make_claims()
+    first_tokens = {
+        "access_token": "first-access",
+        "refresh_token": "first-refresh",
+        "expires_in": 3600,
+        "scope": "openid email profile https://www.googleapis.com/auth/gmail.send",
+    }
+    second_tokens = {
+        "access_token": "second-access",
+        "expires_in": 3600,
+        "scope": "openid email profile https://www.googleapis.com/auth/gmail.send",
+    }
+
+    google_oauth.upsert_user_from_google(db, claims, tokens=first_tokens)
+    user = google_oauth.upsert_user_from_google(db, claims, tokens=second_tokens)
+
+    identity = db.query(OAuthIdentity).filter_by(user_id=user.id).one()
+    assert identity.access_token_encrypted == "encrypted:second-access"
+    assert identity.refresh_token_encrypted == "encrypted:first-refresh"
+
+
+def test_connect_google_identity_to_user_rejects_email_mismatch(db, monkeypatch):
+    monkeypatch.setattr(google_oauth, "encrypt_token", lambda value: f"encrypted:{value}")
+    target_user = UserAccount(
+        email="owner@example.com",
+        display_name="Owner",
+        password_hash="hashed",
+        status=UserStatus.ACTIVE,
+    )
+    db.add(target_user)
+    db.commit()
+    db.refresh(target_user)
+
+    claims = _make_claims(email="different@example.com", email_verified=True)
+
+    with pytest.raises(ValueError, match="google_account_mismatch"):
+        google_oauth.connect_google_identity_to_user(
+            db,
+            target_user_id=target_user.id,
+            claims=claims,
+            tokens={"refresh_token": "refresh-token"},
+        )
+
+    assert db.query(OAuthIdentity).count() == 0

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from src.models.candidate_profile import CandidateProfile
 from src.models.session import SessionLocal
 from src.services.ai_agent.graph import get_graph
+from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 
 router = APIRouter()
 
@@ -85,7 +86,7 @@ def _load_candidates(db, limit: int) -> List[Dict[str, Any]]:
             "location_normalized": r.location_normalized,
             "contact": r.contact,
             "current_job_title": r.current_job_title,
-            "educated": r.educated,
+            "graduation_status": r.graduation_status,
             "ever_studied_abroad": r.ever_studied_abroad,
             "major": r.major,
             "cpa": r.cpa,
@@ -155,12 +156,38 @@ def chat(body: ChatRequest):
         "dsl_candidates": None,
         "llm_result": None,
         "answer": "",
+        "trace_id": str(uuid.uuid4()),
+        "trace_metadata": {
+            "endpoint": "chat",
+            "session_id": session_id,
+        },
     }
+    trace_id = graph_input["trace_id"]
+    get_trace_logger().start_trace(
+        trace_id=trace_id,
+        metadata={
+            "endpoint": "chat",
+            "session_id": session_id,
+            "question": body.message,
+            "candidate_limit": body.candidate_limit,
+        },
+        graph_input=graph_input,
+    )
 
     try:
         result = get_graph().invoke(graph_input)
     except Exception as exc:
+        get_trace_logger().finalize_trace(
+            trace_id=trace_id,
+            status="error",
+            error=format_exception_payload(exc),
+        )
         raise HTTPException(status_code=500, detail=f"Graph execution error: {exc}") from exc
+    get_trace_logger().finalize_trace(
+        trace_id=trace_id,
+        status="success",
+        graph_output=result,
+    )
 
     # Persist updated message history back to session store
     _sessions[session_id] = result.get("messages") or history

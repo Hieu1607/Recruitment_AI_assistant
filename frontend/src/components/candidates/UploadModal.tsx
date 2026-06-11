@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Upload, FileText, X, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { Upload, FileText, X, CheckCircle, XCircle, AlertTriangle, Clock3 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, type ResumeBatchParseResponse } from "@/api";
@@ -16,12 +16,10 @@ import { cn } from "@/lib/cn";
 import { useSelectedJobId } from "@/lib/auth";
 
 const UPLOAD_MESSAGES = [
-  "Reading resumes...",
-  "Extracting skills and experience...",
-  "Building candidate profiles...",
-  "Analyzing work history...",
-  "Identifying key qualifications...",
-  "Finalizing profiles...",
+  "Uploading PDFs...",
+  "Saving resume records...",
+  "Queueing background parsing...",
+  "Preparing candidate extraction...",
 ];
 
 interface UploadModalProps {
@@ -149,7 +147,7 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
     setState("processing");
     setMsgIndex(0);
     uploadMutation.mutate(validFiles);
-  }, [selectedFiles, uploadMutation]);
+  }, [selectedFiles, selectedJobId, uploadMutation]);
 
   const validFiles = selectedFiles.filter((f) => !f.error);
   const invalidFiles = selectedFiles.filter((f) => f.error);
@@ -272,7 +270,7 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
                 disabled={validFiles.length === 0}
                 onClick={handleSubmit}
               >
-                Parse {validFiles.length > 0 ? `${validFiles.length} ` : ""}
+                Upload {validFiles.length > 0 ? `${validFiles.length} ` : ""}
                 resume{validFiles.length !== 1 ? "s" : ""}
               </Button>
             </ModalFooter>
@@ -311,7 +309,7 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
             </div>
 
             <div className="text-center space-y-1.5">
-              <p className="font-display text-xl font-medium text-fg">Processing resumes</p>
+              <p className="font-display text-xl font-medium text-fg">Queueing resumes</p>
               <p
                 key={msgIndex}
                 className="font-sans text-sm text-fg-muted animate-in fade-in duration-300"
@@ -330,7 +328,7 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
 
             <p className="flex items-center gap-2 text-xs text-fg-muted">
               <AlertTriangle size={13} strokeWidth={2} className="text-warning shrink-0" />
-              Processing is synchronous — please don't close this window
+              Upload completes here. Parsing continues in the background.
             </p>
           </div>
         )}
@@ -340,14 +338,10 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
           <>
             <ModalHeader>
               <ModalTitle>
-                {result.failed_files === 0
-                  ? `${result.processed_files} resume${result.processed_files !== 1 ? "s" : ""} processed`
-                  : `${result.processed_files} of ${result.total_files} resumes processed`}
+                {result.queued_files} resume{result.queued_files !== 1 ? "s" : ""} queued
               </ModalTitle>
               <ModalDescription>
-                {result.failed_files > 0
-                  ? `${result.failed_files} file${result.failed_files !== 1 ? "s" : ""} failed to parse.`
-                  : "All files were parsed and profiles built successfully."}
+                Background parsing has started. Resume status will update to processed or failed when each worker task finishes.
               </ModalDescription>
             </ModalHeader>
 
@@ -357,13 +351,17 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
                   key={item.resume_document_id}
                   className={cn(
                     "flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border",
-                    item.status === "processed"
-                      ? "border-[rgba(74,124,89,0.3)] bg-[rgba(74,124,89,0.06)]"
-                      : "border-[rgba(184,68,46,0.3)] bg-[rgba(184,68,46,0.06)]",
+                    item.status === "queued"
+                      ? "border-[color:var(--hairline)] bg-bg-elevated"
+                      : item.status === "processed"
+                        ? "border-[rgba(74,124,89,0.3)] bg-[rgba(74,124,89,0.06)]"
+                        : "border-[rgba(184,68,46,0.3)] bg-[rgba(184,68,46,0.06)]",
                   )}
                 >
                   {item.status === "processed" ? (
                     <CheckCircle size={16} strokeWidth={1.75} className="text-success shrink-0" />
+                  ) : item.status === "queued" ? (
+                    <Clock3 size={16} strokeWidth={1.75} className="text-fg-muted shrink-0" />
                   ) : (
                     <XCircle size={16} strokeWidth={1.75} className="text-danger shrink-0" />
                   )}
@@ -371,10 +369,18 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
                   <span
                     className={cn(
                       "text-xs font-medium font-sans shrink-0",
-                      item.status === "processed" ? "text-success" : "text-danger",
+                      item.status === "queued"
+                        ? "text-fg-muted"
+                        : item.status === "processed"
+                          ? "text-success"
+                          : "text-danger",
                     )}
                   >
-                    {item.status === "processed" ? "Parsed" : "Failed"}
+                    {item.status === "queued"
+                      ? "Queued"
+                      : item.status === "processed"
+                        ? "Parsed"
+                        : "Failed"}
                   </span>
                 </div>
               ))}

@@ -1,10 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
 import { ApiError, parseAxiosError } from "./errors";
-
-const TOKEN_KEY = "recruitai.token";
+import { getAccessToken, handleExpiredSession } from "@/lib/session";
 
 const baseURL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 
 export const client: AxiosInstance = axios.create({
   baseURL,
@@ -14,7 +13,7 @@ export const client: AxiosInstance = axios.create({
 });
 
 client.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token = getAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -24,6 +23,9 @@ client.interceptors.request.use((config) => {
 client.interceptors.response.use(
   (res) => res,
   (err) => {
+    if (axios.isAxiosError(err) && err.response?.status === 401 && getAccessToken()) {
+      handleExpiredSession();
+    }
     // SECURITY: Do NOT log request/response bodies (PII — resume PDFs,
     // candidate data, auth tokens). Log only the normalized ApiError shape.
     throw parseAxiosError(err);
