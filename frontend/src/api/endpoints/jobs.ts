@@ -125,6 +125,13 @@ export const jobsApi = {
     return data;
   },
 
+  scoreRuns: {
+    async get(jobId: string, matchRunId: string): Promise<ScoreResponse> {
+      const { data } = await client.get<ScoreResponse>(`/jobs/${jobId}/score-runs/${matchRunId}`);
+      return data;
+    },
+  },
+
   chat: {
     async send(jobId: string, body: { message: string; session_id?: string; candidate_limit?: number }): Promise<ChatResponse> {
       const { data } = await client.post<ChatResponse>(`/jobs/${jobId}/chat`, body);

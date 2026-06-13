@@ -16,7 +16,7 @@ from src.models.candidate_profile import CandidateProfile
 from src.models.deps import get_current_user, get_db
 from src.models.job import Job
 from src.models.enums import MatchRunStatus, UploadStatus
-from src.models.job_matching import JobDescription, MatchRun
+from src.models.job_matching import JobDescription, MatchResult, MatchRun
 from src.models.query_shortlist import QuerySession, QueryTurn
 from src.models.resume_document import ResumeDocument
 from src.models.user_account import UserAccount
@@ -159,7 +159,39 @@ class ScoreRequest(BaseModel):
     score_threshold: float = Field(50.0, ge=0, le=100)
     candidate_profile_ids: Optional[list[uuid.UUID]] = None
     section_weights: Optional[dict[str, float]] = None
-    batch_size: int = Field(10, ge=1, le=50)
+    batch_size: int = Field(3, ge=1, le=50)
+
+
+class ComponentScoreResponse(BaseModel):
+    criterionKey: str
+    criterionType: str
+    evaluationMode: str
+    requirementText: str
+    weight: float
+    score: float
+    weightedScore: float
+    evidenceSummary: str
+    measurable: Optional[dict[str, Any]] = None
+
+
+class CandidateScoreResponse(BaseModel):
+    candidateId: str
+    candidateName: Optional[str] = None
+    resumeFileName: Optional[str] = None
+    candidateDisplayName: Optional[str] = None
+    totalScore: float
+    passedThreshold: bool
+    rationale: str
+    componentScores: list[ComponentScoreResponse]
+
+
+class ScoreRunResponse(BaseModel):
+    match_run_id: str
+    job_description_id: str
+    total_candidates: int
+    total_passed_candidates: int
+    batches: int
+    scores: list[CandidateScoreResponse]
 
 
 class ChatRequest(BaseModel):
@@ -248,6 +280,60 @@ def _serialize_candidate(profile: CandidateProfile) -> CandidateResponse:
             else None
         ),
         education_text=profile.education_text,
+    )
+
+
+def _serialize_component_score(component: dict[str, Any]) -> ComponentScoreResponse:
+    return ComponentScoreResponse(
+        criterionKey=str(component.get("criterionKey") or ""),
+        criterionType=str(component.get("criterionType") or ""),
+        evaluationMode=str(component.get("evaluationMode") or ""),
+        requirementText=str(component.get("requirementText") or ""),
+        weight=float(component.get("weight") or 0.0),
+        score=float(component.get("score") or 0.0),
+        weightedScore=float(component.get("weightedScore") or 0.0),
+        evidenceSummary=str(component.get("evidenceSummary") or ""),
+        measurable=component.get("measurable")
+        if isinstance(component.get("measurable"), dict)
+        else None,
+    )
+
+
+def _serialize_match_result(result: MatchResult) -> CandidateScoreResponse:
+    profile = result.candidate_profile
+    resume = profile.resume_document if profile is not None else None
+    display_name = (
+        profile.full_name
+        if profile is not None and profile.full_name
+        else (resume.original_file_name if resume is not None else None)
+    )
+    return CandidateScoreResponse(
+        candidateId=str(result.candidate_profile_id),
+        candidateName=profile.full_name if profile is not None else None,
+        resumeFileName=resume.original_file_name if resume is not None else None,
+        candidateDisplayName=display_name,
+        totalScore=float(result.total_score),
+        passedThreshold=bool(result.passed_threshold),
+        rationale=result.rationale_summary,
+        componentScores=[
+            _serialize_component_score(component)
+            for component in (result.component_scores or [])
+            if isinstance(component, dict)
+        ],
+    )
+
+
+def _serialize_match_run(run: MatchRun, results: list[MatchResult]) -> ScoreRunResponse:
+    serialized_scores = [_serialize_match_result(result) for result in results]
+    return ScoreRunResponse(
+        match_run_id=str(run.id),
+        job_description_id=str(run.job_description_id),
+        total_candidates=len(serialized_scores),
+        total_passed_candidates=sum(
+            1 for score in serialized_scores if score.passedThreshold
+        ),
+        batches=1,
+        scores=serialized_scores,
     )
 
 
@@ -921,6 +1007,40 @@ def score_job_candidates(
         detail = str(exc)
         status_code = 404 if "not found" in detail.lower() else 422
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/{job_id}/score-runs/{match_run_id}", response_model=ScoreRunResponse)
+def get_score_run(
+    job_id: uuid.UUID,
+    match_run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    get_current_user_owned_job(db, current_user.id, job_id)
+    run = (
+        db.query(MatchRun)
+        .join(JobDescription, JobDescription.id == MatchRun.job_description_id)
+        .filter(
+            MatchRun.id == match_run_id,
+            JobDescription.job_id == job_id,
+        )
+        .first()
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Match run '{match_run_id}' not found")
+
+    results = (
+        db.query(MatchResult)
+        .join(CandidateProfile, CandidateProfile.id == MatchResult.candidate_profile_id)
+        .join(ResumeDocument, ResumeDocument.id == CandidateProfile.resume_document_id)
+        .filter(
+            MatchResult.match_run_id == match_run_id,
+            ResumeDocument.job_id == job_id,
+        )
+        .order_by(MatchResult.score_list_index.asc())
+        .all()
+    )
+    return _serialize_match_run(run, results)
 
 
 @router.get("/{job_id}/setup-status", response_model=JobSetupStatusResponse)
