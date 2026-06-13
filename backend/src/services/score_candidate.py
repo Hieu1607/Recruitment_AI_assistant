@@ -22,6 +22,7 @@ from src.services.llm_service import (
     LLMProviderLimitError,
     is_provider_limit_error as is_llm_provider_limit_error,
 )
+from src.services.scoring_debug import ScoringDebugLogger, preview_text
 from src.services.scoring_errors import ScoringProviderLimitError
 from src.core.config import settings
 
@@ -264,7 +265,14 @@ def _normalize_runtime_section_weights(
         if section_weights is not None
         else dict(build_prompts.DEFAULT_SECTION_WEIGHTS)
     )
-    filtered = {section: raw_weights.get(section, 0.0) for section in active_sections if raw_weights.get(section, 0.0) > 0}
+    filtered: Dict[str, float] = {}
+    for section in active_sections:
+        configured_weight = raw_weights.get(section)
+        if configured_weight is None:
+            filtered[section] = 1.0
+            continue
+        if configured_weight > 0:
+            filtered[section] = configured_weight
     if not filtered:
         filtered = {section: 1.0 for section in active_sections}
     total = sum(filtered.values())
@@ -468,7 +476,7 @@ def _compare_measurable(candidate_value: Any, operator: str, expected_value: Any
 def _score_measurable_criterion(
     candidate: Dict[str, Any],
     criterion: Dict[str, Any],
-) -> tuple[float, str]:
+) -> tuple[float, str, Dict[str, Any]]:
     measurable = criterion.get("measurable") or {}
     field = measurable.get("field", "")
     operator = measurable.get("operator", "")
@@ -500,7 +508,17 @@ def _score_measurable_criterion(
                 evidence = f"Matched requirement for {field}: candidate has {actual_value} and requirement is {operator} {expected_value}."
             else:
                 evidence = f"Did not match requirement for {field}: candidate has {actual_value} and requirement is {operator} {expected_value}."
-    return score, evidence
+    return score, evidence, {
+        "field": field,
+        "operator": operator,
+        "expectedValue": expected_value,
+        "actualValue": actual_value,
+        "matched": matched,
+    }
+
+
+def _operation_event_prefix(operation_name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", operation_name.strip().lower()).strip("_")
 
 
 def _parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
@@ -552,6 +570,7 @@ def _generate_json_with_retries(
     prompt: str,
     parser,
     operation_name: str,
+    debug_logger: Optional[ScoringDebugLogger] = None,
 ) -> Dict[str, Any]:
     json_fix_suffix = (
         "\n\nIMPORTANT: Return one valid JSON object only. "
@@ -573,12 +592,58 @@ def _generate_json_with_retries(
         )
 
     last_error: Optional[Exception] = None
+    event_prefix = _operation_event_prefix(operation_name)
     for idx, (attempt_llm, attempt_prompt) in enumerate(attempts, start=1):
-        response = attempt_llm.generate(attempt_prompt)
+        if debug_logger is not None:
+            debug_logger.record_event(
+                f"{event_prefix}_attempt",
+                {
+                    "attempt": idx,
+                    "provider": getattr(attempt_llm, "provider", "unknown"),
+                    "model": getattr(attempt_llm, "model_name", "unknown"),
+                    "prompt": preview_text(attempt_prompt),
+                },
+            )
         try:
-            return parser(response.text)
+            response = attempt_llm.generate(attempt_prompt)
+        except Exception as exc:
+            if debug_logger is not None:
+                debug_logger.record_error(
+                    f"{event_prefix}_generation_failed",
+                    exc,
+                    {
+                        "attempt": idx,
+                        "provider": getattr(attempt_llm, "provider", "unknown"),
+                        "model": getattr(attempt_llm, "model_name", "unknown"),
+                    },
+                )
+            raise
+        try:
+            parsed = parser(response.text)
+            if debug_logger is not None:
+                debug_logger.record_event(
+                    f"{event_prefix}_completed",
+                    {
+                        "attempt": idx,
+                        "provider": getattr(response, "provider", getattr(attempt_llm, "provider", "unknown")),
+                        "model": getattr(response, "model", getattr(attempt_llm, "model_name", "unknown")),
+                        "response": preview_text(getattr(response, "text", "")),
+                    },
+                )
+            return parsed
         except Exception as exc:
             last_error = exc
+            if debug_logger is not None:
+                debug_logger.record_error(
+                    f"{event_prefix}_parse_failed",
+                    exc,
+                    {
+                        "attempt": idx,
+                        "provider": getattr(attempt_llm, "provider", "unknown"),
+                        "model": getattr(attempt_llm, "model_name", "unknown"),
+                        "response": preview_text(getattr(response, "text", "")),
+                    },
+                )
             logger.warning(
                 "%s JSON parse failed on attempt %s using model %s: %s",
                 operation_name,
@@ -595,13 +660,24 @@ def _generate_semantic_scores_with_retries(
     *,
     llm: LLMProvider,
     prompt: str,
+    debug_logger: Optional[ScoringDebugLogger] = None,
 ) -> Dict[str, Dict[str, Any]]:
+    if debug_logger is not None:
+        debug_logger.record_event(
+            "semantic_scoring_started",
+            {
+                "provider": getattr(llm, "provider", "unknown"),
+                "model": getattr(llm, "model_name", "unknown"),
+                "prompt": preview_text(prompt),
+            },
+        )
     try:
         return _generate_json_with_retries(
             llm=llm,
             prompt=prompt,
             parser=_parse_semantic_scores,
             operation_name="semantic scoring",
+            debug_logger=debug_logger,
         )
     except Exception as exc:
         if _is_provider_limit_error(exc):
@@ -663,20 +739,23 @@ def _build_candidate_score(
     rubric: Dict[str, Any],
     semantic_result: Dict[str, Any],
     score_threshold: Decimal,
+    debug_logger: Optional[ScoringDebugLogger] = None,
 ) -> Dict[str, Any]:
     semantic_criteria = semantic_result.get("criteria", {}) if isinstance(semantic_result, dict) else {}
     component_scores: List[Dict[str, Any]] = []
+    debug_components: List[Dict[str, Any]] = []
 
     for criterion in rubric.get("criteria", []):
         weight = float(criterion.get("weight", 0.0))
         if criterion.get("measurable"):
-            score, evidence = _score_measurable_criterion(candidate, criterion)
+            score, evidence, measurable_detail = _score_measurable_criterion(candidate, criterion)
             evaluation_mode = "measurable"
         else:
             semantic_detail = semantic_criteria.get(criterion["key"], {})
             score = _normalize_llm_score(semantic_detail.get("score", 0))
             evidence = str(semantic_detail.get("evidenceSummary") or "").strip()
             evaluation_mode = "semantic"
+            measurable_detail = None
         component_scores.append(
             {
                 "criterionKey": criterion["key"],
@@ -689,9 +768,38 @@ def _build_candidate_score(
                 "evidenceSummary": evidence,
             }
         )
+        debug_component = {
+            "criterionKey": criterion["key"],
+            "criterionType": criterion["type"],
+            "evaluationMode": evaluation_mode,
+            "requirementText": criterion["requirementText"],
+            "weight": round(weight, 4),
+            "score": score,
+            "weightedScore": round(weight * score, 2),
+            "evidenceSummary": evidence,
+        }
+        if measurable_detail is not None:
+            debug_component["measurable"] = measurable_detail
+        debug_components.append(debug_component)
 
     total_score = round(sum(component["weightedScore"] for component in component_scores), 2)
     rationale = _build_rationale_summary(total_score, component_scores)
+    normalized_total_score = _clamp_score(total_score)
+    passed_threshold = normalized_total_score >= float(score_threshold)
+
+    if debug_logger is not None:
+        debug_logger.record_event(
+            "candidate_scored",
+            {
+                "candidateId": str(candidate.get("id") or candidate.get("candidateId") or ""),
+                "candidateDisplayName": str(
+                    candidate.get("display_name") or candidate.get("full_name") or candidate.get("resume_file_name") or ""
+                ).strip(),
+                "totalScore": normalized_total_score,
+                "passedThreshold": passed_threshold,
+                "componentScores": debug_components,
+            },
+        )
 
     return {
         "candidateId": str(candidate.get("id") or candidate.get("candidateId") or ""),
@@ -700,8 +808,8 @@ def _build_candidate_score(
         "candidateDisplayName": str(
             candidate.get("display_name") or candidate.get("full_name") or candidate.get("resume_file_name") or ""
         ).strip(),
-        "totalScore": _clamp_score(total_score),
-        "passedThreshold": _clamp_score(total_score) >= float(score_threshold),
+        "totalScore": normalized_total_score,
+        "passedThreshold": passed_threshold,
         "rationale": rationale,
         "componentScores": component_scores,
     }
@@ -720,6 +828,7 @@ def _extract_locked_rubric(
     llm: LLMProvider,
     job_description_text: str,
     section_weights: Optional[Dict[str, float]],
+    debug_logger: Optional[ScoringDebugLogger] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
         rubric_payload = _generate_json_with_retries(
@@ -730,12 +839,24 @@ def _extract_locked_rubric(
             ),
             parser=_parse_rubric_response,
             operation_name="rubric extraction",
+            debug_logger=debug_logger,
         )
         rubric = _normalize_rubric(rubric_payload, section_weights, source_text=job_description_text)
+        if debug_logger is not None:
+            debug_logger.record_event(
+                "rubric_normalized",
+                {
+                    "criteriaCount": len(rubric.get("criteria", [])),
+                    "sectionWeights": rubric.get("sectionWeights", {}),
+                    "criteria": rubric.get("criteria", []),
+                },
+            )
         return rubric if rubric.get("criteria") else None
     except Exception as exc:
         if _is_provider_limit_error(exc):
             raise
+        if debug_logger is not None:
+            debug_logger.record_error("rubric_extraction_failed", exc)
         return None
 
 
@@ -747,9 +868,11 @@ def _save_batch_scores(
     valid_candidate_ids: set[uuid.UUID],
     score_threshold: Decimal,
     starting_index: int,
+    debug_logger: Optional[ScoringDebugLogger] = None,
 ) -> tuple[int, int]:
     global_idx = starting_index
     passed_candidates_count = 0
+    persisted_candidates: List[Dict[str, Any]] = []
 
     for raw_score in batch_scores:
         score_data = _coerce_passed_threshold(raw_score, score_threshold)
@@ -777,7 +900,27 @@ def _save_batch_scores(
                 component_scores=score_data.get("componentScores") or [],
             )
         )
+        persisted_candidates.append(
+            {
+                "candidateId": str(candidate_id),
+                "scoreListIndex": global_idx,
+                "totalScore": score_data["totalScore"],
+                "passedThreshold": bool(score_data["passedThreshold"]),
+            }
+        )
         global_idx += 1
+
+    if debug_logger is not None:
+        debug_logger.record_event(
+            "batch_persist_completed",
+            {
+                "matchRunId": str(match_run_id),
+                "startingIndex": starting_index,
+                "nextIndex": global_idx,
+                "persistedCount": len(persisted_candidates),
+                "persistedCandidates": persisted_candidates,
+            },
+        )
 
     return global_idx, passed_candidates_count
 
@@ -825,6 +968,28 @@ def score_candidates(
     db.add(match_run)
     db.commit()
     db.refresh(match_run)
+    debug_logger = ScoringDebugLogger(str(match_run.id))
+    debug_logger.record_event(
+        "run_started",
+        {
+            "matchRunId": str(match_run.id),
+            "jobDescriptionId": str(job_description_id),
+            "initiatedByUserId": str(initiated_by_user_id),
+            "scoreThreshold": score_threshold,
+            "requestedCandidateIds": candidate_profile_ids or [],
+            "candidateCount": len(candidate_dicts),
+            "batchSize": batch_size,
+        },
+    )
+    debug_logger.record_event(
+        "job_description_prepared",
+        {
+            "publicJobDescription": preview_text(jd.jd_text),
+            "hiddenText": preview_text(getattr(jd, "hidden_text", "")),
+            "combinedTextLength": len(scoring_jd_text),
+            "sectionWeights": section_weights or {},
+        },
+    )
 
     all_scores: List[Dict[str, Any]] = []
     batch_size = max(1, min(batch_size, 50))
@@ -837,10 +1002,20 @@ def score_candidates(
             llm=llm,
             job_description_text=scoring_jd_text,
             section_weights=section_weights,
+            debug_logger=debug_logger,
         )
         global_idx = 0
         for i in range(0, len(candidate_dicts), batch_size):
             batch = candidate_dicts[i : i + batch_size]
+            debug_logger.record_event(
+                "batch_started",
+                {
+                    "batchIndex": batches_run,
+                    "candidateIds": [str(candidate.get("id") or "") for candidate in batch],
+                    "candidateDisplayNames": [str(candidate.get("display_name") or "") for candidate in batch],
+                    "usesLockedRubric": rubric is not None,
+                },
+            )
 
             if rubric is None:
                 parsed_scores = _generate_json_with_retries(
@@ -852,6 +1027,7 @@ def score_candidates(
                     ),
                     parser=lambda text: {"scores": _parse_llm_scores(text)},
                     operation_name="fallback batch scoring",
+                    debug_logger=debug_logger,
                 )
                 candidate_by_id = {str(candidate["id"]): candidate for candidate in batch}
                 batch_scores = [
@@ -871,6 +1047,7 @@ def score_candidates(
                             candidates=batch,
                             rubric={"criteria": semantic_criteria},
                         ),
+                        debug_logger=debug_logger,
                     )
 
                 batch_scores = []
@@ -882,6 +1059,7 @@ def score_candidates(
                             rubric=rubric,
                             semantic_result=semantic_result,
                             score_threshold=score_threshold,
+                            debug_logger=debug_logger,
                         )
                     )
 
@@ -895,6 +1073,7 @@ def score_candidates(
                 valid_candidate_ids=valid_candidate_ids,
                 score_threshold=score_threshold,
                 starting_index=global_idx,
+                debug_logger=debug_logger,
             )
             passed_candidates_count += passed_delta
             db.commit()
@@ -902,10 +1081,28 @@ def score_candidates(
         match_run.run_status = MatchRunStatus.COMPLETED.value
         match_run.completed_at = datetime.now(timezone.utc)
         db.commit()
+        debug_logger.record_event(
+            "run_completed",
+            {
+                "matchRunId": str(match_run.id),
+                "totalCandidates": len(candidate_dicts),
+                "totalPassedCandidates": passed_candidates_count,
+                "batches": batches_run,
+            },
+        )
 
     except Exception as exc:
         db.rollback()
         _mark_match_run_failed(db, match_run.id)
+        debug_logger.record_error(
+            "run_failed",
+            exc,
+            {
+                "matchRunId": str(match_run.id),
+                "jobDescriptionId": str(job_description_id),
+                "batchesCompleted": batches_run,
+            },
+        )
         if _is_provider_limit_error(exc):
             logger.error(
                 "Candidate scoring failed because the configured LLM provider hit a quota or rate limit. "

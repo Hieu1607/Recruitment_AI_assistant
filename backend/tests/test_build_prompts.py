@@ -135,6 +135,8 @@ def test_router_prompt_guides_name_lookup_count_and_comparison_queries():
 
     assert "Questions that mention explicit candidate names should use DSL with full_name." in prompt
     assert "If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible." in prompt
+    assert "Use DSL for: full_name, phone, email, location_normalized, graduation_status, ever_studied_abroad, experience_years." in prompt
+    assert "Use LLM for: contact, current_job_title, major, cpa" in prompt
     assert "Do not rely on graduation_status alone for broader concepts such as not yet graduating" in prompt
     assert "final-year" in prompt
 
@@ -198,3 +200,4 @@ def test_dsl_prompt_includes_current_time_context():
     prompt = BuildPrompts().build_dsl_query_prompt("Ai có 3 năm kinh nghiệm Python?")
 
     assert "Current time (UTC):" in prompt
+    assert "Do not generate filters for current_job_title, major, cpa, or contact" in prompt

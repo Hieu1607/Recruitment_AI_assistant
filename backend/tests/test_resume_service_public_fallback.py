@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from sqlalchemy import Text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -164,6 +165,12 @@ def test_build_profile_falls_back_to_submitted_name_and_email_when_parse_is_spar
     assert profile.submitted_email == "submitted@example.com"
 
 
+def test_candidate_profile_cpa_column_supports_unbounded_text():
+    cpa_column = CandidateProfile.__table__.columns["cpa"]
+
+    assert isinstance(cpa_column.type, Text)
+
+
 def test_parse_pdf_to_sections_persists_submitted_values_and_uses_fallbacks(
     monkeypatch,
 ):
@@ -181,11 +188,20 @@ def test_parse_pdf_to_sections_persists_submitted_values_and_uses_fallbacks(
     )
 
     class FakeProvider:
+        def __init__(self):
+            self.provider = "groq"
+            self.model_name = "fake-model"
+
+        def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
+            self.provider = provider or self.provider
+            self.model_name = model_name or self.model_name
+            return self
+
         def generate(self, prompt):
             return types.SimpleNamespace(
                 text=json.dumps({"name": "", "email": None, "skills": "Python"}),
-                provider="fake",
-                model="fake-model",
+                provider=self.provider,
+                model=self.model_name,
             )
 
     monkeypatch.setattr(resume_service, "LLMProvider", lambda **kwargs: FakeProvider())
@@ -345,6 +361,12 @@ def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
         def __init__(self):
             self.calls = 0
             self.model_name = "llama-3.1-8b-instant"
+            self.provider = "groq"
+
+        def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
+            self.provider = provider or self.provider
+            self.model_name = model_name or self.model_name
+            return self
 
         def generate(self, prompt):
             self.calls += 1
@@ -395,6 +417,83 @@ def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
     assert trace_payload["llm_attempts"][0]["parse_error"]["message"] == "LLM did not return a valid JSON object"
 
 
+def test_generate_resume_json_with_retries_uses_groq_shopaikey_sequence():
+    call_order = []
+    provider_call_counts = {"groq": 0, "shopaikey": 0}
+    logged_attempts = []
+
+    class FakeProvider:
+        def __init__(self, provider="groq", model_name="groq-model"):
+            self.provider = provider
+            self.model_name = model_name
+            self.temperature = 0.2
+            self.max_tokens = 4096
+            self.timeout_seconds = 60
+            self.max_retries = 0
+
+        def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
+            selected_provider = provider or self.provider
+            return FakeProvider(
+                provider=selected_provider,
+                model_name=model_name or f"{selected_provider}-model",
+            )
+
+        def generate(self, prompt):
+            provider_call_counts[self.provider] += 1
+            attempt = provider_call_counts[self.provider]
+            call_order.append(self.provider)
+
+            if self.provider == "groq" and attempt == 2:
+                text = json.dumps(
+                    {
+                        "name": "Retry Candidate",
+                        "email": "retry@example.com",
+                        "skills": "Python",
+                    }
+                )
+            else:
+                text = '{"name":"Broken"'
+
+            return types.SimpleNamespace(
+                text=text,
+                provider=self.provider,
+                model=self.model_name,
+            )
+
+    class FakeTraceLogger:
+        def record_llm_attempt(self, *, trace_id, payload):
+            logged_attempts.append(payload)
+
+    original_logger_factory = resume_service.get_resume_parse_trace_logger
+    resume_service.get_resume_parse_trace_logger = lambda: FakeTraceLogger()
+    try:
+        parsed, llm_response, attempt_count = resume_service._generate_resume_json_with_retries(
+            trace_id="trace-123",
+            stage="text",
+            llm_provider=FakeProvider(),
+            prompt="prompt",
+        )
+    finally:
+        resume_service.get_resume_parse_trace_logger = original_logger_factory
+
+    assert parsed["name"] == "Retry Candidate"
+    assert llm_response.provider == "groq"
+    assert attempt_count == 3
+    assert call_order == ["groq", "shopaikey", "groq"]
+    assert len(logged_attempts) == 3
+    assert logged_attempts[0]["provider"] == "groq"
+    assert logged_attempts[0]["model"] == resume_service.settings.RESUME_PARSE_MODEL_NAME
+    assert logged_attempts[0]["response_chars"] == len('{"name":"Broken"')
+    assert logged_attempts[0]["prompt_chars"] == len("prompt")
+    assert isinstance(logged_attempts[0]["request_duration_ms"], (int, float))
+    assert logged_attempts[0]["request_duration_ms"] >= 0
+    assert logged_attempts[0]["parse_error"]["message"] == "LLM did not return a valid JSON object"
+    assert logged_attempts[1]["provider"] == "shopaikey"
+    assert logged_attempts[1]["model"] == resume_service.settings.SHOPAIKEY_MODEL_NAME
+    assert logged_attempts[2]["provider"] == "groq"
+    assert logged_attempts[2]["parse_error"] is None
+
+
 def test_parse_pdf_to_sections_records_failure_trace_file(monkeypatch, tmp_path):
     db = FakeSession()
     job_id = uuid.uuid4()
@@ -410,6 +509,13 @@ def test_parse_pdf_to_sections_records_failure_trace_file(monkeypatch, tmp_path)
     class FakeProvider:
         def __init__(self):
             self.calls = 0
+            self.provider = "groq"
+            self.model_name = "llama-3.1-8b-instant"
+
+        def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
+            self.provider = provider or self.provider
+            self.model_name = model_name or self.model_name
+            return self
 
         def generate(self, prompt):
             self.calls += 1

@@ -73,17 +73,61 @@ function cleanDisplayLinks(links: StructuredLink[]) {
     .filter((link): link is StructuredLink => link !== null);
 }
 
+function comparableDisplayText(value: string | null | undefined) {
+  const normalized = cleanDisplayText(value);
+  if (!normalized) return null;
+  return normalized.toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function dedupeDisplayList(values: string[], existingValues: Array<string | null | undefined>) {
+  const seen = new Set(existingValues.map(comparableDisplayText).filter((item): item is string => item !== null));
+  const deduped: string[] = [];
+
+  for (const value of values) {
+    const key = comparableDisplayText(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(value);
+  }
+
+  return deduped;
+}
+
 function cleanStructuredEntry(entry: StructuredEntry): StructuredEntry | null {
+  const title = cleanDisplayText(entry.title);
+  const subtitle = cleanDisplayText(entry.subtitle);
+  const role = cleanDisplayText(entry.role);
+  const location = cleanDisplayText(entry.location);
+  const dateRange = cleanDisplayText(entry.dateRange);
+  const description = cleanDisplayText(entry.description);
+  const metadata = dedupeDisplayList(cleanDisplayList(entry.metadata), [
+    title,
+    subtitle,
+    role,
+    location,
+    dateRange,
+    description,
+  ]);
+  const bullets = dedupeDisplayList(cleanDisplayList(entry.bullets), [
+    title,
+    subtitle,
+    role,
+    location,
+    dateRange,
+    description,
+    ...metadata,
+  ]);
+
   const cleaned: StructuredEntry = {
-    title: cleanDisplayText(entry.title),
-    subtitle: cleanDisplayText(entry.subtitle),
-    role: cleanDisplayText(entry.role),
-    location: cleanDisplayText(entry.location),
-    dateRange: cleanDisplayText(entry.dateRange),
-    description: cleanDisplayText(entry.description),
-    bullets: cleanDisplayList(entry.bullets),
+    title,
+    subtitle,
+    role,
+    location,
+    dateRange,
+    description,
+    bullets,
     links: cleanDisplayLinks(entry.links),
-    metadata: cleanDisplayList(entry.metadata),
+    metadata,
   };
 
   if (

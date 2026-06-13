@@ -137,7 +137,7 @@ export default function SettingsRoute() {
                   API Keys
                 </h2>
                 <p className="text-fg-muted text-sm">
-                  Manage keys for programmatic access to the RecruitAI API.
+                  Manage keys for programmatic access to the EasyHR API.
                 </p>
                 <div className="border border-[color:var(--hairline)] rounded-[var(--radius-md)] p-4 flex items-center justify-between">
                   <div>

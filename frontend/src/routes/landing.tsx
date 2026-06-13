@@ -13,7 +13,7 @@ export default function LandingRoute() {
               <Sparkles className="w-4 h-4 text-accent-400" />
             </div>
             <span className="font-serif font-bold text-xl text-forest-900">
-              RecruitAI
+              EasyHR
             </span>
           </div>
           <div className="flex items-center gap-4">
@@ -57,7 +57,7 @@ export default function LandingRoute() {
               <div className="w-3 h-3 rounded-full bg-amber-400"></div>
               <div className="w-3 h-3 rounded-full bg-green-400"></div>
               <div className="mx-auto bg-white border border-sand-200 text-xs text-forest-400 px-4 py-1 rounded-md w-64 text-center">
-                app.recruitai.com
+                app.easyhr.com
               </div>
             </div>
             <div className="aspect-[16/10] bg-sand-50 relative flex items-center justify-center overflow-hidden">
@@ -182,7 +182,7 @@ export default function LandingRoute() {
               <div className="h-8 font-mono text-2xl">SYS.IO</div>
             </div>
             <blockquote className="text-3xl md:text-4xl font-serif font-light leading-snug">
-              "RecruitAI completely transformed our hiring pipeline. What used to take our team two weeks of manual screening now happens flawlessly in an afternoon."
+              "EasyHR completely transformed our hiring pipeline. What used to take our team two weeks of manual screening now happens flawlessly in an afternoon."
             </blockquote>
             <div className="flex items-center justify-center gap-4">
               <div className="w-12 h-12 bg-sand-200 rounded-full overflow-hidden"></div>
@@ -213,10 +213,10 @@ export default function LandingRoute() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-forest-900" />
-            <span className="font-serif font-bold text-lg text-forest-900">RecruitAI</span>
+            <span className="font-serif font-bold text-lg text-forest-900">EasyHR</span>
           </div>
           <div className="text-forest-500 text-sm">
-            © 2030 RecruitAI Platform Inc. All rights reserved.
+            © 2030 EasyHR Platform Inc. All rights reserved.
           </div>
           <div className="flex gap-6 text-sm text-forest-600">
             <a href="#" className="hover:text-forest-900">Privacy</a>

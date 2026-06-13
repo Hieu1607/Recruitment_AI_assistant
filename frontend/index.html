@@ -5,13 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#FAFAF7" />
-    <title>RecruitAI — Editorial Intelligence</title>
+    <title>EasyHR — Editorial Intelligence</title>
     <script>
       // Pre-hydration theme resolver — keep in sync with src/lib/theme.ts STORAGE_KEY.
       // Sets data-theme on <html> before first paint to avoid flash-of-wrong-theme.
       (function () {
         try {
-          var saved = localStorage.getItem("recruitai.theme");
+          var saved = localStorage.getItem("easyhr.theme");
           var theme = saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
           var applied = theme === "system"
             ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")

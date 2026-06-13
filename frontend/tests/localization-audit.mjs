@@ -4,6 +4,7 @@ import path from "node:path";
 const root = process.cwd();
 const localizerPath = path.join(root, "src", "components", "UiLocalizer.tsx");
 const localizerSource = fs.readFileSync(localizerPath, "utf8");
+const bannedBrand = "RecruitAI";
 
 function collectArrayEntries(name) {
   const match = localizerSource.match(
@@ -38,7 +39,7 @@ const requiredExactStrings = [
   "Stop guessing.",
   "Start measuring.",
   "VP of Talent, Nexus",
-  "© 2030 RecruitAI Platform Inc. All rights reserved.",
+  "© 2030 EasyHR Platform Inc. All rights reserved.",
   "Workspace job description",
   "This page follows the selected workspace. Manage the current job description from the active job context instead of treating it as a standalone resource.",
   "Back to workspace",
@@ -119,11 +120,25 @@ const requiredExactStrings = [
 ];
 
 const forbiddenInlineSources = ["question", "turn"];
+const brandingAuditFiles = [
+  "index.html",
+  "src/components/UiLocalizer.tsx",
+  "src/components/layout/Sidebar.tsx",
+  "src/components/layout/TopBar.tsx",
+  "src/components/jobs/JobWorkspaceGate.tsx",
+  "src/routes/apply.tsx",
+  "src/routes/landing.tsx",
+  "src/routes/login.tsx",
+  "src/routes/settings.tsx",
+];
 
 const missingExactStrings = requiredExactStrings.filter((entry) => !exactTranslations.has(entry));
 const forbiddenInlineEntries = forbiddenInlineSources.filter((entry) => inlineTranslations.has(entry));
+const brandingLeaks = brandingAuditFiles.filter((file) =>
+  fs.readFileSync(path.join(root, file), "utf8").includes(bannedBrand),
+);
 
-if (missingExactStrings.length > 0 || forbiddenInlineEntries.length > 0) {
+if (missingExactStrings.length > 0 || forbiddenInlineEntries.length > 0 || brandingLeaks.length > 0) {
   const problems = [];
   if (missingExactStrings.length > 0) {
     problems.push(
@@ -133,6 +148,11 @@ if (missingExactStrings.length > 0 || forbiddenInlineEntries.length > 0) {
   if (forbiddenInlineEntries.length > 0) {
     problems.push(
       `Unsafe inline translations still present:\n- ${forbiddenInlineEntries.join("\n- ")}`,
+    );
+  }
+  if (brandingLeaks.length > 0) {
+    problems.push(
+      `Old branding still present in frontend sources:\n- ${brandingLeaks.join("\n- ")}`,
     );
   }
   throw new Error(problems.join("\n\n"));

@@ -85,8 +85,8 @@ test("chat page keeps navigation fixed while conversation history can resize", a
   await authenticatePage(page, setup);
   await page.addInitScript(() => {
     if (sessionStorage.getItem("chat-sidebar-test-initialized")) return;
-    localStorage.removeItem("recruitai.app-shell-sidebar");
-    localStorage.removeItem("recruitai.chat-history-sidebar");
+    localStorage.removeItem("easyhr.app-shell-sidebar");
+    localStorage.removeItem("easyhr.chat-history-sidebar");
     sessionStorage.setItem("chat-sidebar-test-initialized", "true");
   });
   await page.goto(`${baseURL}/chat`);

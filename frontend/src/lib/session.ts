@@ -1,6 +1,6 @@
 import { useAuthStore } from "./auth";
 
-const TOKEN_KEY = "recruitai.token";
+const TOKEN_KEY = "easyhr.token";
 const LOGIN_PATH = "/login";
 const AUTH_CALLBACK_PATH = "/auth/callback";
 

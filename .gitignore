@@ -57,3 +57,7 @@ pdfs/
 # Playwright MCP artifacts
 .playwright-mcp/
 logs/
+.pytest_cache/
+
+#DATN
+EasyHR_DATN_LaTeX_Report/

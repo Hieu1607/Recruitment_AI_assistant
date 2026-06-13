@@ -514,7 +514,7 @@ export default function ChatRoute() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const historySidebar = useResizableSidebar({
-    storageKey: "recruitai.chat-history-sidebar",
+    storageKey: "easyhr.chat-history-sidebar",
     defaultWidth: 256,
     minWidth: 220,
     maxWidth: 420,

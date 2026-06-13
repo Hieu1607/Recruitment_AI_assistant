@@ -388,7 +388,7 @@ test("recruiter manages interview templates, sends an invitation, and completes 
   await page.goto(APP_URL);
   await page.evaluate(
     ([token, jobId]) => {
-      localStorage.setItem("recruitai.token", token);
+      localStorage.setItem("easyhr.token", token);
       localStorage.setItem("recruit_ai_selected_job_id", jobId);
     },
     ["playwright-token", job.id],
@@ -592,7 +592,7 @@ test("recruiter can revoke an active interview link from the interviews hub", as
   await page.goto(APP_URL);
   await page.evaluate(
     ([token, jobId]) => {
-      localStorage.setItem("recruitai.token", token);
+      localStorage.setItem("easyhr.token", token);
       localStorage.setItem("recruit_ai_selected_job_id", jobId);
     },
     ["playwright-token", job.id],
@@ -685,7 +685,7 @@ test("recruiter can delete an unused interview template from template detail", a
   await page.goto(APP_URL);
   await page.evaluate(
     ([token, jobId]) => {
-      localStorage.setItem("recruitai.token", token);
+      localStorage.setItem("easyhr.token", token);
       localStorage.setItem("recruit_ai_selected_job_id", jobId);
     },
     ["playwright-token", job.id],

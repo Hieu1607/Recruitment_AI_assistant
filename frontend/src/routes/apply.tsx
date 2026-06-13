@@ -56,7 +56,7 @@ export default function PublicApplyRoute() {
     <main className="min-h-full bg-bg px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-4xl flex-col justify-center">
         <div className="border-b border-[color:var(--hairline)] pb-6">
-          <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">RecruitAI application</p>
+          <p className="text-xs uppercase tracking-[0.22em] text-fg-subtle">EasyHR application</p>
           {jobQuery.isLoading ? (
             <div className="mt-4 space-y-3">
               <Skeleton className="h-12 w-2/3" />

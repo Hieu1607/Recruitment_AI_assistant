@@ -1,7 +1,7 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 const API_BASE_URL = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
-const TOKEN_KEY = "recruitai.token";
+const TOKEN_KEY = "easyhr.token";
 const SELECTED_JOB_KEY = "recruit_ai_selected_job_id";
 
 type AuthSetup = {
@@ -142,7 +142,7 @@ export async function seedWorkspace(
 export async function authenticatePage(page: Page, setup: AuthSetup) {
   await page.addInitScript(
     ([token, jobId]) => {
-      localStorage.setItem("recruitai.token", token);
+      localStorage.setItem("easyhr.token", token);
       localStorage.setItem("recruit_ai_selected_job_id", jobId);
     },
     [setup.accessToken, setup.jobId],

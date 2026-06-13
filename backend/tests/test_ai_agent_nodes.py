@@ -262,6 +262,106 @@ def test_dsl_node_recovers_named_candidates_when_generated_dsl_filters_everythin
     ]
 
 
+def test_dsl_node_drops_current_job_title_filters_when_field_not_allowed(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"filters": {"experience_years": {"operator": "gte", "value": 2}, "current_job_title": {"operator": "contains", "value": "Giáo viên dạy toán"}}, "must": [{"field": "current_job_title", "contains": "Giáo viên dạy toán"}], "should": []}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = dsl_node(
+        {
+            "question": "Đánh giá ứng viên phù hợp nhất với công việc này",
+            "router_output": {"dsl_relevant_fields": ["experience_years"]},
+            "current_candidates": [
+                {
+                    "id": "cand-1",
+                    "full_name": "Lê Thị Hòa",
+                    "experience_years": 3,
+                    "current_job_title": "Math Teacher at Nguyễn Du Secondary School",
+                },
+                {
+                    "id": "cand-2",
+                    "full_name": "Nguyễn Văn An",
+                    "experience_years": 5,
+                    "current_job_title": "Senior Software Engineer",
+                },
+                {
+                    "id": "cand-3",
+                    "full_name": "Intern One",
+                    "experience_years": 1,
+                    "current_job_title": "Math Teacher",
+                },
+            ],
+        }
+    )
+
+    assert result["dsl_candidates"] == [
+        {"id": "cand-1", "full_name": "Lê Thị Hòa", "experience_years": 3},
+        {"id": "cand-2", "full_name": "Nguyễn Văn An", "experience_years": 5},
+    ]
+
+
+def test_dsl_node_drops_semantic_only_filters_when_fields_not_allowed(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"filters": {"experience_years": {"operator": "gte", "value": 2}, "major": {"operator": "contains", "value": "Education"}, "cpa": {"operator": "contains", "value": "CPA"}, "contact": {"operator": "contains", "value": "Lan"}}, "must": [{"field": "major", "contains": "Education"}, {"field": "contact", "contains": "Lan"}], "should": [{"field": "cpa", "contains": "CPA"}]}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = dsl_node(
+        {
+            "question": "Tìm ứng viên phù hợp công việc này",
+            "router_output": {"dsl_relevant_fields": ["experience_years"]},
+            "current_candidates": [
+                {
+                    "id": "cand-1",
+                    "full_name": "Lê Thị Hòa",
+                    "experience_years": 3,
+                    "major": "Education",
+                    "cpa": "3.5 GPA",
+                    "contact": "Ms. Lan",
+                },
+                {
+                    "id": "cand-2",
+                    "full_name": "Nguyễn Văn An",
+                    "experience_years": 5,
+                    "major": "Computer Science",
+                    "cpa": "CPA inactive",
+                    "contact": "Mr. Minh",
+                },
+                {
+                    "id": "cand-3",
+                    "full_name": "Intern One",
+                    "experience_years": 1,
+                    "major": "Education",
+                    "cpa": "CPA",
+                    "contact": "Ms. Lan",
+                },
+            ],
+        }
+    )
+
+    assert result["dsl_candidates"] == [
+        {"id": "cand-1", "full_name": "Lê Thị Hòa", "experience_years": 3},
+        {"id": "cand-2", "full_name": "Nguyễn Văn An", "experience_years": 5},
+    ]
+
+
 def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatch):
     seen = {}
 
@@ -332,6 +432,33 @@ def test_router_node_overrides_educated_only_route_for_not_graduated_queries(mon
     assert result["router_output"]["llm_question_query"] == "Tìm các ứng viên chưa tốt nghiệp đại học"
     assert result["router_output"]["llm_relevant_fields"] == ["education_text", "summary_text"]
     assert "graduation-status semantics" in result["router_output"]["reasoning"]
+
+
+def test_router_node_moves_semantic_only_fields_from_dsl_to_llm(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["current_job_title", "major", "cpa", "contact", "experience_years"], "dsl_question_query": "SELECT * FROM candidates WHERE current_job_title = \'Giáo viên dạy toán\' AND major = \'Education\' AND experience_years >= 2", "llm_question_query": null, "dsl_relevant_fields": ["current_job_title", "major", "cpa", "contact", "experience_years"], "llm_relevant_fields": [], "reasoning": "Structured title, profile, and years filter"}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = router_node({"question": "Đánh giá ứng viên phù hợp nhất với công việc này"})
+
+    assert result["router_output"]["dsl_relevant_fields"] == ["experience_years"]
+    assert result["router_output"]["llm_relevant_fields"] == [
+        "current_job_title",
+        "major",
+        "cpa",
+        "contact",
+    ]
+    assert result["router_output"]["llm_question_query"] == "Đánh giá ứng viên phù hợp nhất với công việc này"
+    assert "semantic-field override" in result["router_output"]["reasoning"]
 
 
 def test_router_node_falls_back_when_truncated_json_parses_as_list(monkeypatch):
