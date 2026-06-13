@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     GROQ_VISION_MODEL_NAME: str = os.getenv(
         "GROQ_VISION_MODEL_NAME", "meta-llama/llama-4-scout-17b-16e-instruct"
     )
-    SHOPAIKEY_API_KEY: str = os.getenv("SHOPAIKEY_API_KEY", os.getenv("SHOPAI_API_KEY", ""))
+    SHOPAIKEY_API_KEY: str = os.getenv("SHOPAIKEY_API_KEY", "")
     SHOPAIKEY_BASE_URL: str = os.getenv("SHOPAIKEY_BASE_URL", "https://api.shopaikey.com/v1")
     SHOPAIKEY_MODEL_NAME: str = os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b")
 

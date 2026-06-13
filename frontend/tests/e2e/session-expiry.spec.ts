@@ -24,7 +24,7 @@ test("expired authenticated session redirects back to login instead of surfacing
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
   await page.evaluate(() => {
-    localStorage.setItem("recruitai.token", "expired.token.value");
+    localStorage.setItem("easyhr.token", "expired.token.value");
   });
 
   await page.getByRole("button", { name: "Save changes" }).click();

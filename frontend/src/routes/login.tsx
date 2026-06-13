@@ -116,7 +116,7 @@ export default function LoginRoute() {
         <div className="relative z-10">
           <Link to="/" className="flex items-center gap-2 text-sand-50 hover:text-white transition-colors w-fit">
             <Sparkles className="w-6 h-6" />
-            <span className="font-serif font-bold text-2xl">RecruitAI</span>
+            <span className="font-serif font-bold text-2xl">EasyHR</span>
           </Link>
         </div>
 
@@ -146,7 +146,7 @@ export default function LoginRoute() {
         {/* Mobile Header */}
         <div className="lg:hidden absolute top-8 left-8 flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-forest-900" />
-          <span className="font-serif font-bold text-xl text-forest-900">RecruitAI</span>
+          <span className="font-serif font-bold text-xl text-forest-900">EasyHR</span>
         </div>
 
         <div className="max-w-md w-full mx-auto space-y-8">

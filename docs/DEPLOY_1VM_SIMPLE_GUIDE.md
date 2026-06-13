@@ -88,7 +88,7 @@ Lý do:
 Để dễ đọc, tôi sẽ dùng các giá trị ví dụ sau:
 
 - Public IP của VM: `34.123.45.67`
-- Đường dẫn app trên VM: `/opt/recruitai`
+- Đường dẫn app trên VM: `/opt/easyhr`
 
 Khi bạn làm thật, hãy thay:
 
@@ -103,7 +103,7 @@ Trong Google Cloud Console, tạo một VM Ubuntu.
 
 Bạn có thể chọn:
 
-- Name: `recruitai-vm`
+- Name: `easyhr-vm`
 - Region: gần bạn, ví dụ Singapore
 - Machine type: `e2-standard-2`
 - Boot disk: `Ubuntu 22.04 LTS`
@@ -268,21 +268,21 @@ Vì đây là chỗ khá phổ biến để đặt ứng dụng tự quản lý 
 Chạy:
 
 ```bash
-git clone <YOUR_REPO_URL> recruitai
-cd /opt/recruitai
+git clone <YOUR_REPO_URL> easyhr
+cd /opt/easyhr
 ```
 
 Ví dụ:
 
 ```bash
-git clone https://github.com/your-org/Recruitment_AI_assistant.git recruitai
-cd /opt/recruitai
+git clone https://github.com/your-org/Recruitment_AI_assistant.git easyhr
+cd /opt/easyhr
 ```
 
 ### Ý nghĩa
 
-- `git clone ... recruitai`: tải source code về VM;
-- `cd /opt/recruitai`: vào thư mục project.
+- `git clone ... easyhr`: tải source code về VM;
+- `cd /opt/easyhr`: vào thư mục project.
 
 ### Kiểm tra nhanh
 
@@ -330,6 +330,9 @@ SECRET_KEY=replace-this-with-a-long-random-secret
 LLM_PROVIDER=groq
 GROQ_API_KEY=your_groq_api_key_here
 GROQ_MODEL_NAME=llama-3.1-8b-instant
+SHOPAIKEY_API_KEY=your_shopaikey_api_key_here
+SHOPAIKEY_BASE_URL=https://api.shopaikey.com/v1
+SHOPAIKEY_MODEL_NAME=llama-3.1-8b
 
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin123
@@ -427,7 +430,7 @@ Trong khi đó override production:
 Chạy lệnh sau trong thư mục repo:
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build db redis minio backend worker frontend
 ```
 
@@ -470,7 +473,7 @@ Trong trường hợp đó, sửa lỗi rồi chạy lại đúng lệnh build p
 Chạy:
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d db redis minio backend worker frontend
 ```
 
@@ -545,7 +548,7 @@ Ta test trực tiếp backend trước, để nếu lỗi thì biết lỗi ở 
 Tạo file config:
 
 ```bash
-sudo nano /etc/nginx/sites-available/recruitai
+sudo nano /etc/nginx/sites-available/easyhr
 ```
 
 Dán nội dung sau:
@@ -600,7 +603,7 @@ Lưu ý trước khi lưu file:
 - `server_name` có thể là IP hoặc domain, nhưng nếu khai báo nhiều host thì viết cách nhau bằng dấu cách, không dùng dấu phẩy. Ví dụ: `server_name easyhr.site www.easyhr.site;`
 - config này không còn dùng `root` của host để serve frontend.
 - frontend được serve bởi service `frontend` đang chạy với override production ở `127.0.0.1:5173`.
-- tên file `/etc/nginx/sites-available/recruitai` chỉ là tên file config; nó không quyết định app nằm ở đâu.
+- tên file `/etc/nginx/sites-available/easyhr` chỉ là tên file config; nó không quyết định app nằm ở đâu.
 
 Lưu file:
 
@@ -639,7 +642,7 @@ Lưu file:
 Chạy các lệnh sau:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/recruitai /etc/nginx/sites-enabled/recruitai
+sudo ln -s /etc/nginx/sites-available/easyhr /etc/nginx/sites-enabled/easyhr
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
@@ -669,7 +672,7 @@ sudo systemctl reload nginx
 Đừng reload vội. Hãy:
 
 ```bash
-sudo nano /etc/nginx/sites-available/recruitai
+sudo nano /etc/nginx/sites-available/easyhr
 ```
 
 sửa lỗi rồi chạy lại:
@@ -753,28 +756,28 @@ Nếu app không lên, chạy lần lượt:
 ### Kiểm tra container
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 docker compose ps
 ```
 
 ### Xem log backend
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 docker compose logs --tail=200 backend
 ```
 
 ### Xem log worker
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 docker compose logs --tail=200 worker
 ```
 
 ### Xem log frontend production
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=200 frontend
 ```
 
@@ -821,7 +824,7 @@ curl http://127.0.0.1:5173
 Chạy:
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 git pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build frontend
 ```
@@ -843,7 +846,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build fr
 Chạy:
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 git pull
 docker compose up -d --build backend worker
 ```
@@ -858,7 +861,7 @@ docker compose up -d --build backend worker
 Chạy:
 
 ```bash
-cd /opt/recruitai
+cd /opt/easyhr
 git pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build frontend backend worker
 ```

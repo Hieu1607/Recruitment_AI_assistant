@@ -51,7 +51,7 @@ class CandidateProfile(Base):
         server_default=GraduationStatus.UNKNOWN.value,
     )
     major: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    cpa: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cpa: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     education_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     experience_text: Mapped[str | None] = mapped_column(Text, nullable=True)

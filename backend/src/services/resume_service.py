@@ -17,7 +17,7 @@ from src.models.enums import GraduationStatus, ProfileStatus, UploadStatus
 from src.models.resume_document import ExtractionTrace, ResumeDocument
 from src.prompts.build_prompts import build_prompts
 from src.services.ai_agent.langgraph_trace import format_exception_payload
-from src.services.llm_service import LLMProvider
+from src.services.llm_service import LLMProvider, ProviderType
 from src.services.object_storage import get_object_storage, parse_storage_uri
 from src.services.resume_parse_trace import get_resume_parse_trace_logger
 
@@ -454,6 +454,10 @@ def _log_resume_llm_attempt(
     response_text: str,
     llm_response: Any,
     parse_error: Exception | None = None,
+    request_error: Exception | None = None,
+    prompt_chars: int | None = None,
+    response_chars: int | None = None,
+    request_duration_ms: float | None = None,
 ) -> None:
     get_resume_parse_trace_logger().record_llm_attempt(
         trace_id=trace_id,
@@ -467,8 +471,23 @@ def _log_resume_llm_attempt(
             "parse_error": (
                 format_exception_payload(parse_error) if parse_error is not None else None
             ),
+            "request_error": (
+                format_exception_payload(request_error) if request_error is not None else None
+            ),
+            "prompt_chars": prompt_chars,
+            "response_chars": response_chars,
+            "request_duration_ms": request_duration_ms,
         },
     )
+
+
+def _resume_text_parse_provider_specs() -> List[tuple[str, str]]:
+    return [
+        (ProviderType.GROQ.value, settings.RESUME_PARSE_MODEL_NAME),
+        (ProviderType.SHOPAIKEY.value, settings.SHOPAIKEY_MODEL_NAME),
+        (ProviderType.GROQ.value, settings.RESUME_PARSE_MODEL_NAME),
+        (ProviderType.SHOPAIKEY.value, settings.SHOPAIKEY_MODEL_NAME),
+    ]
 
 
 def _generate_resume_json_with_retries(
@@ -478,27 +497,86 @@ def _generate_resume_json_with_retries(
     llm_provider: LLMProvider,
     prompt: str,
 ) -> tuple[Dict[str, Any], Any, int]:
-    prompts = [
-        prompt,
-        f"{prompt}{_RESUME_JSON_RETRY_SUFFIX}",
-        (
-            "Repair the following response into one valid JSON object only. "
-            "Do not add commentary or markdown.\n\n"
-            f"Original prompt:\n{prompt}\n\n"
-            "Broken response:\n"
-            "{broken_response}"
-        ),
-    ]
     last_error: Exception | None = None
     last_response_text = ""
 
-    for attempt_number, attempt_prompt in enumerate(prompts, start=1):
-        prompt_text = (
-            attempt_prompt.format(broken_response=last_response_text)
-            if "{broken_response}" in attempt_prompt
-            else attempt_prompt
-        )
-        llm_response = llm_provider.generate(prompt_text)
+    for attempt_number, (provider_name, model_name) in enumerate(
+        _resume_text_parse_provider_specs(),
+        start=1,
+    ):
+        if not last_response_text:
+            prompt_text = prompt
+        else:
+            prompt_text = (
+                "Repair the following response into one valid JSON object only. "
+                "Do not add commentary or markdown.\n\n"
+                f"Original prompt:\n{prompt}\n\n"
+                "Broken response:\n"
+                f"{last_response_text}"
+            )
+
+        try:
+            attempt_provider = llm_provider.clone_with_model(
+                provider=provider_name,
+                model_name=model_name,
+                allow_fallback=False,
+            )
+        except TypeError:
+            attempt_provider = llm_provider.clone_with_model(
+                provider=provider_name,
+                model_name=model_name,
+            )
+        except Exception as exc:
+            last_error = exc
+            _log_resume_llm_attempt(
+                trace_id=trace_id,
+                attempt_number=attempt_number,
+                stage=stage,
+                prompt=prompt_text,
+                response_text="",
+                llm_response=type(
+                    "AttemptProvider",
+                    (),
+                    {"provider": provider_name, "model": model_name},
+                )(),
+                request_error=exc,
+            )
+            logger.warning(
+                "Resume parsing provider setup failed on attempt %s using provider %s model %s: %s",
+                attempt_number,
+                provider_name,
+                model_name,
+                exc,
+            )
+            continue
+
+        try:
+            request_started_at = time.perf_counter()
+            llm_response = attempt_provider.generate(prompt_text)
+            request_duration_ms = round((time.perf_counter() - request_started_at) * 1000, 3)
+        except Exception as exc:
+            last_error = exc
+            _log_resume_llm_attempt(
+                trace_id=trace_id,
+                attempt_number=attempt_number,
+                stage=stage,
+                prompt=prompt_text,
+                response_text="",
+                llm_response=attempt_provider,
+                request_error=exc,
+                prompt_chars=len(prompt_text),
+                response_chars=0,
+                request_duration_ms=round((time.perf_counter() - request_started_at) * 1000, 3),
+            )
+            logger.warning(
+                "Resume parsing request failed on attempt %s using provider %s model %s: %s",
+                attempt_number,
+                getattr(attempt_provider, "provider", "unknown"),
+                getattr(attempt_provider, "model_name", "unknown"),
+                exc,
+            )
+            continue
+
         last_response_text = llm_response.text
         try:
             parsed = _extract_json_object(llm_response.text)
@@ -512,6 +590,9 @@ def _generate_resume_json_with_retries(
                 response_text=llm_response.text,
                 llm_response=llm_response,
                 parse_error=exc,
+                prompt_chars=len(prompt_text),
+                response_chars=len(llm_response.text or ""),
+                request_duration_ms=request_duration_ms,
             )
             logger.warning(
                 "Resume parsing JSON parse failed on attempt %s using model %s: %s",
@@ -528,6 +609,9 @@ def _generate_resume_json_with_retries(
             prompt=prompt_text,
             response_text=llm_response.text,
             llm_response=llm_response,
+            prompt_chars=len(prompt_text),
+            response_chars=len(llm_response.text or ""),
+            request_duration_ms=request_duration_ms,
         )
         return parsed, llm_response, attempt_number
 

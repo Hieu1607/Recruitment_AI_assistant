@@ -78,6 +78,9 @@ _ALWAYS_INCLUDE: frozenset = frozenset({"id", "full_name"})
 _ALWAYS_SEMANTIC_FIELDS: frozenset = frozenset({"summary_text"})
 
 _MAX_CANDIDATES_FOR_RAG = 10
+_SEMANTIC_ONLY_DSL_FIELDS: frozenset = frozenset(
+    {"contact", "current_job_title", "major", "cpa"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +296,33 @@ def _match_candidates_by_name_in_question(
     return matches
 
 
+def _sanitize_dsl_for_allowed_fields(
+    dsl: Dict[str, Any],
+    allowed_fields: List[str],
+) -> Dict[str, Any]:
+    allowed = set(allowed_fields or [])
+    sanitized_filters = {
+        field: condition
+        for field, condition in (dsl.get("filters") or {}).items()
+        if field in allowed
+    }
+    sanitized_must = [
+        clause
+        for clause in (dsl.get("must") or [])
+        if clause.get("field") in allowed
+    ]
+    sanitized_should = [
+        clause
+        for clause in (dsl.get("should") or [])
+        if clause.get("field") in allowed
+    ]
+    return {
+        "filters": sanitized_filters,
+        "must": sanitized_must,
+        "should": sanitized_should,
+    }
+
+
 def _is_named_comparison_request(
     *,
     question: str,
@@ -379,6 +409,50 @@ def _override_router_output_for_graduation_status_semantics(
     return updated
 
 
+def _override_router_output_for_semantic_field_matching(
+    *,
+    question: str,
+    router_output: Dict[str, Any],
+) -> Dict[str, Any]:
+    dsl_fields = list(router_output.get("dsl_relevant_fields") or [])
+    semantic_dsl_fields = [
+        field for field in dsl_fields if field in _SEMANTIC_ONLY_DSL_FIELDS
+    ]
+    if not semantic_dsl_fields:
+        return router_output
+
+    updated = dict(router_output)
+    updated_dsl_fields = [
+        field for field in dsl_fields if field not in _SEMANTIC_ONLY_DSL_FIELDS
+    ]
+    llm_fields = list(router_output.get("llm_relevant_fields") or [])
+    for field in semantic_dsl_fields:
+        if field not in llm_fields:
+            llm_fields.append(field)
+    updated["dsl_relevant_fields"] = updated_dsl_fields
+    updated["llm_relevant_fields"] = llm_fields
+    updated["relevant_fields"] = [
+        field
+        for field in (router_output.get("relevant_fields") or [])
+        if field not in _SEMANTIC_ONLY_DSL_FIELDS
+    ]
+    if llm_fields and not updated.get("llm_question_query"):
+        updated["llm_question_query"] = question
+    if not updated_dsl_fields:
+        updated["dsl_question_query"] = None
+
+    existing_reasoning = str(router_output.get("reasoning") or "").strip()
+    suffix = (
+        "Fields such as current job title, major, CPA, and contact should use semantic LLM evidence because their values vary by language, formatting, and free-text conventions."
+    )
+    updated["reasoning"] = (
+        f"{existing_reasoning} semantic-field override: {suffix}"
+        if existing_reasoning
+        else f"semantic-field override: {suffix}"
+    )
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
@@ -417,6 +491,10 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
         router_output = _default_router_output(question)
 
     router_output = _override_router_output_for_graduation_status_semantics(
+        question=question,
+        router_output=router_output,
+    )
+    router_output = _override_router_output_for_semantic_field_matching(
         question=question,
         router_output=router_output,
     )
@@ -476,6 +554,7 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         dsl = _parse_json(response.text)
+        dsl = _sanitize_dsl_for_allowed_fields(dsl, dsl_relevant_fields)
         logger.info("[dsl_node] generated DSL filter: %s", json.dumps(dsl, ensure_ascii=False))
         dsl_candidates = _apply_dsl(candidates, dsl)
     except Exception:

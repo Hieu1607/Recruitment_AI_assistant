@@ -110,7 +110,7 @@ export function JobWorkspaceGate({
         <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-6xl flex-col">
           <div className="flex items-start justify-between gap-6">
             <div>
-              <p className="font-display text-2xl text-fg">RecruitAI</p>
+              <p className="font-display text-2xl text-fg">EasyHR</p>
               <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.24em] text-fg-subtle">
                 Editorial Intelligence
               </p>

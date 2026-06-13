@@ -79,9 +79,9 @@ export function TopBar({
       <Link
         to={routes.dashboard}
         className="flex items-baseline gap-2 shrink-0"
-        aria-label="RecruitAI — go to dashboard"
+        aria-label="EasyHR — go to dashboard"
       >
-        <span className="font-display text-lg font-medium leading-none text-fg">RecruitAI</span>
+        <span className="font-display text-lg font-medium leading-none text-fg">EasyHR</span>
       </Link>
 
       {/* Breadcrumb — derived from the active route */}

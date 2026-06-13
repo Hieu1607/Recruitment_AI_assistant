@@ -569,19 +569,20 @@ Return a JSON object with the following structure:
 3. Structured fields:
 - experience_years → numeric filters
 - location_normalized → exact match
-- current_job_title → contains
 - graduation_status → exact match
 
 4. Text fields:
 - skills_text, experience_text → use "contains"
 
-5. Logical conditions:
+5. Do not generate filters for current_job_title, major, cpa, or contact. These values often vary by language, abbreviations, formatting, employer suffixes, or free-text conventions, so matching them should be handled by the semantic LLM path instead.
+
+6. Logical conditions:
 - "và" → MUST (AND)
 - "hoặc" → SHOULD (OR)
 
-6. Extract keywords clearly (e.g., React, Python, Golang)
+7. Extract keywords clearly (e.g., React, Python, Golang)
 
-7. Return valid JSON only. No explanation.
+8. Return valid JSON only. No explanation.
 
 --- 
 		Question: """
@@ -692,11 +693,12 @@ Routing rules (only when is_recruitment_related is true):
 - dsl_question_query: rephrase the question for structured DB filtering. Set null if not applicable.
 - llm_question_query: rephrase the question for semantic LLM analysis. Set null if not applicable.
 - dsl_relevant_fields / llm_relevant_fields: fields from the schema below relevant to each path.
-- Use DSL for: full_name, phone, email, location_normalized, contact, current_job_title, graduation_status, ever_studied_abroad, major, cpa, experience_years.
-- Use LLM for: education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, other_text.
+- Use DSL for: full_name, phone, email, location_normalized, graduation_status, ever_studied_abroad, experience_years.
+- Use LLM for: contact, current_job_title, major, cpa, education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, other_text.
 - Questions that mention explicit candidate names should use DSL with full_name.
 - If the user asks to count candidates matching a name or other structured attribute, prefer DSL.
 - If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible.
+- Candidate role/title, major, CPA, and contact matching should prefer LLM routing because these values can be multilingual, abbreviated, decorated, or embedded in free text.
 - Do not rely on graduation_status alone for broader concepts such as not yet graduating, still studying, final-year students, expected graduation, or "chưa tốt nghiệp".
 - For those graduation-status semantics, prefer LLM routing with education_text and summary_text, because the relevant evidence may be described in free text and may span multiple statuses.
 - Both paths can apply to the same question.

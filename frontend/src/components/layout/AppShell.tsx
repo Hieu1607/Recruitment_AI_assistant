@@ -49,7 +49,7 @@ export function AppShell() {
     Boolean(jobsQuery.error) ||
     (jobsData !== undefined && !shouldAutoSelectSingleJob && (jobs.length === 0 || !hasValidSelection));
   const navSidebar = useResizableSidebar({
-    storageKey: "recruitai.app-shell-sidebar",
+    storageKey: "easyhr.app-shell-sidebar",
     defaultWidth: 240,
     minWidth: 240,
     maxWidth: 240,

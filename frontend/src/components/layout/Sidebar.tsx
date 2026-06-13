@@ -45,7 +45,7 @@ export function Sidebar({ onCollapse }: { onCollapse?: () => void }) {
       <div className="px-5 pt-5 pb-4">
         <div className="flex items-center justify-between gap-3">
           <p className="font-display text-[1.35rem] font-medium leading-none text-fg">
-            RecruitAI
+            EasyHR
           </p>
           {onCollapse && (
             <Tooltip content="Collapse navigation" side="right">

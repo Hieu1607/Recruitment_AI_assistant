@@ -417,7 +417,7 @@ async def google_callback(
   2. Chọn test user → Allow.
   3. Redirect qua `/auth/callback?token=...` → thấy "Signing you in…" 1 giây.
   4. Landing tại `/dashboard`, header hiện display_name từ Google.
-  5. `localStorage.getItem("recruitai.token")` có JWT.
+  5. `localStorage.getItem("easyhr.token")` có JWT.
   6. Decode JWT (jwt.io): `sub` là UUID, `email` là Gmail, `display_name` đúng.
 - [ ] **CP4.4** **E2E with redirect param:** truy cập `/login?redirect=/candidates` → click Google → sau login phải vào `/candidates`, không phải `/dashboard`.
 - [ ] **CP4.5** **Protected route:** refresh `/dashboard` sau login → vẫn ở đó (không bounce về `/login`). Existing guard dùng token trong localStorage — verify vẫn hoạt động.

@@ -148,6 +148,38 @@ def test_normalize_rubric_downgrades_unsupported_measurable_to_semantic():
     assert criterion["type"] == "semantic"
 
 
+def test_normalize_rubric_assigns_weight_to_other_section_when_runtime_weights_omit_it():
+    rubric = _normalize_rubric(
+        {
+            "criteria": [
+                {
+                    "key": "experience_years",
+                    "section": "experience",
+                    "requirementText": "2 years of experience",
+                    "type": "must_have",
+                    "measurable": {"field": "experience_years", "operator": ">=", "value": 2},
+                },
+                {
+                    "key": "friendly_personality",
+                    "section": "other",
+                    "requirementText": "Friendly and cheerful",
+                    "type": "semantic",
+                },
+            ]
+        },
+        section_weights={"skills": 25, "experience": 25, "education": 20, "projects": 20, "summary": 10},
+        source_text="Math teacher. At least 2 years of experience. Friendly and cheerful.",
+    )
+
+    assert [criterion["key"] for criterion in rubric["criteria"]] == [
+        "experience_years",
+        "friendly_personality",
+    ]
+    assert "other" in rubric["sectionWeights"]
+    assert rubric["sectionWeights"]["other"] > 0
+    assert round(sum(rubric["sectionWeights"].values()), 4) == 1.0
+
+
 def test_normalize_rubric_drops_invented_experience_threshold_when_jd_has_no_years():
     rubric = _normalize_rubric(
         {

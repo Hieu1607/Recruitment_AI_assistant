@@ -335,7 +335,7 @@ class _ShopAIKeyAdapter(_BaseAdapter):
         )
         if not api_key:
             raise LLMConfigurationError(
-                "SHOPAIKEY_API_KEY or SHOPAI_API_KEY is required for ShopAIKey fallback"
+                "SHOPAIKEY_API_KEY is required for ShopAIKey fallback"
             )
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -551,6 +551,7 @@ class LLMProvider:
         max_tokens: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
         max_retries: Optional[int] = None,
+        allow_fallback: bool = True,
     ):
         selected_provider = (provider or settings.LLM_PROVIDER or ProviderType.GROQ.value).lower()
         self.provider = ProviderType(selected_provider)
@@ -569,6 +570,7 @@ class LLMProvider:
         self.max_retries = max_retries
         self.model_name = model_name
         self._fallback_adapter: Optional[_BaseAdapter] = None
+        self.allow_fallback = allow_fallback
 
         if self.provider == ProviderType.GROQ:
             selected_model = model_name or settings.GROQ_MODEL_NAME
@@ -622,7 +624,11 @@ class LLMProvider:
         try:
             return self._adapter.chat(messages)
         except Exception as exc:
-            if self.provider != ProviderType.GROQ or self._fallback_adapter is None:
+            if (
+                self.provider != ProviderType.GROQ
+                or self._fallback_adapter is None
+                or not self.allow_fallback
+            ):
                 raise
             logger.warning(
                 "Primary Groq request failed; falling back to ShopAIKey. primary_model=%s fallback_model=%s error=%s",
@@ -668,6 +674,7 @@ class LLMProvider:
         *,
         provider: Optional[str] = None,
         model_name: Optional[str] = None,
+        allow_fallback: Optional[bool] = None,
     ) -> "LLMProvider":
         return LLMProvider(
             provider=provider or self.provider.value,
@@ -676,4 +683,5 @@ class LLMProvider:
             max_tokens=self.max_tokens,
             timeout_seconds=self.timeout_seconds,
             max_retries=self.max_retries,
+            allow_fallback=self.allow_fallback if allow_fallback is None else allow_fallback,
         )

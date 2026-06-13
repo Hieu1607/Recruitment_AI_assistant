@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type Theme = "light" | "dark" | "system";
-const STORAGE_KEY = "recruitai.theme";
+const STORAGE_KEY = "easyhr.theme";
 
 function loadStoredTheme(): Theme {
   if (typeof localStorage === "undefined") return "system";

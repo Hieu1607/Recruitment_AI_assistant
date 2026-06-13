@@ -94,7 +94,7 @@ OAuth2 với scope `openid email profile` **không bắt buộc phải enable AP
 
 | Field                              | Giá trị                                                  |
 |------------------------------------|----------------------------------------------------------|
-| App name                           | `RecruitAI` (user sẽ thấy tên này)                       |
+| App name                           | `EasyHR` (user sẽ thấy tên này)                          |
 | User support email                 | Email của bạn                                            |
 | App logo                           | (tùy chọn — bỏ qua khi dev)                              |
 | Application home page              | `http://localhost:5173` (dev); đổi sau khi deploy        |
@@ -135,7 +135,7 @@ Xác nhận **Publishing status = Testing**.
 1. Menu trái → **APIs & Services → Credentials**.
 2. Bấm **+ Create Credentials → OAuth client ID**.
 3. **Application type: Web application**. (KHÔNG chọn Desktop/Android/iOS.)
-4. Name: `RecruitAI Backend Dev` (chỉ bạn thấy, đặt gì cũng được).
+4. Name: `EasyHR Backend Dev` (chỉ bạn thấy, đặt gì cũng được).
 
 ### Authorized JavaScript origins
 
@@ -214,12 +214,12 @@ Bạn cần làm lại **Bước 4** với domain thật, HOẶC edit Client ID 
 
 **Authorized JavaScript origins:**
 ```
-https://recruitai.yourdomain.com
+https://easyhr.yourdomain.com
 ```
 
 **Authorized redirect URIs:**
 ```
-https://api.recruitai.yourdomain.com/api/v1/auth/google/callback
+https://api.easyhr.yourdomain.com/api/v1/auth/google/callback
 ```
 
 **Publishing status:** khi sẵn sàng cho public → OAuth consent screen → **Publish App**.
@@ -235,7 +235,7 @@ https://api.recruitai.yourdomain.com/api/v1/auth/google/callback
 | `Error 400: redirect_uri_mismatch`               | Redirect URI backend gửi khác với list ở GCP                                | So sánh **y hệt** từng ký tự. Kiểm tra trailing `/`, http vs https.  |
 | `Error 403: access_denied` + "app is being tested" | Email đăng nhập không nằm trong Test users                                  | Thêm email vào Test users (Bước 3).                                  |
 | `Error 401: invalid_client`                      | Client Secret sai hoặc đã reset                                             | Kiểm tra `.env`, copy lại Secret từ GCP.                             |
-| `This app isn't verified` warning                | App ở Testing mode (bình thường)                                            | Bấm Advanced → Go to RecruitAI (unsafe). Prod: publish + verify.     |
+| `This app isn't verified` warning                | App ở Testing mode (bình thường)                                            | Bấm Advanced → Go to EasyHR (unsafe). Prod: publish + verify.        |
 | `idpiframe_initialization_failed`                | Authorized JavaScript origin sai/thiếu                                      | Thêm `http://localhost:5173` vào Authorized JavaScript origins.      |
 | Nhận được code nhưng exchange thất bại           | Sai `grant_type` hoặc redirect_uri lúc exchange ≠ lúc authorize             | Khi exchange, redirect_uri phải **giống hệt** lúc authorize.         |
 | `invalid_grant` khi refresh                      | Code đã dùng rồi / hết hạn (code chỉ sống ~30 giây, dùng 1 lần)             | Không retry cùng 1 code. Login lại từ đầu.                           |
