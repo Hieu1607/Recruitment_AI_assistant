@@ -416,8 +416,6 @@ const exactTranslations = new Map<string, string>([
   ["Pass threshold", "Ngưỡng đạt"],
   ["0 — score all", "0 — chấm tất cả"],
   ["100 — perfect only", "100 — chỉ chấp nhận tuyệt đối"],
-  ["Batch size", "Kích thước lô"],
-  ["candidates per LLM batch (1–50)", "số ứng viên cho mỗi lô LLM (1–50)"],
   ["Internal criteria, preferred signals, red flags, compensation constraints...", "Tiêu chí nội bộ, tín hiệu ưu tiên, dấu hiệu cảnh báo, ràng buộc lương..."],
   ["Create a workspace for one role, candidate pool, JD, scoring history, and AI chat context.", "Tạo workspace cho một vị trí, danh sách ứng viên, JD, lịch sử chấm điểm và ngữ cảnh trò chuyện AI."],
   ["Job title", "Tên vị trí"],

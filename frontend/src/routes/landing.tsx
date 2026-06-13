@@ -2,6 +2,21 @@ import { Link } from "react-router";
 import { Button, Badge } from "@/components/ui";
 import { Sparkles, Users, FileText, Zap, ChevronRight, CheckCircle2 } from "lucide-react";
 
+const landingShowcases = {
+  overview: {
+    src: "/landing/image_1.png",
+    alt: "EasyHR dashboard overview",
+  },
+  scoring: {
+    src: "/landing/image_2.png",
+    alt: "EasyHR scoring interface",
+  },
+  assistant: {
+    src: "/landing/image_3.png",
+    alt: "EasyHR AI assistant interface",
+  },
+} as const;
+
 export default function LandingRoute() {
   return (
     <div className="min-h-screen bg-sand-50 selection:bg-accent-200">
@@ -60,24 +75,12 @@ export default function LandingRoute() {
                 app.easyhr.com
               </div>
             </div>
-            <div className="aspect-[16/10] bg-sand-50 relative flex items-center justify-center overflow-hidden">
-              {/* Abstract UI Representation */}
-              <div className="absolute inset-8 bg-white shadow-sm border border-sand-200 rounded-xl flex">
-                <div className="w-48 border-r border-sand-200 bg-sand-50 p-4 space-y-4">
-                  <div className="h-4 w-24 bg-sand-200 rounded"></div>
-                  <div className="h-4 w-32 bg-sand-200 rounded"></div>
-                  <div className="h-4 w-20 bg-sand-200 rounded"></div>
-                </div>
-                <div className="flex-1 p-8 space-y-8">
-                  <div className="h-8 w-64 bg-forest-100 rounded"></div>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="h-32 bg-sand-100 rounded-xl"></div>
-                    <div className="h-32 bg-sand-100 rounded-xl"></div>
-                    <div className="h-32 bg-sand-100 rounded-xl"></div>
-                  </div>
-                  <div className="h-64 bg-sand-100 rounded-xl"></div>
-                </div>
-              </div>
+            <div className="aspect-[16/10] bg-sand-50 relative overflow-hidden">
+              <img
+                src={landingShowcases.overview.src}
+                alt={landingShowcases.overview.alt}
+                className="h-full w-full object-cover object-top"
+              />
             </div>
           </div>
         </section>
@@ -143,19 +146,22 @@ export default function LandingRoute() {
               </ul>
             </div>
             <div className="aspect-square bg-sand-200 rounded-3xl overflow-hidden border border-sand-300 relative">
-              {/* Placeholder for actual product screenshot */}
-              <div className="absolute inset-0 flex items-center justify-center text-sand-400 font-medium">
-                [Scoring Interface Screenshot]
-              </div>
+              <img
+                src={landingShowcases.scoring.src}
+                alt={landingShowcases.scoring.alt}
+                className="h-full w-full object-cover object-left-top"
+              />
             </div>
           </div>
 
           {/* Feature 2 */}
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid md:grid-cols-2 gap-16 items-center">
             <div className="aspect-square bg-sand-200 rounded-3xl overflow-hidden border border-sand-300 relative order-2 md:order-1">
-              <div className="absolute inset-0 flex items-center justify-center text-sand-400 font-medium">
-                [AI Chat Interface Screenshot]
-              </div>
+              <img
+                src={landingShowcases.assistant.src}
+                alt={landingShowcases.assistant.alt}
+                className="h-full w-full object-cover object-left-top"
+              />
             </div>
             <div className="space-y-6 order-1 md:order-2">
               <Badge variant="neutral" className="bg-forest-100 text-forest-800">AI Assistant</Badge>

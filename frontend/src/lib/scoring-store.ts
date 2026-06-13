@@ -2,12 +2,12 @@ import { api, queryClient, type ScoreResponse } from "@/api";
 import { create } from "zustand";
 
 const STORAGE_KEY = "recruit_ai_scoring_runs_v1";
+const INTERNAL_SCORING_BATCH_SIZE = 3;
 
 export type ScoringRunStatus = "idle" | "running" | "completed" | "failed";
 
 export interface StartScoringRunInput {
   scoreThreshold: number;
-  batchSize: number;
   sectionWeights: Record<string, number>;
   candidateProfileIds?: string[];
   hiddenTextSnapshot?: string;
@@ -117,7 +117,7 @@ export const useScoringStore = create<ScoringStoreState>((set) => ({
     const request = api.jobs
       .score(jobId, {
         score_threshold: input.scoreThreshold,
-        batch_size: input.batchSize,
+        batch_size: INTERNAL_SCORING_BATCH_SIZE,
         section_weights: input.sectionWeights,
         candidate_profile_ids: input.candidateProfileIds,
       })

@@ -34,6 +34,7 @@ const PROCESSING_MESSAGES = [
   "Generating rationales…",
   "Finalising results…",
 ];
+const INTERNAL_SCORING_BATCH_SIZE = 3;
 
 const SEG_COLORS = ["#1F3A2E", "#2A5A78", "#5A3A7E", "#7A3A3A", "#3A5A3A", "#5A4A2A"];
 
@@ -165,7 +166,6 @@ export default function ScoringSetupRoute() {
   const [selectedCandIds, setSelectedCandIds] = useState<Set<string>>(new Set());
   const [sections, setSections] = useState<WeightSection[]>(DEFAULT_SECTIONS);
   const [threshold, setThreshold] = useState(50);
-  const [batchSize, setBatchSize] = useState(10);
   const [addSectionOpen, setAddSectionOpen] = useState(false);
 
   // ── step-2 state ──────────────────────────────────────────────────────────
@@ -203,6 +203,34 @@ export default function ScoringSetupRoute() {
 
   const resumes = useMemo(() => resumeData?.items ?? [], [resumeData?.items]);
 
+  const { data: setupStatus } = useQuery({
+    queryKey: ["jobs", selectedJobId, "setup-status"],
+    queryFn: () => (selectedJobId ? api.jobs.setupStatus.get(selectedJobId) : Promise.resolve(null)),
+    enabled: !!selectedJobId,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const latestScoreRunId =
+    setupStatus?.latest_score_run_id ?? scoringRun?.latestResult?.match_run_id ?? null;
+
+  const { data: latestScoreRunResult } = useQuery({
+    queryKey: ["jobs", selectedJobId, "score-runs", latestScoreRunId],
+    queryFn: () =>
+      selectedJobId && latestScoreRunId
+        ? api.jobs.scoreRuns.get(selectedJobId, latestScoreRunId)
+        : Promise.resolve(null),
+    enabled: !!selectedJobId && !!latestScoreRunId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    placeholderData:
+      scoringRun?.latestResult?.match_run_id === latestScoreRunId
+        ? scoringRun.latestResult
+        : undefined,
+  });
+
+  const scoreResult = latestScoreRunResult ?? scoringRun?.latestResult ?? null;
+
   useEffect(() => {
     if (!workspaceJd) {
       setHiddenText("");
@@ -230,13 +258,13 @@ export default function ScoringSetupRoute() {
       return;
     }
 
-    if (scoringRun?.latestResult) {
+    if (scoreResult) {
       setStep(3);
       return;
     }
 
     setStep(1);
-  }, [selectedJobId, scoringRun?.latestResult, scoringRun?.status]);
+  }, [scoreResult, selectedJobId, scoringRun?.status]);
 
   useEffect(() => {
     if (!selectedJobId || !scoringRun?.lastError) return;
@@ -300,7 +328,6 @@ export default function ScoringSetupRoute() {
   // ── result helpers ────────────────────────────────────────────────────────
 
   const sortedScores = useMemo(() => {
-    const scoreResult = scoringRun?.latestResult;
     if (!scoreResult) return [];
     return [...scoreResult.scores].sort((a, b) => {
       const av =
@@ -309,9 +336,7 @@ export default function ScoringSetupRoute() {
         resultSort.key === "totalScore" ? b.totalScore : b.passedThreshold ? 1 : 0;
       return resultSort.dir === "desc" ? bv - av : av - bv;
     });
-  }, [resultSort, scoringRun?.latestResult]);
-
-  const scoreResult = scoringRun?.latestResult ?? null;
+  }, [resultSort, scoreResult]);
 
   const avgScore =
     scoreResult && scoreResult.scores.length > 0
@@ -375,7 +400,6 @@ export default function ScoringSetupRoute() {
 
         return startRun(selectedJobId, {
           scoreThreshold: threshold,
-          batchSize,
           sectionWeights,
           candidateProfileIds:
             candidateMode === "specific" && selectedCandIds.size > 0
@@ -398,7 +422,9 @@ export default function ScoringSetupRoute() {
   const estSeconds = (() => {
     const n =
       candidateMode === "all" ? (resumeData?.total ?? 0) : selectedCandIds.size;
-    return n > 0 ? Math.max(15, Math.ceil(n / batchSize) * 15) : null;
+    return n > 0
+      ? Math.max(15, Math.ceil(n / INTERNAL_SCORING_BATCH_SIZE) * 15)
+      : null;
   })();
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -720,29 +746,6 @@ export default function ScoringSetupRoute() {
                     <span>0 — score all</span>
                     <span>100 — perfect only</span>
                   </div>
-                </div>
-
-                <div>
-                  <label className="text-xs font-sans font-medium text-fg-muted block mb-1.5">
-                    Batch size
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={batchSize}
-                    onChange={(e) =>
-                      setBatchSize(Math.min(50, Math.max(1, +e.target.value)))
-                    }
-                    className={cn(
-                      "w-24 h-9 px-3 text-sm font-mono tabular-nums rounded-[var(--radius-md)]",
-                      "border border-[color:var(--hairline-strong)] bg-bg text-fg outline-none",
-                      "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
-                    )}
-                  />
-                  <p className="text-[11px] text-fg-subtle font-sans mt-1">
-                    candidates per LLM batch (1–50)
-                  </p>
                 </div>
 
                 {estSeconds !== null && (

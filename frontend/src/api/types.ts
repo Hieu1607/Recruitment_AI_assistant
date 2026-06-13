@@ -186,7 +186,7 @@ export interface ScoreRequest {
   score_threshold?: number;              // 0 - 100, default 50
   candidate_profile_ids?: string[];      // UUIDs — omit to score all
   section_weights?: SectionWeights;
-  batch_size?: number;                   // 1 - 50, default 10
+  batch_size?: number;                   // 1 - 50, default 3
 }
 
 /**
