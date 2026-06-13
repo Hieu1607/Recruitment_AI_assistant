@@ -149,7 +149,7 @@ export default function LandingRoute() {
               <img
                 src={landingShowcases.scoring.src}
                 alt={landingShowcases.scoring.alt}
-                className="h-full w-full object-cover object-left-top"
+                className="h-full w-full object-cover object-right-top"
               />
             </div>
           </div>
@@ -160,7 +160,7 @@ export default function LandingRoute() {
               <img
                 src={landingShowcases.assistant.src}
                 alt={landingShowcases.assistant.alt}
-                className="h-full w-full object-cover object-left-top"
+                className="h-full w-full object-cover object-right-top"
               />
             </div>
             <div className="space-y-6 order-1 md:order-2">
