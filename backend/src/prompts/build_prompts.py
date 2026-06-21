@@ -610,6 +610,132 @@ Return a JSON object with the following structure:
 		
 """
 
+    def build_chat_semantic_map_prompt(
+        self,
+        question: str,
+        candidates: Iterable[Dict[str, Any]],
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload = {
+            "question": question,
+            "jobContext": job_context or {},
+            "candidates": list(candidates),
+            "responseFormat": {
+                "qualifiedCandidates": [
+                    {
+                        "id": "uuid",
+                        "name": "string",
+                        "score": 0.0,
+                        "reason": "short string",
+                    }
+                ],
+                "batchQualifiedCount": 0,
+            },
+        }
+        job_context_block = self._format_job_context(job_context)
+        return (
+            "You are the map step in a recruitment chat map-reduce pipeline. "
+            "Evaluate only this candidate batch against the user's question. "
+            "Return JSON only, with no markdown and no explanation outside JSON. "
+            "Include only candidates that are relevant matches. "
+            "Use ids and names exactly as provided. "
+            "Score each match from 0.0 to 1.0 and keep reason short and evidence-based. "
+            f"Write reason in {self._language_name()}.\n\n"
+            f"{self._current_time_block()}{job_context_block}"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
+
+    def build_chat_reduce_prompt(
+        self,
+        question: str,
+        map_results: Iterable[Dict[str, Any]],
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        summaries: List[Dict[str, Any]] = []
+        for result in map_results:
+            qualified = []
+            for candidate in result.get("qualifiedCandidates") or []:
+                qualified.append(
+                    {
+                        "id": candidate.get("id"),
+                        "name": candidate.get("name"),
+                        "score": candidate.get("score"),
+                        "reason": candidate.get("reason"),
+                    }
+                )
+            summaries.append(
+                {
+                    "qualifiedCandidates": qualified,
+                    "batchQualifiedCount": result.get(
+                        "batchQualifiedCount", len(qualified)
+                    ),
+                }
+            )
+
+        payload = {
+            "question": question,
+            "jobContext": job_context or {},
+            "mapSummaries": summaries,
+            "responseFormat": {
+                "totalQualified": 0,
+                "rankedCandidates": [
+                    {
+                        "id": "uuid",
+                        "name": "string",
+                        "score": 0.0,
+                        "reason": "short string",
+                    }
+                ],
+            },
+        }
+        job_context_block = self._format_job_context(job_context)
+        return (
+            "You are the reduce step in a recruitment chat map-reduce pipeline. "
+            "Use map summaries only; do not ask for or assume full candidate profiles. "
+            "Deduplicate candidates by id, rank the strongest matches first, and keep reasons compact. "
+            "Return JSON only, with no markdown and no explanation outside JSON. "
+            f"Write reason in {self._language_name()}.\n\n"
+            f"{self._current_time_block()}{job_context_block}"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
+
+    def build_compact_answer_prompt(
+        self,
+        question: str,
+        compact_candidates: Iterable[Dict[str, Any]],
+        total_count: int,
+        omitted_count: int,
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        identities = [
+            {
+                "id": str(candidate.get("id") or candidate.get("candidateId") or ""),
+                "full_name": candidate.get("full_name") or candidate.get("fullName"),
+            }
+            for candidate in compact_candidates
+        ]
+        payload = {
+            "question": question,
+            "totalQualifiedCandidates": int(total_count),
+            "omittedCandidateCount": int(omitted_count),
+            "candidates": identities,
+        }
+        job_context_block = self._format_job_context(job_context)
+        return f"""You are a recruitment assistant. Answer using only candidate ids and full_name values from the compact candidate list.
+
+Rules:
+- Write the answer in the SAME language as the question.
+- Explain that the result set is large and the displayed list is compact.
+- Mention the total qualified candidate count and omitted candidate count when omittedCandidateCount is greater than 0.
+- Do not invent profile details, skills, education, experience, or reasons that are not present in the compact list.
+- Keep the answer concise and recruiter-focused.
+- Offer one short follow-up suggestion to narrow or inspect candidates in more detail.
+
+{self._current_time_block()}{job_context_block}Compact candidate payload:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+Answer:"""
+
     def build_answer_prompt(
         self,
         question: str,

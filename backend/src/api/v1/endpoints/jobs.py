@@ -1366,6 +1366,11 @@ def chat_about_job(
             for candidate in dsl_pool
             if isinstance(candidate, dict) and candidate.get("id") is not None
         ]
+    else:
+        llm_result = result.get("llm_result") or {}
+        qualified_candidates = llm_result.get("qualified_candidates") or {}
+        if isinstance(qualified_candidates, dict) and qualified_candidates:
+            matched_candidate_ids = [str(candidate_id) for candidate_id in qualified_candidates.keys()]
     answer = result.get("answer") or ""
     turn = _persist_chat_turn(
         db,

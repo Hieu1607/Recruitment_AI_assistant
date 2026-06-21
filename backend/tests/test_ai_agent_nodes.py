@@ -365,7 +365,7 @@ def test_dsl_node_drops_semantic_only_filters_when_fields_not_allowed(monkeypatc
 def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatch):
     seen = {}
 
-    def fake_build_llm_query_prompt(question, candidates, job_context=None):
+    def fake_build_chat_semantic_map_prompt(question, candidates, job_context=None):
         seen["call"] = {"question": question, "candidates": candidates, "job_context": job_context}
         return "prompt"
 
@@ -382,8 +382,8 @@ def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatc
         ),
     )
     monkeypatch.setattr(
-        "src.services.ai_agent.nodes.build_prompts.build_llm_query_prompt",
-        fake_build_llm_query_prompt,
+        "src.services.ai_agent.nodes.build_prompts.build_chat_semantic_map_prompt",
+        fake_build_chat_semantic_map_prompt,
     )
 
     result = llm_node(

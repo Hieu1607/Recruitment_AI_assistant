@@ -12,6 +12,7 @@ Prompts used (from BuildPrompts):
 import json
 import logging
 import re
+import time
 import unicodedata
 from typing import Any, Dict, List, Optional
 
@@ -19,8 +20,16 @@ from langchain_core.messages import AIMessage
 
 from src.core.config import settings
 from src.prompts.build_prompts import build_prompts
+from src.services.ai_agent.chat_batching import (
+    AnswerMode,
+    build_chat_map_batches,
+    choose_answer_mode,
+    compact_map_result,
+    limit_compact_candidates,
+)
 from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 from src.services.llm_service import LLMProvider
+from src.services.token_budget import BudgetWindow, estimate_json_tokens, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +74,26 @@ def _record_llm_trace(
         event_type="llm_call",
         payload=payload,
     )
+
+
+def _record_chat_trace_event(
+    *,
+    state: Dict[str, Any],
+    event_type: str,
+    payload: Dict[str, Any],
+) -> None:
+    trace_id = state.get("trace_id")
+    if not trace_id:
+        return
+    get_trace_logger().record_event(
+        trace_id=trace_id,
+        event_type=event_type,
+        payload=payload,
+    )
+
+
+def _duration_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 2)
 
 # All valid filterable/queryable fields on CandidateProfile (excludes id/full_name)
 _ALL_CANDIDATE_FIELDS: frozenset = frozenset({
@@ -294,6 +323,78 @@ def _match_candidates_by_name_in_question(
         if normalized_name and normalized_name in normalized_question:
             matches.append(candidate)
     return matches
+
+
+def _normalize_map_response(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"qualifiedCandidates": [], "batchQualifiedCount": 0}
+    qualified = payload.get("qualifiedCandidates") or payload.get("qualified_candidates") or []
+    if isinstance(qualified, dict):
+        qualified = [
+            {"id": candidate_id, "reason": reason}
+            for candidate_id, reason in qualified.items()
+        ]
+    if not isinstance(qualified, list):
+        qualified = []
+    return compact_map_result(
+        {
+            "qualifiedCandidates": qualified,
+            "batchQualifiedCount": int(payload.get("batchQualifiedCount") or len(qualified)),
+        }
+    )
+
+
+def _normalize_reduce_response(payload: Any, map_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        payload = {}
+    ranked = (
+        payload.get("rankedCandidates")
+        or payload.get("ranked_candidates")
+        or payload.get("qualifiedCandidates")
+        or []
+    )
+    if isinstance(ranked, dict):
+        ranked = [
+            {"id": candidate_id, "reason": reason}
+            for candidate_id, reason in ranked.items()
+        ]
+    if not isinstance(ranked, list):
+        ranked = []
+    if not ranked:
+        for result in map_results:
+            ranked.extend(result.get("qualifiedCandidates") or [])
+
+    normalized_candidates: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for candidate in ranked:
+        if not isinstance(candidate, dict) or not candidate.get("id"):
+            continue
+        candidate_id = str(candidate["id"])
+        if candidate_id in seen_ids:
+            continue
+        seen_ids.add(candidate_id)
+        normalized_candidates.append(
+            {
+                "id": candidate_id,
+                "name": candidate.get("name") or candidate.get("full_name"),
+                "score": candidate.get("score", 0),
+                "reason": candidate.get("reason") or "",
+            }
+        )
+
+    total = int(
+        payload.get("totalQualified")
+        or payload.get("total_qualified_candidates")
+        or len(normalized_candidates)
+    )
+    return {
+        "total_qualified_candidates": total,
+        "qualified_candidates": {
+            candidate["id"]: candidate.get("reason") or ""
+            for candidate in normalized_candidates
+        },
+        "ranked_candidates": normalized_candidates,
+    }
 
 
 def _sanitize_dsl_for_allowed_fields(
@@ -616,19 +717,117 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
     candidates = _resolve_candidates(state, llm_relevant_fields, candidate_ids)
     logger.info("[llm_node] fetched %d candidate(s) for LLM analysis", len(candidates))
 
-    prompt = build_prompts.build_llm_query_prompt(llm_question, candidates, job_context=job_context)
+    chat_window = BudgetWindow(
+        context_window=settings.CHAT_CONTEXT_WINDOW_TOKENS,
+        output_budget=settings.CHAT_OUTPUT_TOKEN_BUDGET,
+        reserve=settings.CHAT_CONTEXT_RESERVE_TOKENS,
+    )
+    static_prompt_tokens = estimate_tokens(llm_question) + estimate_json_tokens(job_context or {})
+    map_batches = build_chat_map_batches(
+        question=llm_question,
+        candidates=candidates,
+        job_context=job_context,
+        static_prompt_tokens=static_prompt_tokens,
+        window=chat_window,
+        max_candidates_per_batch=settings.CHAT_MAX_CANDIDATES_PER_MAP_BATCH,
+    )
+    _record_chat_trace_event(
+        state=state,
+        event_type="chat_map_plan_created",
+        payload={
+            "candidateCount": len(candidates),
+            "mapBatchCount": len(map_batches),
+            "plannerSettings": {
+                "staticPromptTokens": static_prompt_tokens,
+                "inputBudgetTokens": chat_window.input_budget,
+                "outputBudgetTokens": chat_window.output_budget,
+                "contextWindowTokens": chat_window.context_window,
+                "reserveTokens": chat_window.reserve,
+                "maxCandidatesPerMapBatch": settings.CHAT_MAX_CANDIDATES_PER_MAP_BATCH,
+            },
+            "batchSizes": [len(batch.candidates) for batch in map_batches],
+        },
+    )
+
+    map_results: List[Dict[str, Any]] = []
+    for batch_index, map_batch in enumerate(map_batches):
+        map_started_at = time.perf_counter()
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_map_batch_started",
+            payload={
+                "batchIndex": batch_index,
+                "candidateCount": len(map_batch.candidates),
+                "estimatedInputTokens": map_batch.estimated_input_tokens,
+                "estimatedOutputTokens": map_batch.estimated_output_tokens,
+            },
+        )
+        prompt = build_prompts.build_chat_semantic_map_prompt(
+            llm_question,
+            map_batch.candidates,
+            job_context=job_context,
+        )
+        try:
+            response = _get_llm().generate(prompt)
+        except Exception as exc:
+            _record_llm_trace(state=state, node_name="llm_map", prompt=prompt, error=exc)
+            raise
+        _record_llm_trace(state=state, node_name="llm_map", prompt=prompt, response=response)
+
+        try:
+            map_result = _normalize_map_response(_parse_json(response.text))
+        except Exception:
+            logger.warning("[llm_node] failed to parse map JSON response; raw=%r", response.text[:300])
+            map_result = {"qualifiedCandidates": [], "batchQualifiedCount": 0}
+        map_results.append(map_result)
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_map_batch_completed",
+            payload={
+                "batchIndex": batch_index,
+                "durationMs": _duration_ms(map_started_at),
+                "qualifiedCandidateCount": len(map_result.get("qualifiedCandidates") or []),
+            },
+        )
+
+    reduce_started_at = time.perf_counter()
+    reduce_prompt = build_prompts.build_chat_reduce_prompt(
+        llm_question,
+        map_results,
+        job_context=job_context,
+    )
     try:
-        response = _get_llm().generate(prompt)
+        reduce_response = _get_llm().generate(reduce_prompt)
     except Exception as exc:
-        _record_llm_trace(state=state, node_name="llm", prompt=prompt, error=exc)
+        _record_llm_trace(state=state, node_name="llm_reduce", prompt=reduce_prompt, error=exc)
         raise
-    _record_llm_trace(state=state, node_name="llm", prompt=prompt, response=response)
+    _record_llm_trace(state=state, node_name="llm_reduce", prompt=reduce_prompt, response=reduce_response)
 
     try:
-        llm_result = _parse_json(response.text)
+        llm_result = _normalize_reduce_response(_parse_json(reduce_response.text), map_results)
     except Exception:
-        logger.warning("[llm_node] failed to parse LLM JSON response; raw=%r", response.text[:300])
-        llm_result = {"total_qualified_candidates": 0, "qualified_candidates": {}}
+        logger.warning("[llm_node] failed to parse reduce JSON response; raw=%r", reduce_response.text[:300])
+        llm_result = _normalize_reduce_response({}, map_results)
+
+    ranked_candidates = llm_result.get("ranked_candidates") or []
+    answer_mode = choose_answer_mode(
+        candidates=ranked_candidates,
+        detailed_threshold=settings.CHAT_MAX_DETAILED_FINAL_CANDIDATES,
+        compact_threshold=settings.CHAT_MAX_COMPACT_FINAL_CANDIDATES,
+        estimated_full_tokens=estimate_json_tokens(ranked_candidates),
+        final_input_budget=chat_window.input_budget,
+    )
+    llm_result["answer_mode"] = answer_mode.value
+    _record_chat_trace_event(
+        state=state,
+        event_type="chat_reduce_completed",
+        payload={
+            "durationMs": _duration_ms(reduce_started_at),
+            "mapResultCount": len(map_results),
+            "qualifiedCandidateCount": len(llm_result.get("qualified_candidates") or {}),
+            "answerMode": answer_mode.value,
+        },
+    )
 
     total = llm_result.get("total_qualified_candidates") or 0
     qualified_ids = list((llm_result.get("qualified_candidates") or {}).keys())
@@ -704,18 +903,49 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if not candidates:
         logger.info("[answer_node] result: no candidates after DB fetch; asking LLM for natural no-match answer")
 
+    try:
+        answer_mode = AnswerMode((llm_result or {}).get("answer_mode") or AnswerMode.DETAILED.value)
+    except ValueError:
+        answer_mode = AnswerMode.DETAILED
+
     # --- If too many candidates, trim to id + full_name only ---
-    if len(candidates) > _MAX_CANDIDATES_FOR_RAG:
+    use_compact_answer = answer_mode == AnswerMode.COMPACT_ID_NAME or len(candidates) > _MAX_CANDIDATES_FOR_RAG
+    total_qualified = int((llm_result or {}).get("total_qualified_candidates") or len(candidates))
+    if use_compact_answer:
         logger.info(
-            "[answer_node] %d candidates exceed limit (%d), trimming to id+full_name only",
+            "[answer_node] compact answer mode selected for %d candidate(s); trimming to id+full_name only",
             len(candidates),
-            _MAX_CANDIDATES_FOR_RAG,
         )
-        candidates = [{"id": c.get("id"), "full_name": c.get("full_name")} for c in candidates]
+        max_compact = settings.CHAT_MAX_COMPACT_FINAL_CANDIDATES
+        compact_candidates = limit_compact_candidates(candidates, max_compact)
+        omitted_count = max(0, total_qualified - len(compact_candidates))
+        candidates = compact_candidates
+    else:
+        omitted_count = 0
 
     # --- RAG: ask LLM to answer using the retrieved candidate data ---
     logger.info("[answer_node] calling LLM with %d candidate(s)", len(candidates))
-    prompt = build_prompts.build_answer_prompt(question, candidates, job_context=job_context)
+    if use_compact_answer:
+        prompt = build_prompts.build_compact_answer_prompt(
+            question,
+            candidates,
+            total_count=total_qualified,
+            omitted_count=omitted_count,
+            job_context=job_context,
+        )
+    else:
+        prompt = build_prompts.build_answer_prompt(question, candidates, job_context=job_context)
+    _record_chat_trace_event(
+        state=state,
+        event_type="chat_answer_prompt_built",
+        payload={
+            "answerMode": answer_mode.value,
+            "candidateCount": len(candidates),
+            "totalQualifiedCandidates": total_qualified,
+            "omittedCandidateCount": omitted_count,
+            "estimatedPromptTokens": estimate_tokens(prompt),
+        },
+    )
     try:
         response = _get_llm().generate(prompt)
     except Exception as exc:
