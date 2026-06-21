@@ -236,8 +236,9 @@ function OverviewStory() {
 
           <div className="relative mt-5 h-[280px] md:h-[320px]">
             <div
-              className={`absolute inset-0 rounded-[24px] border border-sand-200 bg-white p-5 transition-all duration-700 ${
-                activeIndex === 0 ? "scale-100 opacity-100" : "scale-95 opacity-0 pointer-events-none"
+              aria-hidden={activeIndex !== 0}
+              className={`absolute inset-0 rounded-[24px] border border-sand-200 bg-white p-5 transition-all duration-500 ${
+                activeIndex === 0 ? "block scale-100 opacity-100" : "hidden"
               }`}
             >
               <div className="flex items-center justify-between">
@@ -275,8 +276,9 @@ function OverviewStory() {
             </div>
 
             <div
-              className={`absolute inset-0 rounded-[24px] border border-sand-200 bg-white p-5 transition-all duration-700 ${
-                activeIndex === 1 ? "scale-100 opacity-100" : "scale-95 opacity-0 pointer-events-none"
+              aria-hidden={activeIndex !== 1}
+              className={`absolute inset-0 rounded-[24px] border border-sand-200 bg-white p-5 transition-all duration-500 ${
+                activeIndex === 1 ? "block scale-100 opacity-100" : "hidden"
               }`}
             >
               <div className="flex items-center justify-between">
@@ -315,8 +317,9 @@ function OverviewStory() {
             </div>
 
             <div
-              className={`absolute inset-0 rounded-[24px] border border-sand-200 bg-white p-5 transition-all duration-700 ${
-                activeIndex === 2 ? "scale-100 opacity-100" : "scale-95 opacity-0 pointer-events-none"
+              aria-hidden={activeIndex !== 2}
+              className={`absolute inset-0 rounded-[24px] border border-sand-200 bg-white p-5 transition-all duration-500 ${
+                activeIndex === 2 ? "block scale-100 opacity-100" : "hidden"
               }`}
             >
               <div className="flex items-center justify-between">
