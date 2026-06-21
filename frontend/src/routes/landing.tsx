@@ -373,130 +373,130 @@ function ShowcaseWalkthrough({
   type: "assistant" | "scoring";
 }) {
   const isScoring = type === "scoring";
+  const activeStep = steps[activeIndex];
 
   return (
     <div
       data-testid={testId}
-      className="relative aspect-square overflow-hidden rounded-3xl border border-sand-300 bg-[radial-gradient(circle_at_top_right,_rgba(27,55,39,0.08),_transparent_36%),linear-gradient(180deg,_#fffcf4,_#f4efe2)] p-5"
+      className="relative aspect-square overflow-hidden rounded-3xl border border-sand-300 bg-[radial-gradient(circle_at_top_right,_rgba(27,55,39,0.08),_transparent_36%),linear-gradient(180deg,_#fffcf4,_#f4efe2)] p-4 md:p-5"
     >
       <div className="rounded-[28px] border border-white/70 bg-white/90 p-4 shadow-xl shadow-forest-900/10">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-forest-400">{isScoring ? "Live walkthrough" : "Conversational search"}</p>
-            <h3 className="mt-2 font-serif text-2xl text-forest-900">{steps[activeIndex]?.title}</h3>
+            <h3 className="mt-2 font-serif text-2xl text-forest-900">{activeStep?.title}</h3>
           </div>
           <div className="rounded-full bg-forest-100 px-3 py-1 text-xs font-medium text-forest-700">
             {activeIndex + 1} / {steps.length}
           </div>
         </div>
-        <p className="mt-3 text-sm leading-6 text-forest-600">{steps[activeIndex]?.detail}</p>
+        <p className="mt-3 text-sm leading-6 text-forest-600">{activeStep?.detail}</p>
       </div>
 
-      <div className="mt-5 grid gap-3">
+      <div className="mt-4 rounded-[26px] border border-sand-200 bg-white/85 p-4 shadow-lg shadow-forest-900/5 transition-all duration-700">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-100 text-accent-700">
+              {isScoring ? <SlidersHorizontal className="h-4 w-4" /> : <MessageSquareText className="h-4 w-4" />}
+            </div>
+            <div>
+              <p className="font-medium text-forest-900">{activeStep?.title}</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-forest-400">{activeStep?.kicker}</p>
+            </div>
+          </div>
+          <div className="h-2.5 w-20 rounded-full bg-accent-500"></div>
+        </div>
+
+        {isScoring ? (
+          <div className="mt-4 grid gap-2">
+            {activeIndex === 0 &&
+              [
+                ["Technical fit", "80%"],
+                ["Domain context", "65%"],
+                ["Communication", "55%"],
+              ].map(([label, value], barIndex) => (
+                <div key={label} className="grid grid-cols-[1fr_auto] items-center gap-3">
+                  <p className="text-sm text-forest-600">{label}</p>
+                  <p className="text-xs font-medium text-forest-500">{value}</p>
+                  <div className="col-span-2 h-2 rounded-full bg-sand-200">
+                    <div
+                      className="h-2 rounded-full bg-forest-900 transition-all duration-700"
+                      style={{ width: `${58 + barIndex * 14}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            {activeIndex === 1 &&
+              [
+                ["Avery Chen", "92"],
+                ["Jordan Lee", "88"],
+                ["Priya Raman", "84"],
+              ].map(([name, score], rowIndex) => (
+                <div
+                  key={name}
+                  className={`flex items-center justify-between rounded-2xl px-3 py-3 ${
+                    rowIndex === 0 ? "bg-accent-50" : "bg-sand-50"
+                  }`}
+                >
+                  <p className="text-sm font-medium text-forest-900">{name}</p>
+                  <p className="rounded-xl bg-white px-2 py-1 text-sm font-semibold text-forest-800">{score}</p>
+                </div>
+              ))}
+            {activeIndex === 2 && (
+              <div className="rounded-[20px] bg-forest-900 p-4 text-sand-50">
+                <p className="text-xs uppercase tracking-[0.18em] text-forest-200">Rationale</p>
+                <p className="mt-3 text-sm leading-6">
+                  Avery leads because frontend architecture depth and team leadership both clear the hiring threshold.
+                </p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-2">
+            {activeIndex === 0 && (
+              <div className="rounded-[20px] bg-sand-50 p-4">
+                <p className="text-sm text-forest-600">Who has 5+ years of React and lives in Europe?</p>
+              </div>
+            )}
+            {activeIndex === 1 && (
+              <div className="flex flex-wrap gap-2">
+                {["React", "Europe", "5+ years", "Open to remote"].map((chip) => (
+                  <span key={chip} className="rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700">
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            )}
+            {activeIndex === 2 &&
+              [
+                ["Avery Chen", "Frontend Lead"],
+                ["Noah Martins", "Senior React Engineer"],
+              ].map(([name, role]) => (
+                <div key={name} className="flex items-center justify-between rounded-2xl bg-sand-50 px-3 py-3">
+                  <div>
+                    <p className="text-sm font-medium text-forest-900">{name}</p>
+                    <p className="text-xs text-forest-500">{role}</p>
+                  </div>
+                  <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-forest-700">Match</div>
+                </div>
+              ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-2">
         {steps.map((step, index) => {
           const isActive = index === activeIndex;
 
           return (
             <div
               key={step.id}
-              className={`rounded-[24px] border px-4 py-4 transition-all duration-700 ${
-                isActive
-                  ? "border-accent-300 bg-white scale-[1.03] shadow-lg shadow-accent-100/40"
-                  : "border-sand-200 bg-white/70 opacity-75"
+              className={`rounded-2xl border px-3 py-3 transition-all duration-500 ${
+                isActive ? "border-accent-300 bg-accent-50" : "border-sand-200 bg-white/70"
               }`}
             >
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-2xl ${
-                      isActive ? "bg-accent-100 text-accent-700" : "bg-sand-100 text-forest-600"
-                    }`}
-                  >
-                    {isScoring ? <SlidersHorizontal className="h-4 w-4" /> : <MessageSquareText className="h-4 w-4" />}
-                  </div>
-                  <div>
-                    <p className="font-medium text-forest-900">{step.title}</p>
-                    <p className="text-xs uppercase tracking-[0.18em] text-forest-400">{step.kicker}</p>
-                  </div>
-                </div>
-                <div className={`h-2.5 w-20 rounded-full ${isActive ? "bg-accent-500" : "bg-sand-200"}`}></div>
-              </div>
-
-              {isScoring ? (
-                <div className="mt-4 grid gap-2">
-                  {index === 0 &&
-                    [
-                      ["Technical fit", "80%"],
-                      ["Domain context", "65%"],
-                      ["Communication", "55%"],
-                    ].map(([label, value], barIndex) => (
-                      <div key={label} className="grid grid-cols-[1fr_auto] items-center gap-3">
-                        <p className="text-sm text-forest-600">{label}</p>
-                        <p className="text-xs font-medium text-forest-500">{value}</p>
-                        <div className="col-span-2 h-2 rounded-full bg-sand-200">
-                          <div
-                            className="h-2 rounded-full bg-forest-900 transition-all duration-700"
-                            style={{ width: `${58 + barIndex * 14}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  {index === 1 &&
-                    [
-                      ["Avery Chen", "92"],
-                      ["Jordan Lee", "88"],
-                      ["Priya Raman", "84"],
-                    ].map(([name, score], rowIndex) => (
-                      <div
-                        key={name}
-                        className={`flex items-center justify-between rounded-2xl px-3 py-3 ${
-                          rowIndex === 0 ? "bg-accent-50" : "bg-sand-50"
-                        }`}
-                      >
-                        <p className="text-sm font-medium text-forest-900">{name}</p>
-                        <p className="rounded-xl bg-white px-2 py-1 text-sm font-semibold text-forest-800">{score}</p>
-                      </div>
-                    ))}
-                  {index === 2 && (
-                    <div className="rounded-[20px] bg-forest-900 p-4 text-sand-50">
-                      <p className="text-xs uppercase tracking-[0.18em] text-forest-200">Rationale</p>
-                      <p className="mt-3 text-sm leading-6">
-                        Avery leads because frontend architecture depth and team leadership both clear the hiring threshold.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="mt-4 grid gap-2">
-                  {index === 0 && (
-                    <div className="rounded-[20px] bg-sand-50 p-4">
-                      <p className="text-sm text-forest-600">Who has 5+ years of React and lives in Europe?</p>
-                    </div>
-                  )}
-                  {index === 1 && (
-                    <div className="flex flex-wrap gap-2">
-                      {["React", "Europe", "5+ years", "Open to remote"].map((chip) => (
-                        <span key={chip} className="rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700">
-                          {chip}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {index === 2 &&
-                    [
-                      ["Avery Chen", "Frontend Lead"],
-                      ["Noah Martins", "Senior React Engineer"],
-                    ].map(([name, role]) => (
-                      <div key={name} className="flex items-center justify-between rounded-2xl bg-sand-50 px-3 py-3">
-                        <div>
-                          <p className="text-sm font-medium text-forest-900">{name}</p>
-                          <p className="text-xs text-forest-500">{role}</p>
-                        </div>
-                        <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-forest-700">Match</div>
-                      </div>
-                    ))}
-                </div>
-              )}
+              <p className="text-[11px] uppercase tracking-[0.16em] text-forest-400">{step.kicker}</p>
+              <p className="mt-2 text-sm font-medium leading-5 text-forest-900">{step.title}</p>
             </div>
           );
         })}
