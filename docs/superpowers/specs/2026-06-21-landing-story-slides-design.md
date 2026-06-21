@@ -1,135 +1,168 @@
-# Landing Story Slides Design
+# Landing Storyboard Redesign
 
 Date: 2026-06-21
-Status: Approved for implementation
-Scope: Replace the three landing page showcase images with lightweight JavaScript-driven story slides that explain the product flow more clearly
+Status: Drafted for user review
+Scope: Replace the landing page showcase slideshow treatment with a storyboard-style section that reflects the real EasyHR product flow more directly
 
 ## Goal
 
-Turn the three large landing page image areas into self-running product stories so a first-time visitor understands:
+Redesign the landing page showcase area so it reads less like a rotating demo and more like product evidence. The section should explain how the app actually works through static UI snapshots, with one dominant narrative block and two supporting product views.
 
-- resumes move through an AI-assisted intake flow
-- scoring is an interactive, explainable ranking workflow
-- the assistant can answer recruiter questions against the candidate pool
+The key outcome is that a first-time visitor can scan the page and understand:
 
-The result should feel simpler and cleaner than the current screenshots while still looking like product UI rather than decorative illustration.
+- how a recruiter moves from creating a job to a shortlist
+- that the product has deeper operational screens beyond the hero flow
+- that the landing visuals are based on product workflow states, not decorative placeholders
 
 ## User Decisions Captured
 
-- The largest showcase at the top uses a timeline-style process story.
-- The two feature showcases below use UI walkthrough stories.
-- Motion should use gentle zoom in and zoom out effects.
-- The behavior should stay simple enough for users to understand the message quickly.
+- Keep the main focus on the first showcase only.
+- The first showcase should tell a single workflow using 3 to 4 static snapshots.
+- The chosen primary flow is:
+  - `Tạo job`
+  - `Upload CV`
+  - `AI parse CV`
+  - `Shortlist`
+- The second and third showcases should become static UI snapshots rather than animated walkthroughs.
+- Remove progress rails, autoplay behavior, and play or pause controls from the experience.
+- Color usage can be more expressive than the current muted landing demo, as long as the result still feels intentional and product-focused.
 
 ## Existing Context
 
-The current landing page lives in [frontend/src/routes/landing.tsx](C:/Users/Admin/Desktop/Recruitment_AI_assistant/frontend/src/routes/landing.tsx). It currently renders:
+The current implementation lives in [frontend/src/routes/landing.tsx](C:/Users/Admin/Desktop/Recruitment_AI_assistant/frontend/src/routes/landing.tsx).
 
-- one large browser-frame screenshot near the top
-- one square screenshot for `Scoring Engine`
-- one square screenshot for `AI Assistant`
+Today the route contains:
 
-There is existing Playwright coverage in [frontend/tests/e2e/landing-gallery.spec.ts](C:/Users/Admin/Desktop/Recruitment_AI_assistant/frontend/tests/e2e/landing-gallery.spec.ts), but it validates the old static image implementation and must be updated.
+- `OverviewStory`, which presents a browser-framed three-step autoplay sequence
+- `ShowcaseWalkthrough`, which is reused for the scoring and assistant sections and also uses autoplay state
+- route-local hooks for reduced motion and timed step rotation
+
+The existing design emphasizes motion and step switching. The redesign should shift emphasis toward layout, hierarchy, and believable UI composition.
 
 ## Experience Principles
 
-- Show one core idea per step.
-- Use UI state changes, not dense text blocks, to explain value.
-- Keep the motion subtle and directional.
-- Make each scene readable even if the user only glances at it for a second.
-- Keep the overall visual language aligned with the current landing page tone.
+- Lead with one strong visual story instead of three equally active demos.
+- Show product workflow states, not abstract marketing cards.
+- Keep each snapshot understandable at a glance.
+- Use color to separate stages and create hierarchy, not to simulate interaction.
+- Treat the second and third showcases as supporting proof, not competing narratives.
 
-## Story Structure
+## Information Architecture
 
-### Hero Showcase
+### Primary Showcase
 
-This becomes a three-step timeline loop inside the existing browser frame:
+The first showcase becomes a large storyboard block inside the existing browser-style shell or a refined equivalent shell.
 
-1. `Upload CVs`
-2. `AI parses profiles`
-3. `Ranked shortlist`
+It should contain:
 
-The active step should be visible through:
+- a short heading and supporting line that frames the workflow
+- four static product snapshots arranged as a sequential narrative
+- compact labels or captions that anchor each snapshot to one stage
 
-- a simple progress rail or step pills
-- a focused content panel for the current state
-- one zoomed highlight region that eases in and returns softly
+The four frames represent:
 
-### Scoring Showcase
+1. `Tạo job`
+2. `Upload CV`
+3. `AI parse CV`
+4. `Shortlist`
 
-This becomes a UI walkthrough loop with three emphasis states:
+These frames should feel like the same workflow progressing through real screens or distinct states of the same workspace. They should not behave like tabs, slides, or a carousel.
 
-1. weighting the evaluation dimensions
-2. scores updating across candidates
-3. rationale or explanation panel surfacing the decision
+### Supporting Showcase Two
 
-The message is that recruiters can tune scoring and immediately understand the outcome.
+The scoring section becomes one static snapshot. Its purpose is to show that candidate evaluation and ranking logic exist as a deeper operational screen.
 
-### Assistant Showcase
+This card should prioritize:
 
-This becomes a UI walkthrough loop with three emphasis states:
+- readable score hierarchy
+- visible weighting or evaluation structure
+- clear product chrome over explanatory motion
 
-1. a recruiter asks a natural-language question
-2. filters or match criteria become active
-3. the best candidates and answer summary appear
+### Supporting Showcase Three
 
-The message is that the assistant queries recruiting data, not a generic chatbot.
+The assistant section becomes one static snapshot. Its purpose is to show a conversational or query-driven recruiter surface without turning it into another mini-story.
 
-## Motion Language
+This card should prioritize:
 
-Use restrained DOM-based transitions:
+- visible prompt or query area
+- returned candidate matches or answer summary
+- restrained supporting annotations, if any
 
-- opacity transitions between scene states
-- slight translate for step changes
-- a gentle scale transform for the focus area
-- no large sweeps, flashing, or exaggerated parallax
+## Layout Recommendation
 
-Reduced-motion users should see coherent static states without looping zoom behavior.
+Use a `Storyboard trung tam` composition:
 
-## Implementation Shape
+- one large hero product card for the four-step narrative
+- two smaller secondary product cards below or beside later sections
 
-Keep the work inside the landing route unless a helper is clearly necessary. The feature is small enough that it should not introduce a large new subsystem.
+The primary card should dominate through both size and contrast. The other two should keep the same visual system but with less ornament and fewer explanatory elements.
 
-Recommended structure:
+## Visual Direction
 
-- shared story data arrays for the three sections
-- a small React timing hook or inline `useEffect` interval logic
-- presentational helpers for repeated story chrome if that keeps `landing.tsx` readable
-- scoped CSS classes in the route for scene styling and zoom behavior
+The current beige-and-forest palette can be expanded. The redesign should move toward a more intentional product editorial look, for example:
 
-Do not add a third-party carousel or animation dependency.
+- a soft neutral page base
+- one stronger accent family for the main storyboard
+- one or two supporting accent tones for badges, states, and highlighted tables
 
-## Accessibility And Performance
+Recommended visual moves:
 
-- The slides are explanatory but non-critical, so failure should degrade to a readable static first or final state.
-- Motion should pause cleanly when JavaScript is unavailable or reduced motion is requested.
-- The layout must remain readable on desktop and mobile.
-- The story text should exist in the DOM so Playwright and assistive tools can observe it.
+- browser or app shell framing that feels cleaner and more premium
+- layered cards, tables, badges, and queue states that resemble app surfaces
+- subtle gradients or light atmospheric backgrounds behind the snapshot area
+- serif headline usage can stay, but the product snapshots themselves should feel sharper and more system-like
 
-## Testing Strategy
+Avoid:
 
-Update the existing landing Playwright test to verify:
+- progress bars as narrative devices
+- carousel dots, play buttons, pause buttons, or fake transport controls
+- heavy animation dependence
+- oversimplified wireframes that no longer feel like the EasyHR product
 
-- the three story areas render
-- expected story labels or steps are visible
-- legacy screenshot alt-text is gone
-- placeholder bracketed screenshot copy does not return
+## Component Shape
 
-Typecheck and build should still pass after the route changes.
+Keep the work local to the landing route unless extraction meaningfully improves readability.
+
+Expected shape:
+
+- remove or simplify autoplay hooks now that the main showcase is static
+- replace `OverviewStory` with a storyboard-focused component
+- replace the animated `ShowcaseWalkthrough` usage with static snapshot compositions for scoring and assistant
+- keep repeated shell or card chrome in small local helpers if it improves route clarity
+
+The new structure should favor declarative snapshot data and layout blocks over timing logic.
+
+## Accessibility And Responsive Behavior
+
+- The section must remain understandable without animation.
+- Snapshot captions and labels should exist as real text in the DOM.
+- Mobile should stack the four primary frames in a readable order without requiring hover or micro-interaction.
+- Secondary snapshots should remain legible when collapsed into a single column.
+
+## Testing Impact
+
+Update landing page tests so they validate the new static storyboard content rather than autoplay behavior.
+
+Tests should confirm:
+
+- the main storyboard area renders the four workflow stages
+- the scoring and assistant showcase areas still render with the expected product labels
+- removed slide-era UI affordances do not appear
 
 ## Non-Goals
 
-- adding manual carousel controls
-- introducing real backend data into the landing stories
-- redesigning the landing page copy outside the three showcase areas
-- adding a global animation framework
+- redesigning the full landing page information architecture
+- wiring the landing page to real backend data
+- creating a fully interactive product tour
+- adding a new animation framework
+- preserving the existing autoplay slideshow concept
 
 ## Recommendation
 
-Implement one lightweight React-based autoplay story system in the landing route, then apply it to:
+Implement a storyboard-led landing showcase where:
 
-- a timeline-style hero process story
-- a scoring walkthrough card
-- an assistant walkthrough card
+- the first section tells the core recruiting flow through four static snapshots
+- the second and third sections act as static supporting product proof
+- motion is reduced to decorative polish only, if used at all
 
-This keeps the change focused, easier to test, and visually cleaner than continuing to crop screenshots.
+This keeps the message closer to the real app and aligns the landing page with the user's request to foreground believable interface states over slideshow behavior.
