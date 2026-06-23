@@ -27,6 +27,7 @@ from src.schemas.interview_public import (
     PublicInterviewTemplatePayload,
     PublicInterviewTTSRequest,
 )
+from src.services.notification_service import create_notification
 from src.services.tts_service import synthesize_speech
 from src.services.voice_provider import UnsupportedVoiceProviderError, VoiceProvider, get_voice_provider
 
@@ -168,6 +169,22 @@ def complete_public_interview_session(
     session_record.completed_at = now
     invitation.status = "completed"
     invitation.completed_at = now
+    candidate_name = invitation.candidate_profile.full_name or "Candidate"
+    create_notification(
+        db=db,
+        user_id=invitation.job.owner_user_id,
+        notification_type="interview_completed",
+        title="Voice interview completed",
+        body=f"{candidate_name} completed the voice interview for {invitation.job.title}.",
+        target_url=f"/interviews/reports/{session_record.id}",
+        metadata={
+            "job_id": str(invitation.job_id),
+            "candidate_profile_id": str(invitation.candidate_profile_id),
+            "interview_session_id": str(session_record.id),
+            "interview_invitation_id": str(invitation.id),
+        },
+        commit=False,
+    )
 
     db.commit()
     try:

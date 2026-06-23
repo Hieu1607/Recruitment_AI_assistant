@@ -2,17 +2,26 @@ import { api } from "@/api";
 import { Button } from "@/components/ui";
 import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import {
+  type NotificationPreferenceKey,
+  useNotificationPreferences,
+} from "@/lib/notification-preferences";
 import { useMutation } from "@tanstack/react-query";
-import { Bell, Briefcase, CheckCircle2, Key, ShieldAlert, User } from "lucide-react";
+import { Bell, CheckCircle2, ChevronDown, ShieldAlert, User } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 const TABS = [
   { id: "profile", label: "Profile", icon: User },
-  { id: "workspace", label: "Workspace", icon: Briefcase },
-  { id: "apikeys", label: "API Keys", icon: Key },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "danger", label: "Danger Zone", icon: ShieldAlert },
+];
+
+const NOTIFICATION_OPTIONS: Array<{ id: NotificationPreferenceKey; label: string }> = [
+  { id: "candidate_applied", label: "Candidate applications from public JD links" },
+  { id: "interview_completed", label: "Completed voice interviews" },
+  { id: "scoring_completed", label: "Completed scoring runs" },
+  { id: "realtime_toasts", label: "Realtime in-app toast alerts" },
 ];
 
 const inputCn = cn(
@@ -28,6 +37,7 @@ export default function SettingsRoute() {
   const [activeTab, setActiveTab] = useState("profile");
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
+  const { preferences, setPreference } = useNotificationPreferences();
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
 
@@ -53,7 +63,7 @@ export default function SettingsRoute() {
         <div>
           <h1 className="font-display text-[2rem] font-medium text-fg leading-tight">Settings</h1>
           <p className="text-sm text-fg-muted mt-1 font-sans">
-            Manage your account and workspace preferences
+            Manage your account preferences
           </p>
         </div>
 
@@ -102,11 +112,20 @@ export default function SettingsRoute() {
                   </div>
                   <div>
                     <label className={labelCn}>Timezone</label>
-                    <select className={inputCn}>
-                      <option>Pacific Time (US &amp; Canada)</option>
-                      <option>Eastern Time (US &amp; Canada)</option>
-                      <option>UTC</option>
-                    </select>
+                    <div className="relative">
+                      <select className={cn(inputCn, "appearance-none pr-9")}>
+                        <option>Asia/Saigon</option>
+                        <option>Pacific Time (US &amp; Canada)</option>
+                        <option>Eastern Time (US &amp; Canada)</option>
+                        <option>UTC</option>
+                      </select>
+                      <ChevronDown
+                        size={15}
+                        strokeWidth={1.75}
+                        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+                        aria-hidden="true"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div className="pt-4">
@@ -117,59 +136,28 @@ export default function SettingsRoute() {
               </form>
             )}
 
-            {activeTab === "workspace" && (
-              <div className="p-8 space-y-6">
-                <h2 className="font-display text-lg font-medium text-fg border-b border-[color:var(--hairline)] pb-4">
-                  Workspace Settings
-                </h2>
-                <p className="text-fg-muted text-sm">
-                  Configure defaults for your recruitment team.
-                </p>
-                <div className="h-32 bg-bg border border-[color:var(--hairline)] rounded-[var(--radius-md)] flex items-center justify-center text-fg-muted text-sm">
-                  Workspace configuration options
-                </div>
-              </div>
-            )}
-
-            {activeTab === "apikeys" && (
-              <div className="p-8 space-y-6">
-                <h2 className="font-display text-lg font-medium text-fg border-b border-[color:var(--hairline)] pb-4">
-                  API Keys
-                </h2>
-                <p className="text-fg-muted text-sm">
-                  Manage keys for programmatic access to the EasyHR API.
-                </p>
-                <div className="border border-[color:var(--hairline)] rounded-[var(--radius-md)] p-4 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-fg text-sm">Production Key</div>
-                    <div className="font-mono text-sm text-fg-muted mt-1">sk_prod_••••••••••••••••</div>
-                  </div>
-                  <Button variant="secondary" size="sm">Reveal</Button>
-                </div>
-                <Button variant="ghost" className="mt-2 text-accent">
-                  <PlusIcon /> Generate new key
-                </Button>
-              </div>
-            )}
-
             {activeTab === "notifications" && (
               <div className="p-8 space-y-6">
                 <h2 className="font-display text-lg font-medium text-fg border-b border-[color:var(--hairline)] pb-4">
                   Notification Preferences
                 </h2>
+                <p className="text-sm text-fg-muted">
+                  These categories match the bell dropdown and in-app alerts.
+                </p>
                 <div className="space-y-4">
-                  {[
-                    "When a batch upload finishes processing",
-                    "When a candidate score is above 80",
-                    "When an outreach email bounces",
-                  ].map((label, i) => (
-                    <label key={i} className="flex items-center gap-3 cursor-pointer">
+                  {NOTIFICATION_OPTIONS.map((option) => (
+                    <label key={option.id} className="flex items-center gap-3 cursor-pointer">
                       <div className="relative flex items-center">
-                        <input type="checkbox" defaultChecked className="peer sr-only" />
+                        <input
+                          type="checkbox"
+                          checked={preferences[option.id]}
+                          onChange={(event) => setPreference(option.id, event.target.checked)}
+                          className="peer sr-only"
+                        />
                         <div className="w-5 h-5 border border-[color:var(--hairline-strong)] rounded bg-bg peer-checked:bg-accent peer-checked:border-accent transition-colors"></div>
                         <CheckCircle2 className="w-3.5 h-3.5 text-white absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 peer-checked:opacity-100 transition-opacity" />
                       </div>
-                      <span className="text-fg text-sm">{label}</span>
+                      <span className="text-fg text-sm">{option.label}</span>
                     </label>
                   ))}
                 </div>
@@ -198,13 +186,5 @@ export default function SettingsRoute() {
         </div>
       </div>
     </div>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-    </svg>
   );
 }

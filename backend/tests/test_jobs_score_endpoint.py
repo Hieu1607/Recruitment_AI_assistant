@@ -258,6 +258,10 @@ def test_job_score_endpoint_defaults_batch_size_to_three(monkeypatch, db, owner)
         "src.api.v1.endpoints.jobs.score_candidates",
         fake_score_candidates,
     )
+    monkeypatch.setattr(
+        "src.api.v1.endpoints.jobs.create_notification",
+        lambda **kwargs: None,
+    )
 
     score_job_candidates(
         job_id=job_id,
@@ -267,6 +271,52 @@ def test_job_score_endpoint_defaults_batch_size_to_three(monkeypatch, db, owner)
     )
 
     assert captured["batch_size"] == 3
+
+
+def test_job_score_endpoint_creates_completion_notification(monkeypatch, db, owner):
+    job_id = uuid.uuid4()
+    jd = types.SimpleNamespace(id=uuid.uuid4())
+    match_run_id = uuid.uuid4()
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.api.v1.endpoints.jobs.require_job_scoped_jd",
+        lambda *args, **kwargs: jd,
+    )
+    monkeypatch.setattr(
+        "src.api.v1.endpoints.jobs.score_candidates",
+        lambda **kwargs: {
+            "match_run_id": str(match_run_id),
+            "job_description_id": str(jd.id),
+            "total_candidates": 2,
+            "total_passed_candidates": 1,
+            "batches": 1,
+            "scores": [],
+        },
+    )
+
+    def fake_create_notification(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "src.api.v1.endpoints.jobs.create_notification",
+        fake_create_notification,
+        raising=False,
+    )
+
+    score_job_candidates(
+        job_id=job_id,
+        body=ScoreRequest(),
+        db=db,
+        current_user=owner,
+    )
+
+    assert captured["db"] is db
+    assert captured["user_id"] == owner.id
+    assert captured["notification_type"] == "scoring_completed"
+    assert captured["target_url"] == f"/scoring/{match_run_id}"
+    assert captured["metadata"]["total_candidates"] == 2
+    assert captured["metadata"]["total_passed_candidates"] == 1
 
 
 def test_get_score_run_returns_persisted_run_result(db, owner, owned_score_run):

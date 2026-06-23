@@ -12,6 +12,7 @@ from src.services.public_job_service import (
     require_public_job_enabled,
     resolve_public_job_by_token,
 )
+from src.services.notification_service import create_notification
 from src.services.resume_service import create_resume_document
 from worker.tasks import process_resume
 
@@ -125,6 +126,21 @@ async def upload_public_resume(
         str(resume.id),
         submitted_full_name=normalized_full_name,
         submitted_email=normalized_email,
+    )
+    create_notification(
+        db=db,
+        user_id=job.owner_user_id,
+        notification_type="candidate_applied",
+        title="New candidate application",
+        body=f"{normalized_full_name} submitted a resume for {job.title}.",
+        target_url=f"/candidates/{resume.id}",
+        metadata={
+            "job_id": str(job.id),
+            "resume_document_id": str(resume.id),
+            "candidate_name": normalized_full_name,
+            "candidate_email": normalized_email,
+            "task_id": task.id,
+        },
     )
     return PublicResumeUploadResponse(
         submitted=True,

@@ -5,6 +5,7 @@ type UseResizableSidebarOptions = {
   defaultWidth: number;
   minWidth: number;
   maxWidth: number;
+  resizeFrom?: "left" | "right";
 };
 
 type StoredSidebarState = {
@@ -32,6 +33,7 @@ export function useResizableSidebar({
   defaultWidth,
   minWidth,
   maxWidth,
+  resizeFrom = "left",
 }: UseResizableSidebarOptions) {
   const stored = readStoredState(storageKey);
   const initialWidth = clamp(stored?.width ?? defaultWidth, minWidth, maxWidth);
@@ -51,6 +53,9 @@ export function useResizableSidebar({
   }, [isCollapsed, storageKey, width]);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
+  useEffect(() => {
+    setWidth((current) => clamp(current, minWidth, maxWidth));
+  }, [maxWidth, minWidth]);
 
   function collapse() {
     setIsCollapsed(true);
@@ -76,7 +81,9 @@ export function useResizableSidebar({
     document.body.style.userSelect = "none";
 
     const handleMove = (moveEvent: MouseEvent | PointerEvent) => {
-      const nextWidth = clamp(startWidth + (moveEvent.clientX - startX), minWidth, maxWidth);
+      const deltaX = moveEvent.clientX - startX;
+      const directionMultiplier = resizeFrom === "right" ? -1 : 1;
+      const nextWidth = clamp(startWidth + deltaX * directionMultiplier, minWidth, maxWidth);
       setWidth(nextWidth);
       setIsCollapsed(false);
     };

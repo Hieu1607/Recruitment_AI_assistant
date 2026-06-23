@@ -513,26 +513,9 @@ Rules:
 			phone: String, phone number of the candidate
 			email: String, email address of the candidate
 			location_normalized: String, normalized location of the candidate
-			contact: String, contact information of the candidate
-			current_job_title: String, current job title of the candidate
-
 			graduation_status: String, one of graduated, final_year, studying, unknown
 			ever_studied_abroad: Boolean, whether the candidate has ever studied abroad
-			major: String, major of the candidate
-			cpa: String, CPA status of the candidate
-
-			education_text: String, education details of the candidate
-			experience_text: String, experience details of the candidate
 			experience_years: Number, years of experience of the candidate
-			skills_text: String, skills of the candidate
-			languages_text: String, languages spoken by the candidate
-			projects_text: String, projects worked on by the candidate
-			summary_text: String, summary of the candidate
-			achievements_text: String, achievements of the candidate
-			publications_text: String, publications of the candidate
-			certifications_text: String, certifications of the candidate
-			references_text: String, references of the candidate
-			other_text: String, other information about the candidate
 		---
 
 ### Output format:
@@ -564,25 +547,29 @@ Return a JSON object with the following structure:
 - "trên", "hơn", "ít nhất" → gte
 - "dưới", "ít hơn" → lte
 - exact value → eq
-- text search → contains
 
-3. Structured fields:
+3. Matching behavior:
+- full_name, phone, email → use eq
+- For full_name, eq may use a short name or a list of candidate names if the user mentions multiple people.
+- For phone, eq may use partial digits such as the last 4 numbers.
+- For email, eq may use a full email or a distinctive partial email fragment.
+
+4. Structured fields:
 - experience_years → numeric filters
 - location_normalized → exact match
 - graduation_status → exact match
 
-4. Text fields:
-- skills_text, experience_text → use "contains"
+5. Do not generate filters or contains clauses for contact, current_job_title, major, cpa, education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, or other_text. Those fields must be handled by the semantic LLM path instead.
 
-5. Do not generate filters for current_job_title, major, cpa, or contact. These values often vary by language, abbreviations, formatting, employer suffixes, or free-text conventions, so matching them should be handled by the semantic LLM path instead.
+6. If the question depends on free-text evidence such as skills, project details, work descriptions, schools, certifications, or narrative experience, return an empty DSL object and let the semantic LLM path handle it.
 
-6. Logical conditions:
+7. Logical conditions:
 - "và" → MUST (AND)
 - "hoặc" → SHOULD (OR)
 
-7. Extract keywords clearly (e.g., React, Python, Golang)
+8. Extract keywords clearly when using supported structured fields.
 
-8. Return valid JSON only. No explanation.
+9. Return valid JSON only. No explanation.
 
 --- 
 		Question: """
@@ -640,6 +627,9 @@ Return a JSON object with the following structure:
             "Include only candidates that are relevant matches. "
             "Use ids and names exactly as provided. "
             "Score each match from 0.0 to 1.0 and keep reason short and evidence-based. "
+            "If the question asks for a specific university, school, company, certification, or organization, "
+            "include a candidate only when the candidate data explicitly contains matching evidence for that entity. "
+            "Do not infer a match from related majors, nearby locations, job fit, or general background. "
             f"Write reason in {self._language_name()}.\n\n"
             f"{self._current_time_block()}{job_context_block}"
             f"{json.dumps(payload, ensure_ascii=True)}"
@@ -694,6 +684,7 @@ Return a JSON object with the following structure:
             "Use map summaries only; do not ask for or assume full candidate profiles. "
             "Deduplicate candidates by id, rank the strongest matches first, and keep reasons compact. "
             "Return JSON only, with no markdown and no explanation outside JSON. "
+            "Preserve exact-entity constraints from the user's question; do not keep or promote candidates when the map summary does not show explicit evidence for the named university, school, company, certification, or organization. "
             f"Write reason in {self._language_name()}.\n\n"
             f"{self._current_time_block()}{job_context_block}"
             f"{json.dumps(payload, ensure_ascii=True)}"
@@ -799,6 +790,7 @@ Return ONLY a valid JSON object with this shape:
 {{
   "is_recruitment_related": true | false,
   "refusal_message": string | null,
+  "response_intent": "inventory_list" | "candidate_match" | "attribute_lookup",
   "relevant_fields": [string],
   "dsl_question_query": string | null,
   "llm_question_query": string | null,
@@ -816,11 +808,18 @@ Rules for is_recruitment_related:
 - If true: set refusal_message to null and fill in the routing fields below.
 
 Routing rules (only when is_recruitment_related is true):
+- response_intent must be one of:
+  - inventory_list: the user wants to list, enumerate, show, or count the candidates currently in scope.
+  - candidate_match: the user wants to find, rank, compare, shortlist, evaluate, or recommend candidates for a job or requirement.
+  - attribute_lookup: the user wants to look up candidates by attributes such as school, skill, location, degree, language, company, title, or experience.
 - dsl_question_query: rephrase the question for structured DB filtering. Set null if not applicable.
 - llm_question_query: rephrase the question for semantic LLM analysis. Set null if not applicable.
 - dsl_relevant_fields / llm_relevant_fields: fields from the schema below relevant to each path.
+- Use response_intent = inventory_list when the user asks to list, enumerate, show, or count the candidates currently in scope, even if the wording is indirect.
+- For inventory_list, set dsl_question_query = null and llm_question_query = null unless the user also asks for additional filtering.
 - Use DSL for: full_name, phone, email, location_normalized, graduation_status, ever_studied_abroad, experience_years.
 - Use LLM for: contact, current_job_title, major, cpa, education_text, experience_text, skills_text, languages_text, projects_text, summary_text, achievements_text, publications_text, certifications_text, references_text, other_text.
+- Never place LLM fields in dsl_relevant_fields, even if the user mentions them explicitly.
 - Questions that mention explicit candidate names should use DSL with full_name.
 - If the user asks to count candidates matching a name or other structured attribute, prefer DSL.
 - If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible.
@@ -839,6 +838,33 @@ Database schema:
 {self._current_time_block()}{job_context_block}If the question says "this job", "công việc này", or otherwise refers to the current role, use the current job context above to interpret it.
 
 Question: {question}"""
+
+    def build_inventory_answer_prompt(
+        self,
+        question: str,
+        candidates: Iterable[Dict[str, Any]],
+        job_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        candidate_json = json.dumps(list(candidates), ensure_ascii=True, indent=2)
+        job_context_block = self._format_job_context(job_context)
+        return f"""You are a recruitment assistant. Answer the user's inventory-style question using the candidate data below.
+
+Rules:
+- The user is asking which candidates are currently in scope, not which candidates best match the current job.
+- Always state the total number of candidates in scope.
+- Always list the candidate names explicitly.
+- Keep the response concise and recruiter-friendly.
+- Do not rank, filter, shortlist, or hide candidates unless the user explicitly asked for that.
+- Do not invent missing candidates or missing details.
+- Write the answer in the SAME language as the question.
+- End with 1 or 2 short follow-up suggestions that are directly relevant to browsing or narrowing this candidate pool.
+
+{self._current_time_block()}{job_context_block}Candidate data:
+{candidate_json}
+
+Question: {question}
+
+Answer:"""
 
     def build_interview_questions_prompt(
         self,

@@ -1,0 +1,29 @@
+
+> easyhr-frontend@0.0.1 dev
+> vite --port 5173 --host 0.0.0.0
+
+Port 5173 is in use, trying another one...
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m318[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5174[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.1.100:[1m5174[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.20.16.1:[1m5174[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m3:41:24 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/landing.tsx, /src/styles/globals.css[22m
+[2m4:43:38 PM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mtests/e2e/landing-gallery.spec.ts[22m
+[2m4:45:32 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/landing.tsx, /src/styles/globals.css[22m
+[2m4:46:15 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/landing.tsx, /src/styles/globals.css[22m
+[2m4:47:30 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/landing.tsx, /src/styles/globals.css[22m
+[2m10:05:51 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mtests/e2e/chat-candidate-pdf-panel.spec.ts[22m
+[2m10:12:56 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/layout/AppShell.tsx, /src/styles/globals.css[22m
+[2m4:51:14 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/ThemeProvider.tsx, /src/styles/globals.css, /@fs/C:\Users\Admin\Desktop\Recruitment_AI_assistant\frontend\src\components\layout\UserMenu.tsx[22m
+[2m4:51:37 PM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/router.tsx[22m
+[2m4:51:48 PM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mindex.html[22m
+[2m7:47:34 PM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/api/types.ts[22m
+[2m7:47:47 PM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/api/index.ts[22m
+[2m7:48:41 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/layout/TopBar.tsx, /src/styles/globals.css[22m
+[2m7:48:48 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/CommandPalette.tsx, /src/styles/globals.css[22m
+[2m7:49:11 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/UiLocalizer.tsx, /src/styles/globals.css[22m
+[2m7:49:35 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/CommandPalette.tsx, /src/styles/globals.css[22m
+[2m7:49:44 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/@fs/C:\Users\Admin\Desktop\Recruitment_AI_assistant\frontend\src\components\layout\UserMenu.tsx, /src/styles/globals.css[22m

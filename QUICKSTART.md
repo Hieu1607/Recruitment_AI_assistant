@@ -4,7 +4,7 @@
 
 - Docker Desktop with Docker Compose enabled
 - At least 4 GB RAM available for containers
-- A Groq API key if you want CV parsing, scoring, or chat features backed by LLM
+- A ShopAIKey API key if you want CV parsing, scoring, or chat features backed by LLM
 
 ## 2. Prepare Environment
 
@@ -16,8 +16,8 @@ Copy-Item .env.example .env
 
 Important variables:
 
-- `GROQ_API_KEY`
-- `GROQ_MODEL_NAME`
+- `SHOPAIKEY_API_KEY`
+- `SHOPAIKEY_MODEL_NAME`
 - `APP_UI_LANGUAGE`
 - `VITE_UI_LANGUAGE`
 - `GOOGLE_CLIENT_ID`
@@ -189,8 +189,8 @@ docker compose down -v
 
 ## 11. Common Issues
 
-- `GROQ_API_KEY is required when LLM_PROVIDER=groq`
-  Set `GROQ_API_KEY` in `.env`, then rebuild or restart the stack.
+- `SHOPAIKEY_API_KEY is required for ShopAIKey fallback`
+  Set `SHOPAIKEY_API_KEY` in `.env`, then rebuild or restart the stack.
 
 - `relation "... " does not exist`
   Run the migration command in section 5.

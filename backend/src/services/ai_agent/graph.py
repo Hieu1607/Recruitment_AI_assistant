@@ -119,8 +119,21 @@ def _route_after_router(state: GraphState) -> str:
                     "reason": "question_not_recruitment_related",
                     "router_output": router_output,
                 },
-            )
+        )
         return END
+    if router_output.get("response_intent") == "inventory_list":
+        if state.get("trace_id"):
+            get_trace_logger().record_event(
+                trace_id=state["trace_id"],
+                event_type="route_decision",
+                payload={
+                    "from_node": "router",
+                    "to_node": "answer",
+                    "reason": "inventory_list_intent",
+                    "router_output": router_output,
+                },
+            )
+        return "answer"
     has_dsl = bool(router_output.get("dsl_question_query"))
     has_llm = bool(router_output.get("llm_question_query"))
     next_node = "answer"

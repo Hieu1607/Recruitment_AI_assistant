@@ -109,7 +109,7 @@ These are valid features in the codebase but were not fully automated in the cur
 These require one or more of:
 
 - Running Docker services from `docker-compose.yml`
-- Valid `GROQ_API_KEY`
+- Valid `SHOPAIKEY_API_KEY`
 - Reachable HF OCR endpoints
 - Browser/manual execution environment
 

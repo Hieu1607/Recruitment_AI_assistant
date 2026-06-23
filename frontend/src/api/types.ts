@@ -322,6 +322,29 @@ export interface JobSetupStatusResponse {
   latest_chat_turn_at: string | null;
 }
 
+export type NotificationType =
+  | "candidate_applied"
+  | "interview_completed"
+  | "scoring_completed"
+  | string;
+
+export interface NotificationResponse {
+  id: string;
+  user_id: string;
+  notification_type: NotificationType;
+  title: string;
+  body: string;
+  target_url: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationListResponse {
+  items: NotificationResponse[];
+  unread_count: number;
+}
+
 export interface ChatMessage {
   role: "human" | "ai";
   content: string;

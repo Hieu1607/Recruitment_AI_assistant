@@ -3,13 +3,12 @@ import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useTheme, type Theme } from "@/lib/theme";
 import { routes } from "@/routes";
-import { LogOut, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
+import { LogOut, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 const themeOptions: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
-  { value: "system", label: "System", icon: Monitor }
 ];
 
 export function UserMenu() {

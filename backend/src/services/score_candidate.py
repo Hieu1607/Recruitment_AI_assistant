@@ -45,7 +45,9 @@ PROVIDER_LIMIT_ERROR_MARKERS = (
     "too many requests",
 )
 NUMERIC_OPERATORS = {">=", ">", "<=", "<", "==", "="}
-BOOLEAN_OPERATORS = {"==", "="}
+NUMERIC_COMPARISON_OPERATORS = {">=", ">", "<=", "<"}
+EQUALITY_OPERATORS = {"==", "="}
+BOOLEAN_OPERATORS = EQUALITY_OPERATORS
 SUPPORTED_MEASURABLE_FIELDS: Dict[str, Dict[str, Any]] = {
     "experience_years": {
         "value_type": "number",
@@ -328,14 +330,79 @@ def _normalize_measurable(measurable: Any) -> Optional[Dict[str, Any]]:
         else:
             return None
     elif spec["value_type"] == "string":
-        value = str(value).strip().lower()
-        if value not in spec.get("allowed_values", set()):
-            return None
+        allowed_values = spec.get("allowed_values", set())
+        if isinstance(value, (list, tuple, set)):
+            normalized_values: List[str] = []
+            for item in value:
+                normalized_item = str(item).strip().lower()
+                if normalized_item not in allowed_values or normalized_item in normalized_values:
+                    continue
+                normalized_values.append(normalized_item)
+            if not normalized_values:
+                return None
+            value = normalized_values if len(normalized_values) > 1 else normalized_values[0]
+        else:
+            value = str(value).strip().lower()
+            if value not in allowed_values:
+                return None
     return {
         "field": field,
         "operator": operator,
         "value": value,
     }
+
+
+def _merge_equivalent_measurable_criteria(criteria: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+
+    for criterion in criteria:
+        measurable = criterion.get("measurable")
+        if not isinstance(measurable, dict):
+            merged.append(criterion)
+            continue
+
+        merged_into_existing = False
+        for existing in merged:
+            existing_measurable = existing.get("measurable")
+            if not isinstance(existing_measurable, dict):
+                continue
+            if existing["section"] != criterion["section"]:
+                continue
+            if existing["requirementText"] != criterion["requirementText"]:
+                continue
+            if existing["type"] != criterion["type"]:
+                continue
+            if existing_measurable.get("field") != measurable.get("field"):
+                continue
+            if existing_measurable.get("operator") != measurable.get("operator"):
+                continue
+
+            existing_value = existing_measurable.get("value")
+            incoming_value = measurable.get("value")
+            existing_values = (
+                list(existing_value)
+                if isinstance(existing_value, list)
+                else [existing_value]
+            )
+            incoming_values = (
+                list(incoming_value)
+                if isinstance(incoming_value, list)
+                else [incoming_value]
+            )
+            merged_values: List[Any] = []
+            for value in existing_values + incoming_values:
+                if value not in merged_values:
+                    merged_values.append(value)
+            if all(isinstance(value, str) for value in merged_values):
+                merged_values.sort()
+            existing_measurable["value"] = merged_values if len(merged_values) > 1 else merged_values[0]
+            merged_into_existing = True
+            break
+
+        if not merged_into_existing:
+            merged.append(criterion)
+
+    return merged
 
 
 def _format_threshold_number(value: Any) -> str:
@@ -449,6 +516,8 @@ def _normalize_rubric(
             }
         )
 
+    normalized_criteria = _merge_equivalent_measurable_criteria(normalized_criteria)
+
     if not normalized_criteria:
         return {"criteria": [], "sectionWeights": {}}
 
@@ -477,7 +546,7 @@ def _compare_measurable(candidate_value: Any, operator: str, expected_value: Any
     if operator == "contains":
         return str(expected_value).lower() in str(candidate_value).lower()
 
-    if operator in NUMERIC_OPERATORS:
+    if operator in NUMERIC_COMPARISON_OPERATORS:
         try:
             left = float(candidate_value)
             right = float(expected_value)
@@ -493,7 +562,16 @@ def _compare_measurable(candidate_value: Any, operator: str, expected_value: Any
             return left < right
         return left == right
 
-    return str(candidate_value).strip().lower() == str(expected_value).strip().lower()
+    if operator in EQUALITY_OPERATORS:
+        if isinstance(expected_value, (list, tuple, set)):
+            normalized_expected = {str(value).strip().lower() for value in expected_value}
+            return str(candidate_value).strip().lower() in normalized_expected
+
+        left_text = str(candidate_value).strip().lower()
+        right_text = str(expected_value).strip().lower()
+        return left_text == right_text
+
+    return False
 
 
 def _score_measurable_criterion(
@@ -581,12 +659,6 @@ def _safe_parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def _should_switch_from_llama(llm: LLMProvider) -> bool:
-    provider = str(getattr(llm, "provider", "")).lower()
-    model_name = str(getattr(llm, "model_name", "")).lower()
-    return "llama" in model_name and ("groq" in provider or provider.endswith(".groq"))
-
-
 def _generate_json_with_retries(
     *,
     llm: LLMProvider,
@@ -603,16 +675,6 @@ def _generate_json_with_retries(
         (llm, prompt),
         (llm, f"{prompt}{json_fix_suffix}"),
     ]
-    if _should_switch_from_llama(llm):
-        attempts.append(
-            (
-                llm.clone_with_model(
-                    provider="groq",
-                    model_name=settings.GROQ_JSON_FALLBACK_MODEL,
-                ),
-                f"{prompt}{json_fix_suffix}",
-            )
-        )
 
     last_error: Optional[Exception] = None
     event_prefix = _operation_event_prefix(operation_name)

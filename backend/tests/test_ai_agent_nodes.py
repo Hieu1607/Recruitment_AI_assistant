@@ -17,12 +17,41 @@ def test_get_llm_uses_higher_output_token_budget_for_ai_agent(monkeypatch):
             captured["kwargs"] = kwargs
 
     monkeypatch.setattr(nodes_module, "LLMProvider", DummyLLM)
-    monkeypatch.setattr(nodes_module, "_llm", None)
+    monkeypatch.setattr(nodes_module, "_llm_cache", {})
 
     llm = nodes_module._get_llm()
 
     assert isinstance(llm, DummyLLM)
     assert captured["kwargs"]["max_tokens"] == 8192
+
+
+def test_get_llm_uses_stage_specific_model_overrides(monkeypatch):
+    import src.services.ai_agent.nodes as nodes_module
+
+    captured = []
+
+    class DummyLLM:
+        def __init__(self, *args, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(nodes_module, "LLMProvider", DummyLLM)
+    monkeypatch.setattr(nodes_module, "_llm_cache", {})
+    monkeypatch.setattr(nodes_module.settings, "CHAT_ROUTER_MODEL_NAME", "router-model")
+    monkeypatch.setattr(nodes_module.settings, "CHAT_MAP_MODEL_NAME", "map-model")
+    monkeypatch.setattr(nodes_module.settings, "CHAT_REDUCE_MODEL_NAME", "reduce-model")
+    monkeypatch.setattr(nodes_module.settings, "CHAT_ANSWER_MODEL_NAME", "answer-model")
+
+    nodes_module._get_llm("router")
+    nodes_module._get_llm("map")
+    nodes_module._get_llm("reduce")
+    nodes_module._get_llm("answer")
+
+    assert [item["model_name"] for item in captured] == [
+        "router-model",
+        "map-model",
+        "reduce-model",
+        "answer-model",
+    ]
 
 
 def test_resolve_candidates_uses_scoped_current_candidates(monkeypatch):
@@ -98,6 +127,73 @@ def test_apply_dsl_matches_accent_insensitive_full_name_queries():
     ]
 
 
+def test_apply_dsl_supports_partial_eq_matching_for_full_name_phone_and_email():
+    candidates = [
+        {
+            "id": "cand-1",
+            "full_name": "Nguyễn Văn An",
+            "phone": "+84 912 345 678",
+            "email": "an.nguyen@example.com",
+        },
+        {
+            "id": "cand-2",
+            "full_name": "Lê Thị Hòa",
+            "phone": "0901-223-387",
+            "email": "hoa.le@company.vn",
+        },
+        {
+            "id": "cand-3",
+            "full_name": "Trần Thị Lan",
+            "phone": "0988 000 000",
+            "email": "lan.tran@example.com",
+        },
+    ]
+
+    by_name = _apply_dsl(
+        candidates,
+        {"filters": {"full_name": {"operator": "eq", "value": ["An", "Hòa"]}}, "must": [], "should": []},
+    )
+    by_phone = _apply_dsl(
+        candidates,
+        {"filters": {"phone": {"operator": "eq", "value": "3387"}}, "must": [], "should": []},
+    )
+    by_email = _apply_dsl(
+        candidates,
+        {"filters": {"email": {"operator": "eq", "value": "hoa.le"}}, "must": [], "should": []},
+    )
+
+    assert by_name == [
+        {
+            "id": "cand-1",
+            "full_name": "Nguyễn Văn An",
+            "phone": "+84 912 345 678",
+            "email": "an.nguyen@example.com",
+        },
+        {
+            "id": "cand-2",
+            "full_name": "Lê Thị Hòa",
+            "phone": "0901-223-387",
+            "email": "hoa.le@company.vn",
+        },
+    ]
+    assert by_phone == [
+        {
+            "id": "cand-2",
+            "full_name": "Lê Thị Hòa",
+            "phone": "0901-223-387",
+            "email": "hoa.le@company.vn",
+        }
+    ]
+    assert by_email == [
+        {
+            "id": "cand-2",
+            "full_name": "Lê Thị Hòa",
+            "phone": "0901-223-387",
+            "email": "hoa.le@company.vn",
+        }
+    ]
+
+
 def test_answer_node_falls_back_to_dsl_candidates_when_llm_result_is_empty(monkeypatch):
     seen = {}
 
@@ -107,7 +203,7 @@ def test_answer_node_falls_back_to_dsl_candidates_when_llm_result_is_empty(monke
 
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text="Nguyễn Minh Hiếu và Hoàng Lê Quân là hai ứng viên cần so sánh.",
                 provider="test",
@@ -154,7 +250,7 @@ def test_answer_node_uses_llm_for_natural_no_match_response(monkeypatch):
 
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text="Hiện chưa có ứng viên nào trong danh sách phù hợp với tiêu chí này.",
                 provider="test",
@@ -183,6 +279,122 @@ def test_answer_node_uses_llm_for_natural_no_match_response(monkeypatch):
     assert result["answer"] == "Hiện chưa có ứng viên nào trong danh sách phù hợp với tiêu chí này."
 
 
+def test_answer_node_keeps_llm_qualified_candidates_for_school_queries(monkeypatch):
+    seen = {}
+
+    def fake_build_answer_prompt(question, candidates, job_context=None):
+        seen["call"] = {"question": question, "candidates": candidates, "job_context": job_context}
+        return "prompt"
+
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda *args, **kwargs: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text="Nguyen Minh Hieu là ứng viên đang học phù hợp nhất theo dữ liệu hiện có.",
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes.build_prompts.build_answer_prompt",
+        fake_build_answer_prompt,
+    )
+
+    result = answer_node(
+        {
+            "question": "Ai đang học Đại học Bách Khoa Hà Nội?",
+            "router_output": {
+                "dsl_relevant_fields": [],
+                "llm_relevant_fields": ["education_text", "summary_text", "major"],
+            },
+            "llm_result": {
+                "total_qualified_candidates": 1,
+                "qualified_candidates": {
+                    "cand-1": "final-year computer science student at Hanoi University of Science and Technology"
+                },
+            },
+            "current_candidates": [
+                {
+                    "id": "cand-1",
+                    "full_name": "Nguyen Minh Hieu",
+                    "education_text": "Hanoi University of Science and Technology",
+                    "summary_text": "Final-year Computer Science student specializing in AI systems.",
+                    "major": "Computer Science",
+                }
+            ],
+        }
+    )
+
+    assert seen["call"]["candidates"] == [
+        {
+            "id": "cand-1",
+            "full_name": "Nguyen Minh Hieu",
+            "education_text": "Hanoi University of Science and Technology",
+            "summary_text": "Final-year Computer Science student specializing in AI systems.",
+            "major": "Computer Science",
+        }
+    ]
+    assert result["answer"] == "Nguyen Minh Hieu là ứng viên đang học phù hợp nhất theo dữ liệu hiện có."
+
+
+def test_router_node_marks_inventory_list_intent(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda *args, **kwargs: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"is_recruitment_related": true, "refusal_message": null, "response_intent": "inventory_list", "relevant_fields": ["full_name"], "dsl_question_query": null, "llm_question_query": null, "dsl_relevant_fields": [], "llm_relevant_fields": [], "reasoning": "The user wants to list candidates currently in scope."}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = router_node({"question": "Bạn đang có thông tin của những ứng viên nào"})
+
+    assert result["router_output"]["response_intent"] == "inventory_list"
+    assert result["router_output"]["llm_question_query"] is None
+    assert result["router_output"]["dsl_question_query"] is None
+
+
+def test_answer_node_renders_inventory_list_deterministically_without_llm(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Inventory list answers should not call the answer LLM")
+        ),
+    )
+
+    result = answer_node(
+        {
+            "question": "Bạn đang có thông tin của những ứng viên nào",
+            "router_output": {
+                "response_intent": "inventory_list",
+                "dsl_relevant_fields": [],
+                "llm_relevant_fields": [],
+            },
+            "current_candidates": [
+                {"id": "cand-1", "full_name": "Nguyen Minh Hieu"},
+                {"id": "cand-2", "full_name": "Nguyen Van An"},
+                {"id": "cand-3", "full_name": "Le Thi Hoa"},
+            ],
+        }
+    )
+
+    assert result["answer"] == (
+        "Hiện có 3 ứng viên trong phạm vi hiện tại:\n\n"
+        "- Nguyen Minh Hieu\n"
+        "- Nguyen Van An\n"
+        "- Le Thi Hoa\n\n"
+        "Tổng cộng: 3 ứng viên.\n\n"
+        "Bạn muốn mình lọc tiếp theo kỹ năng, kinh nghiệm hay học vấn?"
+    )
+
+
 def test_answer_node_keeps_all_named_candidates_for_comparison_even_if_llm_qualifies_one(monkeypatch):
     seen = {}
 
@@ -192,7 +404,7 @@ def test_answer_node_keeps_all_named_candidates_for_comparison_even_if_llm_quali
 
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text="So sánh hai ứng viên hoàn tất.",
                 provider="test",
@@ -233,7 +445,7 @@ def test_answer_node_keeps_all_named_candidates_for_comparison_even_if_llm_quali
 def test_dsl_node_recovers_named_candidates_when_generated_dsl_filters_everything(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"filters": {}, "must": [{"field": "full_name", "contains": "Nguyễn Minh Hiếu"}, {"field": "full_name", "contains": "An Nguyen về công việc này"}], "should": []}',
                 provider="test",
@@ -265,7 +477,7 @@ def test_dsl_node_recovers_named_candidates_when_generated_dsl_filters_everythin
 def test_dsl_node_drops_current_job_title_filters_when_field_not_allowed(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"filters": {"experience_years": {"operator": "gte", "value": 2}, "current_job_title": {"operator": "contains", "value": "Giáo viên dạy toán"}}, "must": [{"field": "current_job_title", "contains": "Giáo viên dạy toán"}], "should": []}',
                 provider="test",
@@ -312,7 +524,7 @@ def test_dsl_node_drops_current_job_title_filters_when_field_not_allowed(monkeyp
 def test_dsl_node_drops_semantic_only_filters_when_fields_not_allowed(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"filters": {"experience_years": {"operator": "gte", "value": 2}, "major": {"operator": "contains", "value": "Education"}, "cpa": {"operator": "contains", "value": "CPA"}, "contact": {"operator": "contains", "value": "Lan"}}, "must": [{"field": "major", "contains": "Education"}, {"field": "contact", "contains": "Lan"}], "should": [{"field": "cpa", "contains": "CPA"}]}',
                 provider="test",
@@ -362,6 +574,59 @@ def test_dsl_node_drops_semantic_only_filters_when_fields_not_allowed(monkeypatc
     ]
 
 
+def test_dsl_node_drops_llm_only_text_filters_even_if_router_includes_them(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda *args, **kwargs: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"filters": {"experience_years": {"operator": "gte", "value": 2}, "skills_text": {"operator": "contains", "value": "Python"}, "experience_text": {"operator": "contains", "value": "FastAPI"}}, "must": [{"field": "skills_text", "contains": "Python"}], "should": [{"field": "experience_text", "contains": "FastAPI"}]}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = dsl_node(
+        {
+            "question": "Ai có kinh nghiệm Python và FastAPI?",
+            "router_output": {
+                "dsl_relevant_fields": ["experience_years", "skills_text", "experience_text"],
+                "llm_relevant_fields": [],
+            },
+            "current_candidates": [
+                {
+                    "id": "cand-1",
+                    "full_name": "Lê Thị Hòa",
+                    "experience_years": 3,
+                    "skills_text": "Python, FastAPI",
+                    "experience_text": "Built FastAPI services",
+                },
+                {
+                    "id": "cand-2",
+                    "full_name": "Nguyễn Văn An",
+                    "experience_years": 5,
+                    "skills_text": "Java",
+                    "experience_text": "Built Spring services",
+                },
+                {
+                    "id": "cand-3",
+                    "full_name": "Intern One",
+                    "experience_years": 1,
+                    "skills_text": "Python",
+                    "experience_text": "Learning FastAPI",
+                },
+            ],
+        }
+    )
+
+    assert result["dsl_candidates"] == [
+        {"id": "cand-1", "full_name": "Lê Thị Hòa", "experience_years": 3},
+        {"id": "cand-2", "full_name": "Nguyễn Văn An", "experience_years": 5},
+    ]
+
+
 def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatch):
     seen = {}
 
@@ -371,7 +636,7 @@ def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatc
 
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"total_qualified_candidates": 1, "qualified_candidates": {"cand-1": "summary match"}}',
                 provider="test",
@@ -412,10 +677,65 @@ def test_llm_node_always_includes_summary_text_for_semantic_filtering(monkeypatc
     assert result["llm_result"]["qualified_candidates"] == {"cand-1": "summary match"}
 
 
+def test_llm_node_skips_reduce_call_when_only_one_map_batch_is_needed(monkeypatch):
+    seen = {"prompts": []}
+
+    class FakeLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, prompt):
+            self.calls += 1
+            seen["prompts"].append(prompt)
+            if self.calls > 1:
+                raise AssertionError("reduce call should be skipped for a single map batch")
+            return SimpleNamespace(
+                text='{"qualifiedCandidates": [{"id": "cand-1", "name": "Candidate One", "score": 0.92, "reason": "strong match"}], "batchQualifiedCount": 1}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda *args, **kwargs: FakeLLM(),
+    )
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes.build_prompts.build_chat_semantic_map_prompt",
+        lambda question, candidates, job_context=None: "map-prompt",
+    )
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes.build_prompts.build_chat_reduce_prompt",
+        lambda question, map_results, job_context=None: (_ for _ in ()).throw(
+            AssertionError("reduce prompt should not be built for a single map batch")
+        ),
+    )
+
+    result = llm_node(
+        {
+            "question": "Ai phù hợp nhất?",
+            "router_output": {"llm_relevant_fields": ["skills_text"]},
+            "current_candidates": [
+                {
+                    "id": "cand-1",
+                    "full_name": "Candidate One",
+                    "skills_text": "Python",
+                    "summary_text": "Strong fit for backend and AI workflow.",
+                }
+            ],
+        }
+    )
+
+    assert seen["prompts"] == ["map-prompt"]
+    assert result["llm_result"]["qualified_candidates"] == {"cand-1": "strong match"}
+    assert result["llm_result"]["total_qualified_candidates"] == 1
+
+
 def test_router_node_overrides_educated_only_route_for_not_graduated_queries(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["graduation_status"], "dsl_question_query": "graduation_status = final_year", "llm_question_query": null, "dsl_relevant_fields": ["graduation_status"], "llm_relevant_fields": [], "reasoning": "Structured graduation status filter"}',
                 provider="test",
@@ -437,7 +757,7 @@ def test_router_node_overrides_educated_only_route_for_not_graduated_queries(mon
 def test_router_node_moves_semantic_only_fields_from_dsl_to_llm(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["current_job_title", "major", "cpa", "contact", "experience_years"], "dsl_question_query": "SELECT * FROM candidates WHERE current_job_title = \'Giáo viên dạy toán\' AND major = \'Education\' AND experience_years >= 2", "llm_question_query": null, "dsl_relevant_fields": ["current_job_title", "major", "cpa", "contact", "experience_years"], "llm_relevant_fields": [], "reasoning": "Structured title, profile, and years filter"}',
                 provider="test",
@@ -461,10 +781,33 @@ def test_router_node_moves_semantic_only_fields_from_dsl_to_llm(monkeypatch):
     assert "semantic-field override" in result["router_output"]["reasoning"]
 
 
+def test_router_node_removes_location_filter_for_school_queries(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.ai_agent.nodes._get_llm",
+        lambda *args, **kwargs: SimpleNamespace(
+            generate=lambda prompt: SimpleNamespace(
+                text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["location_normalized", "education_text", "summary_text"], "dsl_question_query": "location_normalized = \\"Hà Nội\\"", "llm_question_query": "Ai đang học Đại học Bách Khoa Hà Nội?", "dsl_relevant_fields": ["location_normalized"], "llm_relevant_fields": ["education_text", "summary_text"], "reasoning": "Matched school phrase to Ha Noi location"}',
+                provider="test",
+                model="fake",
+                usage=None,
+                raw=None,
+            )
+        ),
+    )
+
+    result = router_node({"question": "Ai đang học Đại học Bách Khoa Hà Nội?"})
+
+    assert result["router_output"]["dsl_question_query"] is None
+    assert result["router_output"]["dsl_relevant_fields"] == []
+    assert result["router_output"]["llm_question_query"] == "Ai đang học Đại học Bách Khoa Hà Nội?"
+    assert result["router_output"]["llm_relevant_fields"] == ["education_text", "summary_text"]
+    assert "school-entity override" in result["router_output"]["reasoning"]
+
+
 def test_router_node_falls_back_when_truncated_json_parses_as_list(monkeypatch):
     monkeypatch.setattr(
         "src.services.ai_agent.nodes._get_llm",
-        lambda: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             generate=lambda prompt: SimpleNamespace(
                 text='{"is_recruitment_related": true, "refusal_message": null, "relevant_fields": ["full_name", "email"]',
                 provider="test",
@@ -480,6 +823,7 @@ def test_router_node_falls_back_when_truncated_json_parses_as_list(monkeypatch):
     assert result["router_output"] == {
         "is_recruitment_related": True,
         "refusal_message": None,
+        "response_intent": "attribute_lookup",
         "relevant_fields": [],
         "dsl_question_query": None,
         "llm_question_query": "Bạn đang có thông tin những ứng viên nào",

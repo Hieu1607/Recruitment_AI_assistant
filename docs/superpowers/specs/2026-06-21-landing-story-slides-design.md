@@ -166,3 +166,31 @@ Implement a storyboard-led landing showcase where:
 - motion is reduced to decorative polish only, if used at all
 
 This keeps the message closer to the real app and aligns the landing page with the user's request to foreground believable interface states over slideshow behavior.
+
+## Motion Addendum
+
+The user later approved adding light motion after the storyboard redesign was complete.
+
+The motion scope is:
+
+- page-load reveal for the hero copy and storyboard shell
+- scroll reveal for major showcase blocks
+- micro-motion inside key product states only
+
+The motion must not reintroduce any slideshow, autoplay story switching, or rotating content states.
+
+Recommended motion language:
+
+- fade-up and slight rise on first render
+- intersection-based reveal for sections as they enter the viewport
+- very soft pulse, shimmer, or breathing emphasis for meaningful UI states such as:
+  - `Uploading`
+  - top shortlist candidate
+  - `Live ranking`
+  - `Match`
+
+Accessibility constraints:
+
+- respect `prefers-reduced-motion`
+- motion should remain subtle enough that the page still reads as a product landing page, not an animated demo
+- no essential information may depend on animation timing

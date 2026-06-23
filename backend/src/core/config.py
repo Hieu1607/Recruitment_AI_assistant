@@ -84,23 +84,40 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
     # LLM
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "shopaikey")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2048"))
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL_NAME: str = os.getenv("GROQ_MODEL_NAME", "llama-3.1-8b-instant")
+    SHOPAIKEY_API_KEY: str = os.getenv("SHOPAIKEY_API_KEY", "")
+    SHOPAIKEY_BASE_URL: str = os.getenv("SHOPAIKEY_BASE_URL", "https://api.shopaikey.com/v1")
+    SHOPAIKEY_MODEL_NAME: str = os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b")
+    CHAT_ROUTER_MODEL_NAME: str = os.getenv(
+        "CHAT_ROUTER_MODEL_NAME",
+        os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
+    )
+    CHAT_DSL_MODEL_NAME: str = os.getenv(
+        "CHAT_DSL_MODEL_NAME",
+        os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
+    )
+    CHAT_MAP_MODEL_NAME: str = os.getenv(
+        "CHAT_MAP_MODEL_NAME",
+        os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
+    )
+    CHAT_REDUCE_MODEL_NAME: str = os.getenv(
+        "CHAT_REDUCE_MODEL_NAME",
+        os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
+    )
+    CHAT_ANSWER_MODEL_NAME: str = os.getenv(
+        "CHAT_ANSWER_MODEL_NAME",
+        os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
+    )
     RESUME_PARSE_MODEL_NAME: str = os.getenv(
         "RESUME_PARSE_MODEL_NAME",
-        "llama-3.1-8b-instant",
+        os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
     )
     RESUME_PARSE_MAX_TOKENS: int = int(os.getenv("RESUME_PARSE_MAX_TOKENS", "4096"))
-    GROQ_JSON_FALLBACK_MODEL: str = os.getenv(
-        "GROQ_JSON_FALLBACK_MODEL",
-        "openai/gpt-oss-20b",
-    )
     SCORING_CONTEXT_WINDOW_TOKENS: int = int(os.getenv("SCORING_CONTEXT_WINDOW_TOKENS", "8192"))
     SCORING_OUTPUT_TOKEN_BUDGET: int = int(os.getenv("SCORING_OUTPUT_TOKEN_BUDGET", "4096"))
     SCORING_CONTEXT_RESERVE_TOKENS: int = int(os.getenv("SCORING_CONTEXT_RESERVE_TOKENS", "768"))
@@ -112,12 +129,6 @@ class Settings(BaseSettings):
     CHAT_MAX_CANDIDATES_PER_MAP_BATCH: int = int(os.getenv("CHAT_MAX_CANDIDATES_PER_MAP_BATCH", "40"))
     CHAT_MAX_DETAILED_FINAL_CANDIDATES: int = int(os.getenv("CHAT_MAX_DETAILED_FINAL_CANDIDATES", "10"))
     CHAT_MAX_COMPACT_FINAL_CANDIDATES: int = int(os.getenv("CHAT_MAX_COMPACT_FINAL_CANDIDATES", "50"))
-    GROQ_VISION_MODEL_NAME: str = os.getenv(
-        "GROQ_VISION_MODEL_NAME", "meta-llama/llama-4-scout-17b-16e-instruct"
-    )
-    SHOPAIKEY_API_KEY: str = os.getenv("SHOPAIKEY_API_KEY", "")
-    SHOPAIKEY_BASE_URL: str = os.getenv("SHOPAIKEY_BASE_URL", "https://api.shopaikey.com/v1")
-    SHOPAIKEY_MODEL_NAME: str = os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b")
 
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL_NAME: str = os.getenv("OLLAMA_MODEL_NAME", "llama3.1:8b")
