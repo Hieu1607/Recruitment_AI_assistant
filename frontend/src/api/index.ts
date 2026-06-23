@@ -19,6 +19,7 @@ import { interviewReportsApi } from "./endpoints/interviewReports";
 import { interviewTemplatesApi } from "./endpoints/interviewTemplates";
 import { jobsApi } from "./endpoints/jobs";
 import { jobDescriptionsApi } from "./endpoints/jobDescriptions";
+import { notificationsApi } from "./endpoints/notifications";
 import { outreachApi } from "./endpoints/outreach";
 import { publicJobsApi } from "./endpoints/publicJobs";
 import { scoringApi } from "./endpoints/scoring";
@@ -43,6 +44,7 @@ export const api = {
     getById: (profileId: string) => uploadApi.getProfileById(profileId),
   },
   jobDescriptions: jobDescriptionsApi,
+  notifications: notificationsApi,
   scoring: scoringApi,
   chat: chatApi,
   shortlist: shortlistApi,

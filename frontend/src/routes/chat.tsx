@@ -23,7 +23,7 @@ import {
     Users,
     X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -51,6 +51,11 @@ interface ShortlistDraft {
   sourceTurnId?: string;
   candidates: CandidateProfileResponse[];
 }
+
+type ResumeTextSection = {
+  title: string;
+  content: string;
+};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -111,6 +116,118 @@ function formatDateLabel(iso: string) {
     d.getFullYear() === now.getFullYear();
   if (isToday) return `Today, ${formatTime(iso)}`;
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function meaningfulText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function joinTextBlocks(values: Array<string | null | undefined>) {
+  return meaningfulText(values.filter((value): value is string => Boolean(meaningfulText(value))).join("\n\n"));
+}
+
+function linesToBlock(values: Array<string | null | undefined>) {
+  return meaningfulText(values.filter((value): value is string => Boolean(meaningfulText(value))).join("\n"));
+}
+
+function flattenStructuredSummary(
+  summary: NonNullable<CandidateProfileResponse["structured_profile"]>["summary"] | null | undefined,
+) {
+  return meaningfulText(summary?.text);
+}
+
+function flattenStructuredSection(section: NonNullable<CandidateProfileResponse["structured_profile"]>[keyof NonNullable<CandidateProfileResponse["structured_profile"]>]) {
+  if (!section || typeof section !== "object" || !("entries" in section)) return null;
+
+  const entryBlocks = (section.entries ?? [])
+    .map((entry) =>
+      linesToBlock([
+        entry.title,
+        entry.subtitle,
+        linesToBlock([entry.role, entry.location, entry.dateRange].filter(Boolean)),
+        entry.description,
+        ...(entry.metadata ?? []).map((item) => meaningfulText(item)),
+        ...(entry.bullets ?? []).map((item) => {
+          const bullet = meaningfulText(item);
+          return bullet ? `- ${bullet}` : null;
+        }),
+        ...(entry.links ?? []).map((link) => {
+          const url = meaningfulText(link.url);
+          if (!url) return null;
+          const label = meaningfulText(link.label);
+          return label ? `${label}: ${url}` : url;
+        }),
+      ]),
+    )
+    .filter((value): value is string => Boolean(value));
+
+  return joinTextBlocks([meaningfulText(section.rawText), ...entryBlocks]);
+}
+
+function buildResumeTextSections(candidate: CandidateProfileResponse | null): ResumeTextSection[] {
+  if (!candidate) return [];
+
+  const structured = candidate.structured_profile;
+  return [
+    {
+      title: "Summary",
+      content: meaningfulText(candidate.summary_text) || flattenStructuredSummary(structured?.summary) || "",
+    },
+    {
+      title: "Skills",
+      content: meaningfulText(candidate.skills_text) || flattenStructuredSection(structured?.skills) || "",
+    },
+    {
+      title: "Experience",
+      content: meaningfulText(candidate.experience_text) || flattenStructuredSection(structured?.experience) || "",
+    },
+    {
+      title: "Education",
+      content: meaningfulText(candidate.education_text) || flattenStructuredSection(structured?.education) || "",
+    },
+    {
+      title: "Projects",
+      content: meaningfulText(candidate.projects_text) || flattenStructuredSection(structured?.projects) || "",
+    },
+    {
+      title: "Languages",
+      content: meaningfulText(candidate.languages_text) || flattenStructuredSection(structured?.languages) || "",
+    },
+    {
+      title: "Achievements",
+      content: meaningfulText(candidate.achievements_text) || flattenStructuredSection(structured?.achievements) || "",
+    },
+    {
+      title: "Publications",
+      content: meaningfulText(candidate.publications_text) || flattenStructuredSection(structured?.publications) || "",
+    },
+    {
+      title: "Certifications",
+      content: meaningfulText(candidate.certifications_text) || flattenStructuredSection(structured?.certifications) || "",
+    },
+    {
+      title: "References",
+      content: meaningfulText(candidate.references_text) || flattenStructuredSection(structured?.references) || "",
+    },
+    {
+      title: "Other",
+      content: meaningfulText(candidate.other_text) || flattenStructuredSection(structured?.other) || "",
+    },
+  ].filter((section) => Boolean(meaningfulText(section.content)));
+}
+
+function getCandidatePreviewBounds() {
+  if (typeof window === "undefined") {
+    return { defaultWidth: 560, minWidth: 420, maxWidth: 880 };
+  }
+
+  const viewportWidth = window.innerWidth;
+  const minWidth = Math.round(Math.max(360, Math.min(viewportWidth * 0.32, 520)));
+  const maxWidth = Math.round(Math.max(minWidth + 80, Math.min(viewportWidth * 0.68, viewportWidth - 280)));
+  const defaultWidth = Math.round(Math.min(maxWidth, Math.max(minWidth, viewportWidth * 0.4)));
+
+  return { defaultWidth, minWidth, maxWidth };
 }
 
 // ── sub-components ────────────────────────────────────────────────────────────
@@ -502,15 +619,20 @@ export default function ChatRoute() {
   const selectedJobId = useSelectedJobId();
   const userId = useUserId();
   const queryClient = useQueryClient();
+  const candidatePreviewBounds = getCandidatePreviewBounds();
 
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateProfileResponse | null>(null);
   const [resumePreviewUrl, setResumePreviewUrl] = useState<string | null>(null);
+  const [resumePreviewMode, setResumePreviewMode] = useState<"pdf" | "text">("pdf");
   const [shortlistDraft, setShortlistDraft] = useState<ShortlistDraft | null>(null);
   const [shortlistName, setShortlistName] = useState("");
   const [selectedShortlistIds, setSelectedShortlistIds] = useState<string[]>([]);
   const [shortlistConflict, setShortlistConflict] = useState(false);
+  const [isDesktopCandidatePreview, setIsDesktopCandidatePreview] = useState(() =>
+    typeof window === "undefined" ? true : window.innerWidth >= 1024
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const historySidebar = useResizableSidebar({
@@ -518,6 +640,13 @@ export default function ChatRoute() {
     defaultWidth: 256,
     minWidth: 220,
     maxWidth: 420,
+  });
+  const candidatePreviewSidebar = useResizableSidebar({
+    storageKey: "easyhr.chat-candidate-preview-sidebar",
+    defaultWidth: candidatePreviewBounds.defaultWidth,
+    minWidth: candidatePreviewBounds.minWidth,
+    maxWidth: candidatePreviewBounds.maxWidth,
+    resizeFrom: "right",
   });
 
   const chatSessionsKey = ["jobs", selectedJobId, "chat-sessions"] as const;
@@ -553,7 +682,10 @@ export default function ChatRoute() {
     queryFn: () => api.upload.getFile(selectedCandidate!.resume_document_id),
     enabled: !!selectedCandidate?.resume_document_id,
     staleTime: 60_000,
+    retry: false,
   });
+  const resumeTextSections = useMemo(() => buildResumeTextSections(selectedCandidate), [selectedCandidate]);
+  const hasResumeTextSections = resumeTextSections.length > 0;
 
   // ── load session history when active session changes ──────────────────────
 
@@ -600,11 +732,31 @@ export default function ChatRoute() {
 
   useEffect(() => {
     setSelectedCandidate(null);
+    setResumePreviewMode("pdf");
     setShortlistDraft(null);
     setSelectedShortlistIds([]);
     setShortlistName("");
     setShortlistConflict(false);
   }, [selectedJobId, urlSessionId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const syncViewportMode = () => setIsDesktopCandidatePreview(window.innerWidth >= 1024);
+    syncViewportMode();
+    window.addEventListener("resize", syncViewportMode);
+    return () => window.removeEventListener("resize", syncViewportMode);
+  }, []);
+
+  useEffect(() => {
+    setResumePreviewMode("pdf");
+  }, [selectedCandidate?.id]);
+
+  useEffect(() => {
+    if (resumePreviewMode === "pdf" && resumePreviewError && hasResumeTextSections) {
+      setResumePreviewMode("text");
+    }
+  }, [hasResumeTextSections, resumePreviewError, resumePreviewMode]);
 
   // ── send message mutation ─────────────────────────────────────────────────
 
@@ -804,6 +956,10 @@ export default function ChatRoute() {
   const grouped = groupSessionsByDate(sessions);
   const isPending = sendMutation.isPending;
   const historyLoading = !!urlSessionId && (turnsFetching || sessionsLoading);
+  const showPdfPreview = resumePreviewMode === "pdf" && !!resumePreviewUrl && !resumePreviewLoading && !resumePreviewError;
+  const showTextPreview = resumePreviewMode === "text" && hasResumeTextSections;
+  const showUnavailableState = !resumePreviewLoading && !showPdfPreview && !showTextPreview;
+  const shouldShowPreviewModeSwitch = !!resumePreviewUrl && hasResumeTextSections;
 
   function candidatesForMessage(msg: ChatMsg): CandidateProfileResponse[] {
     if (!msg.matchedCandidateIds || msg.matchedCandidateIds.length === 0) return [];
@@ -941,7 +1097,7 @@ export default function ChatRoute() {
       )}
 
       {/* ── Chat panel ── */}
-      <div className="relative flex-1 flex flex-col min-w-0">
+      <div data-testid="chat-main-panel" className="relative flex-1 flex flex-col min-w-0">
         {historySidebar.isCollapsed && (
           <button
             type="button"
@@ -1087,13 +1243,22 @@ export default function ChatRoute() {
           </div>
         </div>
       </div>
+      {selectedCandidate && isDesktopCandidatePreview && (
+        <SidebarResizeHandle
+          className="hidden lg:block"
+          testId="chat-candidate-pdf-resize-handle"
+          onPointerDown={candidatePreviewSidebar.startResize}
+        />
+      )}
       {selectedCandidate && (
         <aside
           data-testid="chat-candidate-pdf-panel"
           className={cn(
             "absolute inset-y-0 right-0 z-20 flex w-full max-w-full flex-col min-w-0",
-            "border-l border-[color:var(--hairline)] bg-bg-elevated shadow-[var(--shadow-lg)] sm:max-w-[34rem]"
+            "border-l border-[color:var(--hairline)] bg-bg-elevated shadow-[var(--shadow-lg)]",
+            isDesktopCandidatePreview && "lg:static lg:inset-auto lg:z-0 lg:shrink-0 lg:shadow-none"
           )}
+          style={isDesktopCandidatePreview ? { width: `${candidatePreviewSidebar.currentWidth}px` } : undefined}
         >
           <div className="flex items-start justify-between gap-3 border-b border-[color:var(--hairline)] px-4 py-4">
             <div className="min-w-0">
@@ -1106,6 +1271,34 @@ export default function ChatRoute() {
               <p className="mt-1 truncate text-sm font-sans text-fg-muted">
                 {selectedCandidate.current_job_title?.trim() || "Candidate profile"}
               </p>
+              {shouldShowPreviewModeSwitch && (
+                <div className="mt-3 inline-flex rounded-[var(--radius-full)] border border-[color:var(--hairline)] bg-bg p-1">
+                  <button
+                    type="button"
+                    onClick={() => setResumePreviewMode("pdf")}
+                    className={cn(
+                      "rounded-[var(--radius-full)] px-3 py-1 text-xs font-sans font-medium transition-colors",
+                      resumePreviewMode === "pdf"
+                        ? "bg-accent text-accent-fg"
+                        : "text-fg-muted hover:text-fg"
+                    )}
+                  >
+                    PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResumePreviewMode("text")}
+                    className={cn(
+                      "rounded-[var(--radius-full)] px-3 py-1 text-xs font-sans font-medium transition-colors",
+                      resumePreviewMode === "text"
+                        ? "bg-accent text-accent-fg"
+                        : "text-fg-muted hover:text-fg"
+                    )}
+                  >
+                    Extracted text
+                  </button>
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -1119,14 +1312,45 @@ export default function ChatRoute() {
 
           <div className="flex-1 min-h-0 p-4">
             <div className="flex h-full min-h-[18rem] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg">
-              {resumePreviewLoading && (
+              {resumePreviewLoading && resumePreviewMode === "pdf" && (
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                   <div className="h-8 w-8 rounded-full border-2 border-accent border-t-transparent animate-spin" />
                   <p className="text-sm font-sans text-fg-muted">Loading resume PDF…</p>
                 </div>
               )}
 
-              {!resumePreviewLoading && resumePreviewError && (
+              {showTextPreview && (
+                <div data-testid="chat-candidate-text-preview" className="flex h-full min-h-0 flex-col">
+                  {resumePreviewError && (
+                    <div className="border-b border-[color:var(--hairline)] bg-[rgba(31,58,46,0.04)] px-4 py-3">
+                      <p className="text-sm font-sans font-medium text-fg">
+                        Showing extracted CV text because the PDF preview is unavailable.
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex-1 space-y-4 overflow-y-auto p-4">
+                    {resumeTextSections.map((section) => (
+                      <section
+                        key={section.title}
+                        className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated p-4"
+                      >
+                        <h3 className="text-sm font-sans font-semibold text-fg">{section.title}</h3>
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-fg">{section.content}</p>
+                      </section>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {showPdfPreview && (
+                <iframe
+                  src={resumePreviewUrl}
+                  title={`Resume preview for ${selectedCandidate.full_name?.trim() || "candidate"}`}
+                  className="h-full w-full"
+                />
+              )}
+
+              {showUnavailableState && (
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                   <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[color:var(--hairline)] text-fg-muted">
                     <FileText size={20} strokeWidth={1.75} />
@@ -1138,14 +1362,6 @@ export default function ChatRoute() {
                     </p>
                   </div>
                 </div>
-              )}
-
-              {!resumePreviewLoading && !resumePreviewError && resumePreviewUrl && (
-                <iframe
-                  src={resumePreviewUrl}
-                  title={`Resume preview for ${selectedCandidate.full_name?.trim() || "candidate"}`}
-                  className="h-full w-full"
-                />
               )}
             </div>
           </div>

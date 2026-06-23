@@ -9,6 +9,7 @@ from src.models.interview_session import (
 from src.models.interview_template import InterviewTemplate
 from src.models.job import Job
 from src.models.job_matching import InterviewQuestionSet, JobDescription, MatchResult, MatchRun
+from src.models.notification import UserNotification
 from src.models.outreach import OutreachMessage
 from src.models.outreach_template import OutreachTemplate
 from src.models.query_shortlist import QuerySession, QueryTurn, ShortlistCollection, ShortlistItem
@@ -30,6 +31,7 @@ __all__ = [
     "JobDescription",
     "MatchRun",
     "MatchResult",
+    "UserNotification",
     "QuerySession",
     "QueryTurn",
     "ShortlistCollection",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -22,8 +23,10 @@ from src.services.llm_service import (
     LLMProviderLimitError,
     is_provider_limit_error as is_llm_provider_limit_error,
 )
+from src.services.scoring_batching import build_scoring_batch_plan
 from src.services.scoring_debug import ScoringDebugLogger, preview_text
 from src.services.scoring_errors import ScoringProviderLimitError
+from src.services.token_budget import BudgetWindow, estimate_json_tokens, estimate_tokens
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -42,7 +45,9 @@ PROVIDER_LIMIT_ERROR_MARKERS = (
     "too many requests",
 )
 NUMERIC_OPERATORS = {">=", ">", "<=", "<", "==", "="}
-BOOLEAN_OPERATORS = {"==", "="}
+NUMERIC_COMPARISON_OPERATORS = {">=", ">", "<=", "<"}
+EQUALITY_OPERATORS = {"==", "="}
+BOOLEAN_OPERATORS = EQUALITY_OPERATORS
 SUPPORTED_MEASURABLE_FIELDS: Dict[str, Dict[str, Any]] = {
     "experience_years": {
         "value_type": "number",
@@ -88,6 +93,26 @@ def _is_provider_limit_error(exc: Exception) -> bool:
         return True
     flattened = _flatten_exception_messages(exc)
     return any(marker in flattened for marker in PROVIDER_LIMIT_ERROR_MARKERS)
+
+
+def _duration_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 2)
+
+
+def _merge_semantic_scores(
+    target: Dict[str, Dict[str, Any]],
+    update: Dict[str, Dict[str, Any]],
+) -> None:
+    for candidate_id, candidate_result in (update or {}).items():
+        if not isinstance(candidate_result, dict):
+            continue
+        existing = target.setdefault(str(candidate_id), {"criteria": {}})
+        if candidate_result.get("rationale") and not existing.get("rationale"):
+            existing["rationale"] = candidate_result.get("rationale")
+        existing_criteria = existing.setdefault("criteria", {})
+        incoming_criteria = candidate_result.get("criteria") or {}
+        if isinstance(incoming_criteria, dict):
+            existing_criteria.update(incoming_criteria)
 
 
 def _mark_match_run_failed(db: Session, match_run_id: uuid.UUID) -> None:
@@ -305,14 +330,79 @@ def _normalize_measurable(measurable: Any) -> Optional[Dict[str, Any]]:
         else:
             return None
     elif spec["value_type"] == "string":
-        value = str(value).strip().lower()
-        if value not in spec.get("allowed_values", set()):
-            return None
+        allowed_values = spec.get("allowed_values", set())
+        if isinstance(value, (list, tuple, set)):
+            normalized_values: List[str] = []
+            for item in value:
+                normalized_item = str(item).strip().lower()
+                if normalized_item not in allowed_values or normalized_item in normalized_values:
+                    continue
+                normalized_values.append(normalized_item)
+            if not normalized_values:
+                return None
+            value = normalized_values if len(normalized_values) > 1 else normalized_values[0]
+        else:
+            value = str(value).strip().lower()
+            if value not in allowed_values:
+                return None
     return {
         "field": field,
         "operator": operator,
         "value": value,
     }
+
+
+def _merge_equivalent_measurable_criteria(criteria: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+
+    for criterion in criteria:
+        measurable = criterion.get("measurable")
+        if not isinstance(measurable, dict):
+            merged.append(criterion)
+            continue
+
+        merged_into_existing = False
+        for existing in merged:
+            existing_measurable = existing.get("measurable")
+            if not isinstance(existing_measurable, dict):
+                continue
+            if existing["section"] != criterion["section"]:
+                continue
+            if existing["requirementText"] != criterion["requirementText"]:
+                continue
+            if existing["type"] != criterion["type"]:
+                continue
+            if existing_measurable.get("field") != measurable.get("field"):
+                continue
+            if existing_measurable.get("operator") != measurable.get("operator"):
+                continue
+
+            existing_value = existing_measurable.get("value")
+            incoming_value = measurable.get("value")
+            existing_values = (
+                list(existing_value)
+                if isinstance(existing_value, list)
+                else [existing_value]
+            )
+            incoming_values = (
+                list(incoming_value)
+                if isinstance(incoming_value, list)
+                else [incoming_value]
+            )
+            merged_values: List[Any] = []
+            for value in existing_values + incoming_values:
+                if value not in merged_values:
+                    merged_values.append(value)
+            if all(isinstance(value, str) for value in merged_values):
+                merged_values.sort()
+            existing_measurable["value"] = merged_values if len(merged_values) > 1 else merged_values[0]
+            merged_into_existing = True
+            break
+
+        if not merged_into_existing:
+            merged.append(criterion)
+
+    return merged
 
 
 def _format_threshold_number(value: Any) -> str:
@@ -426,6 +516,8 @@ def _normalize_rubric(
             }
         )
 
+    normalized_criteria = _merge_equivalent_measurable_criteria(normalized_criteria)
+
     if not normalized_criteria:
         return {"criteria": [], "sectionWeights": {}}
 
@@ -454,7 +546,7 @@ def _compare_measurable(candidate_value: Any, operator: str, expected_value: Any
     if operator == "contains":
         return str(expected_value).lower() in str(candidate_value).lower()
 
-    if operator in NUMERIC_OPERATORS:
+    if operator in NUMERIC_COMPARISON_OPERATORS:
         try:
             left = float(candidate_value)
             right = float(expected_value)
@@ -470,7 +562,16 @@ def _compare_measurable(candidate_value: Any, operator: str, expected_value: Any
             return left < right
         return left == right
 
-    return str(candidate_value).strip().lower() == str(expected_value).strip().lower()
+    if operator in EQUALITY_OPERATORS:
+        if isinstance(expected_value, (list, tuple, set)):
+            normalized_expected = {str(value).strip().lower() for value in expected_value}
+            return str(candidate_value).strip().lower() in normalized_expected
+
+        left_text = str(candidate_value).strip().lower()
+        right_text = str(expected_value).strip().lower()
+        return left_text == right_text
+
+    return False
 
 
 def _score_measurable_criterion(
@@ -558,12 +659,6 @@ def _safe_parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def _should_switch_from_llama(llm: LLMProvider) -> bool:
-    provider = str(getattr(llm, "provider", "")).lower()
-    model_name = str(getattr(llm, "model_name", "")).lower()
-    return "llama" in model_name and ("groq" in provider or provider.endswith(".groq"))
-
-
 def _generate_json_with_retries(
     *,
     llm: LLMProvider,
@@ -580,16 +675,6 @@ def _generate_json_with_retries(
         (llm, prompt),
         (llm, f"{prompt}{json_fix_suffix}"),
     ]
-    if _should_switch_from_llama(llm):
-        attempts.append(
-            (
-                llm.clone_with_model(
-                    provider="groq",
-                    model_name=settings.GROQ_JSON_FALLBACK_MODEL,
-                ),
-                f"{prompt}{json_fix_suffix}",
-            )
-        )
 
     last_error: Optional[Exception] = None
     event_prefix = _operation_event_prefix(operation_name)
@@ -992,7 +1077,7 @@ def score_candidates(
     )
 
     all_scores: List[Dict[str, Any]] = []
-    batch_size = max(1, min(batch_size, 50))
+    requested_batch_size = max(1, min(batch_size, 50))
     batches_run = 0
     passed_candidates_count = 0
 
@@ -1004,20 +1089,72 @@ def score_candidates(
             section_weights=section_weights,
             debug_logger=debug_logger,
         )
+        semantic_criteria = (
+            [criterion for criterion in rubric["criteria"] if criterion.get("measurable") is None]
+            if rubric is not None
+            else []
+        )
+        scoring_window = BudgetWindow(
+            context_window=settings.SCORING_CONTEXT_WINDOW_TOKENS,
+            output_budget=settings.SCORING_OUTPUT_TOKEN_BUDGET,
+            reserve=settings.SCORING_CONTEXT_RESERVE_TOKENS,
+        )
+        static_prompt_tokens = estimate_tokens(scoring_jd_text) + estimate_json_tokens(
+            {
+                "rubric": rubric or {},
+                "sectionWeights": section_weights or {},
+            }
+        )
+        batch_plan = build_scoring_batch_plan(
+            candidates=candidate_dicts,
+            semantic_criteria=semantic_criteria,
+            static_prompt_tokens=static_prompt_tokens,
+            window=scoring_window,
+            max_candidates_per_batch=min(
+                settings.SCORING_MAX_CANDIDATES_PER_BATCH,
+                requested_batch_size,
+            ),
+            max_criteria_per_call=settings.SCORING_MAX_SEMANTIC_CRITERIA_PER_CALL,
+        )
+        debug_logger.record_event(
+            "adaptive_batch_plan_created",
+            {
+                "matchRunId": str(match_run.id),
+                "candidateCount": batch_plan.total_candidates,
+                "semanticCriteriaCount": batch_plan.total_criteria,
+                "candidateBatchCount": len(batch_plan.candidate_batches),
+                "criterionBatchCount": len(batch_plan.criterion_batches),
+                "plannerSettings": batch_plan.planner_settings,
+            },
+        )
         global_idx = 0
-        for i in range(0, len(candidate_dicts), batch_size):
-            batch = candidate_dicts[i : i + batch_size]
+        for candidate_batch_index, candidate_batch in enumerate(batch_plan.candidate_batches):
+            batch = candidate_batch.candidates
+            batch_started_at = time.perf_counter()
             debug_logger.record_event(
                 "batch_started",
                 {
-                    "batchIndex": batches_run,
+                    "batchIndex": candidate_batch_index,
                     "candidateIds": [str(candidate.get("id") or "") for candidate in batch],
                     "candidateDisplayNames": [str(candidate.get("display_name") or "") for candidate in batch],
+                    "usesLockedRubric": rubric is not None,
+                    "estimatedInputTokens": candidate_batch.estimated_input_tokens,
+                    "estimatedOutputTokens": candidate_batch.estimated_output_tokens,
+                },
+            )
+            debug_logger.record_event(
+                "candidate_batch_started",
+                {
+                    "batchIndex": candidate_batch_index,
+                    "candidateCount": len(batch),
+                    "estimatedInputTokens": candidate_batch.estimated_input_tokens,
+                    "estimatedOutputTokens": candidate_batch.estimated_output_tokens,
                     "usesLockedRubric": rubric is not None,
                 },
             )
 
             if rubric is None:
+                fallback_started_at = time.perf_counter()
                 parsed_scores = _generate_json_with_retries(
                     llm=llm,
                     prompt=build_prompts.build_batch_scoring_prompt(
@@ -1029,6 +1166,14 @@ def score_candidates(
                     operation_name="fallback batch scoring",
                     debug_logger=debug_logger,
                 )
+                debug_logger.record_event(
+                    "fallback_batch_scoring_completed",
+                    {
+                        "batchIndex": candidate_batch_index,
+                        "durationMs": _duration_ms(fallback_started_at),
+                        "scoreCount": len(parsed_scores.get("scores") or []),
+                    },
+                )
                 candidate_by_id = {str(candidate["id"]): candidate for candidate in batch}
                 batch_scores = [
                     _attach_candidate_metadata(
@@ -1038,17 +1183,38 @@ def score_candidates(
                     for score in parsed_scores["scores"]
                 ]
             else:
-                semantic_criteria = [criterion for criterion in rubric["criteria"] if criterion.get("measurable") is None]
                 semantic_by_candidate: Dict[str, Dict[str, Any]] = {}
                 if semantic_criteria:
-                    semantic_by_candidate = _generate_semantic_scores_with_retries(
-                        llm=llm,
-                        prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
-                            candidates=batch,
-                            rubric={"criteria": semantic_criteria},
-                        ),
-                        debug_logger=debug_logger,
-                    )
+                    for criterion_batch_index, criterion_batch in enumerate(batch_plan.criterion_batches):
+                        semantic_started_at = time.perf_counter()
+                        debug_logger.record_event(
+                            "semantic_criteria_batch_started",
+                            {
+                                "candidateBatchIndex": candidate_batch_index,
+                                "criterionBatchIndex": criterion_batch_index,
+                                "candidateCount": len(batch),
+                                "criterionKeys": [str(criterion.get("key") or "") for criterion in criterion_batch],
+                                "criterionCount": len(criterion_batch),
+                            },
+                        )
+                        semantic_update = _generate_semantic_scores_with_retries(
+                            llm=llm,
+                            prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
+                                candidates=batch,
+                                rubric={"criteria": criterion_batch},
+                            ),
+                            debug_logger=debug_logger,
+                        )
+                        _merge_semantic_scores(semantic_by_candidate, semantic_update)
+                        debug_logger.record_event(
+                            "semantic_criteria_batch_completed",
+                            {
+                                "candidateBatchIndex": candidate_batch_index,
+                                "criterionBatchIndex": criterion_batch_index,
+                                "durationMs": _duration_ms(semantic_started_at),
+                                "candidateResultCount": len(semantic_update),
+                            },
+                        )
 
                 batch_scores = []
                 for candidate in batch:
@@ -1065,7 +1231,16 @@ def score_candidates(
 
             all_scores.extend(batch_scores)
             batches_run += 1
+            debug_logger.record_event(
+                "candidate_batch_scored",
+                {
+                    "batchIndex": candidate_batch_index,
+                    "durationMs": _duration_ms(batch_started_at),
+                    "scoreCount": len(batch_scores),
+                },
+            )
 
+            persist_started_at = time.perf_counter()
             global_idx, passed_delta = _save_batch_scores(
                 db=db,
                 match_run_id=match_run.id,
@@ -1077,18 +1252,33 @@ def score_candidates(
             )
             passed_candidates_count += passed_delta
             db.commit()
+            debug_logger.record_event(
+                "candidate_batch_persist_completed",
+                {
+                    "batchIndex": candidate_batch_index,
+                    "durationMs": _duration_ms(persist_started_at),
+                    "passedCandidates": passed_delta,
+                },
+            )
 
         match_run.run_status = MatchRunStatus.COMPLETED.value
         match_run.completed_at = datetime.now(timezone.utc)
         db.commit()
+        completion_payload = {
+            "matchRunId": str(match_run.id),
+            "totalCandidates": len(candidate_dicts),
+            "totalPassedCandidates": passed_candidates_count,
+            "batches": batches_run,
+            "candidateBatchCount": len(batch_plan.candidate_batches),
+            "criterionBatchCount": len(batch_plan.criterion_batches),
+        }
         debug_logger.record_event(
             "run_completed",
-            {
-                "matchRunId": str(match_run.id),
-                "totalCandidates": len(candidate_dicts),
-                "totalPassedCandidates": passed_candidates_count,
-                "batches": batches_run,
-            },
+            completion_payload,
+        )
+        debug_logger.record_event(
+            "scoring_run_completed",
+            completion_payload,
         )
 
     except Exception as exc:

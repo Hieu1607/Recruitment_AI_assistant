@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+from unittest.mock import patch
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -208,15 +209,24 @@ def test_public_interview_start_events_and_complete_flow(
     assert transcript_turns[0].payload["question_key"] == "intro"
     assert "question_key" not in (transcript_turns[1].payload or {})
 
-    complete_response = api_client.post(
-        f"/api/v1/public/interview/{interview_invitation.public_token}/complete",
-        json={"provider": "fake"},
-    )
+    with patch(
+        "src.services.interview_session_service.create_notification",
+        create=True,
+    ) as create_notification:
+        complete_response = api_client.post(
+            f"/api/v1/public/interview/{interview_invitation.public_token}/complete",
+            json={"provider": "fake"},
+        )
 
     assert complete_response.status_code == 200
     completed = complete_response.json()
     assert completed["invitation"]["status"] == "completed"
     assert completed["session"]["status"] == "completed"
+    create_notification.assert_called_once()
+    assert create_notification.call_args.kwargs["db"] is db_session
+    assert create_notification.call_args.kwargs["user_id"] == interview_invitation.job.owner_user_id
+    assert create_notification.call_args.kwargs["notification_type"] == "interview_completed"
+    assert create_notification.call_args.kwargs["target_url"].startswith("/interviews/reports/")
 
     db_session.expire_all()
     invitation = db_session.get(InterviewInvitation, interview_invitation.id)

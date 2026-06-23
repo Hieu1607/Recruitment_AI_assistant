@@ -1,7 +1,6 @@
-import { api, type CollectionResponse, type SessionResponse, type TurnResponse } from "@/api";
+import { api, type CollectionResponse } from "@/api";
 import { parseAxiosError } from "@/api/errors";
 import {
-    Badge,
     Button,
     EmptyState,
     Modal,
@@ -17,15 +16,7 @@ import { useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-    ChevronDown,
-    ChevronRight,
-    Layers,
-    MessageSquare,
-    MoreHorizontal,
-    Plus,
-    Users,
-} from "lucide-react";
+import { Layers, MessageSquare, MoreHorizontal, Plus, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -244,10 +235,8 @@ function RenameModal({
 
 function NewCollectionModal({
   onClose,
-  sourceTurnId,
 }: {
   onClose: (created?: CollectionResponse) => void;
-  sourceTurnId?: string;
 }) {
   const [name, setName] = useState("");
   const qc = useQueryClient();
@@ -258,7 +247,6 @@ function NewCollectionModal({
       api.shortlist.collections.create({
         created_by_user_id: userId ?? "",
         name: name.trim(),
-        source_query_turn_id: sourceTurnId,
       }),
     onSuccess: (col) => {
       qc.invalidateQueries({ queryKey: ["collections"] });
@@ -273,11 +261,6 @@ function NewCollectionModal({
       <ModalContent>
         <ModalHeader>
           <ModalTitle>New collection</ModalTitle>
-          {sourceTurnId && (
-            <ModalDescription>
-              This collection will be linked to the selected query turn.
-            </ModalDescription>
-          )}
         </ModalHeader>
         <div className="mt-2">
           <input
@@ -313,216 +296,12 @@ function NewCollectionModal({
   );
 }
 
-// ── TurnItem ───────────────────────────────────────────────────────────────────
-
-function TurnItem({
-  turn,
-  onCreateCollection,
-}: {
-  turn: TurnResponse;
-  onCreateCollection: (turnId: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="py-4 hairline-b last:border-b-0">
-      {/* User question */}
-      <p className="font-display text-sm italic text-fg leading-snug mb-2">
-        "{turn.user_question}"
-      </p>
-
-      {/* AI answer */}
-      <p className="text-sm font-sans text-fg-muted leading-relaxed line-clamp-3 mb-3">
-        {turn.answer_text}
-      </p>
-
-      {/* Footer row */}
-      <div className="flex items-center gap-3 flex-wrap">
-        {turn.matched_count !== null && turn.matched_count !== undefined && (
-          <Badge variant="neutral" size="sm" dot={false}>
-            {turn.matched_count} matched
-          </Badge>
-        )}
-        <span className="text-[11px] font-sans text-fg-subtle tabular-nums">
-          {relativeTime(turn.created_at)}
-        </span>
-
-        {turn.matched_count !== null && turn.matched_count !== undefined && turn.matched_count > 0 && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="inline-flex items-center gap-1 text-[11px] font-sans text-accent hover:underline"
-          >
-            {expanded ? <ChevronDown size={11} strokeWidth={2} /> : <ChevronRight size={11} strokeWidth={2} />}
-            {expanded ? "Hide" : "Show"} matched candidates
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => onCreateCollection(turn.id)}
-          className="ml-auto inline-flex items-center gap-1 text-[11px] font-sans text-fg-muted hover:text-fg transition-colors"
-        >
-          <Plus size={11} strokeWidth={2} />
-          Create collection from this turn
-        </button>
-      </div>
-
-      {/* Expanded candidate IDs */}
-      {expanded && turn.matched_candidate_ids && turn.matched_candidate_ids.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {turn.matched_candidate_ids.map((id) => (
-            <span
-              key={id}
-              className="inline-block px-2 py-0.5 text-[11px] font-mono text-fg-muted rounded-[var(--radius-sm)] border border-[color:var(--hairline)] bg-bg"
-            >
-              #{id.slice(0, 8)}…
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── QueryHistoryTab ────────────────────────────────────────────────────────────
-
-function QueryHistoryTab({
-  onCreateCollection,
-}: {
-  onCreateCollection: (turnId: string) => void;
-}) {
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const userId = useUserId();
-
-  const { data: sessionsData, isLoading: sessionsLoading } = useQuery({
-    queryKey: ["shortlist-sessions"],
-    queryFn: () => api.shortlist.sessions.list({ user_id: userId ?? "", limit: 100 }),
-    staleTime: 30_000,
-  });
-  const sessions = sessionsData?.items ?? [];
-
-  const selected = selectedSessionId ?? sessions[0]?.id ?? null;
-
-  const { data: turnsData, isLoading: turnsLoading } = useQuery({
-    queryKey: ["shortlist-turns", selected],
-    queryFn: () => api.shortlist.turns.listForSession(selected!, { limit: 100 }),
-    enabled: !!selected,
-    staleTime: 30_000,
-  });
-  const turns = turnsData?.items ?? [];
-
-  const selectedSession = sessions.find((s) => s.id === selected);
-
-  if (sessionsLoading) {
-    return (
-      <div className="grid grid-cols-3 gap-6 h-[560px]">
-        <div className="space-y-2">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full" />)}
-        </div>
-        <div className="col-span-2 space-y-4">
-          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-24 w-full" />)}
-        </div>
-      </div>
-    );
-  }
-
-  if (sessions.length === 0) {
-    return (
-      <EmptyState
-        icon={<MessageSquare size={28} strokeWidth={1.25} />}
-        heading="No query sessions yet"
-        body="Start a conversation in AI Chat to build query history that you can convert to collections."
-        action={{ label: "Open AI Chat", onClick: () => { window.location.href = "/chat"; } }}
-      />
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-3 gap-6" style={{ minHeight: 480 }}>
-      {/* Session list (left) */}
-      <div className="border-r border-[color:var(--hairline)] pr-4 overflow-y-auto space-y-0.5">
-        {sessions.map((s) => (
-          <SessionItem
-            key={s.id}
-            session={s}
-            isActive={s.id === selected}
-            onClick={() => setSelectedSessionId(s.id)}
-          />
-        ))}
-      </div>
-
-      {/* Turn timeline (right) */}
-      <div className="col-span-2 overflow-y-auto">
-        {selectedSession && (
-          <div className="mb-4">
-            <h3 className="font-display text-base font-medium text-fg">
-              {selectedSession.session_title ?? "Untitled session"}
-            </h3>
-            <p className="text-xs font-sans text-fg-muted mt-0.5">
-              {selectedSession.turn_count} turn{selectedSession.turn_count !== 1 ? "s" : ""} ·{" "}
-              {relativeTime(selectedSession.created_at)}
-            </p>
-          </div>
-        )}
-        {turnsLoading ? (
-          <div className="space-y-4">
-            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-24 w-full" />)}
-          </div>
-        ) : turns.length === 0 ? (
-          <p className="text-sm font-sans text-fg-muted py-8 text-center">No turns in this session.</p>
-        ) : (
-          <div>
-            {turns.map((t) => (
-              <TurnItem key={t.id} turn={t} onCreateCollection={onCreateCollection} />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SessionItem({
-  session,
-  isActive,
-  onClick,
-}: {
-  session: SessionResponse;
-  isActive: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors",
-        isActive
-          ? "bg-accent text-accent-fg"
-          : "hover:bg-[color:var(--hairline)] text-fg",
-      )}
-    >
-      <p className={cn("text-sm font-sans font-medium truncate", isActive ? "text-accent-fg" : "text-fg")}>
-        {session.session_title ?? "Untitled session"}
-      </p>
-      <p className={cn("text-[11px] font-sans tabular-nums", isActive ? "text-accent-fg/70" : "text-fg-subtle")}>
-        {session.turn_count} turn{session.turn_count !== 1 ? "s" : ""} · {relativeTime(session.created_at)}
-      </p>
-    </button>
-  );
-}
-
 // ── main component ─────────────────────────────────────────────────────────────
-
-type Tab = "collections" | "history";
 
 export default function ShortlistsListRoute() {
   const qc = useQueryClient();
   const userId = useUserId();
-  const [activeTab, setActiveTab] = useState<Tab>("collections");
   const [newColOpen, setNewColOpen] = useState(false);
-  const [newColTurnId, setNewColTurnId] = useState<string | undefined>();
   const [renameTarget, setRenameTarget] = useState<CollectionResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CollectionResponse | null>(null);
 
@@ -543,12 +322,6 @@ export default function ShortlistsListRoute() {
     onError: () => toast.error("Failed to delete collection"),
   });
 
-  function handleCreateFromTurn(turnId: string) {
-    setNewColTurnId(turnId);
-    setNewColOpen(true);
-    setActiveTab("collections");
-  }
-
   return (
     <div className="px-8 py-8 min-h-full">
       {/* Page header */}
@@ -556,92 +329,51 @@ export default function ShortlistsListRoute() {
         <div>
           <h1 className="font-display text-[2rem] font-medium text-fg leading-tight">Shortlists</h1>
           <p className="text-sm text-fg-muted mt-1 font-sans">
-            Saved candidate collections and query session history
+            Saved candidate collections
           </p>
         </div>
         <Button
           variant="primary"
           icon={<Plus size={15} strokeWidth={2} />}
-          onClick={() => { setNewColTurnId(undefined); setNewColOpen(true); }}
+          onClick={() => setNewColOpen(true)}
         >
           New collection
         </Button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex items-center gap-0 border-b border-[color:var(--hairline)] mb-6">
-        {(["collections", "history"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setActiveTab(t)}
-            className={cn(
-              "px-4 py-3 text-sm font-sans border-b-2 -mb-px transition-colors capitalize",
-              activeTab === t
-                ? "border-accent text-fg font-medium"
-                : "border-transparent text-fg-muted hover:text-fg",
-            )}
-          >
-            {t === "collections" ? "Collections" : "Query History"}
-            {t === "collections" && collections.length > 0 && (
-              <span
-                className={cn(
-                  "ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[10px] font-sans font-semibold tabular-nums",
-                  activeTab === t ? "bg-accent text-accent-fg" : "bg-[color:var(--hairline)] text-fg-muted",
-                )}
-              >
-                {collections.length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Collections tab ── */}
-      {activeTab === "collections" && (
-        <>
-          {isLoading ? (
-            <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-              {[0, 1, 2, 3, 4, 5].map((i) => (
-                <Skeleton key={i} className="h-36 w-full" />
-              ))}
-            </div>
-          ) : collections.length === 0 ? (
-            <EmptyState
-              icon={<Layers size={28} strokeWidth={1.25} />}
-              heading="No collections yet"
-              body="Create a collection to save and organize candidate shortlists."
-              action={{ label: "New collection", onClick: () => setNewColOpen(true) }}
+      {isLoading ? (
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-36 w-full" />
+          ))}
+        </div>
+      ) : collections.length === 0 ? (
+        <EmptyState
+          icon={<Layers size={28} strokeWidth={1.25} />}
+          heading="No collections yet"
+          body="Create a collection to save and organize candidate shortlists."
+          action={{ label: "New collection", onClick: () => setNewColOpen(true) }}
+        />
+      ) : (
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+          {collections.map((col) => (
+            <CollectionCard
+              key={col.id}
+              col={col}
+              onRename={setRenameTarget}
+              onDelete={setDeleteTarget}
             />
-          ) : (
-            <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-              {collections.map((col) => (
-                <CollectionCard
-                  key={col.id}
-                  col={col}
-                  onRename={setRenameTarget}
-                  onDelete={setDeleteTarget}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ── Query History tab ── */}
-      {activeTab === "history" && (
-        <QueryHistoryTab onCreateCollection={handleCreateFromTurn} />
+          ))}
+        </div>
       )}
 
       {/* ── Modals ── */}
 
       {newColOpen && (
         <NewCollectionModal
-          sourceTurnId={newColTurnId}
           onClose={(created) => {
             setNewColOpen(false);
-            setNewColTurnId(undefined);
-            if (created) setActiveTab("collections");
+            if (created) qc.invalidateQueries({ queryKey: ["collections"] });
           }}
         />
       )}

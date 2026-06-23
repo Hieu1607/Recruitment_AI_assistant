@@ -25,6 +25,7 @@ _HF_OCR_MAX_ATTEMPTS = 3
 _HF_OCR_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 _VISION_FALLBACK_MAX_PAGES = 3
 _RESUME_PARSE_MAX_TOKENS = 4096
+_UNAVAILABLE_RESUME_PARSE_MODELS: set[tuple[str, str]] = set()
 _STRUCTURED_SECTION_TEXT_FIELDS = {
     "experience": "experience",
     "education": "education",
@@ -85,6 +86,26 @@ def _normalize_search_text(value: Any) -> str:
     text = normalized.lower().replace("đ", "d")
     decomposed = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _normalize_location_name(value: Any) -> Optional[str]:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return None
+
+    alias_map = {
+        "ha noi": "Hà Nội",
+        "hanoi": "Hà Nội",
+        "hn": "Hà Nội",
+        "hcm": "TP. Hồ Chí Minh",
+        "ho chi minh": "TP. Hồ Chí Minh",
+        "ho chi minh city": "TP. Hồ Chí Minh",
+        "saigon": "TP. Hồ Chí Minh",
+        "sai gon": "TP. Hồ Chí Minh",
+        "tphcm": "TP. Hồ Chí Minh",
+        "tp hcm": "TP. Hồ Chí Minh",
+    }
+    return alias_map.get(_normalize_search_text(normalized), normalized)
 
 
 def _infer_graduation_status_from_text(*values: Any) -> Optional[str]:
@@ -196,6 +217,27 @@ def _normalize_string_list(value: Any) -> List[str]:
     return items
 
 
+def _contains_education_institution_hint(value: Any) -> bool:
+    normalized = _normalize_search_text(value)
+    if not normalized:
+        return False
+
+    markers = (
+        "university",
+        "college",
+        "institute",
+        "academy",
+        "school",
+        "dai hoc",
+        "hoc vien",
+        "cao dang",
+        "truong",
+        "hust",
+        "vinuni",
+    )
+    return any(marker in normalized for marker in markers)
+
+
 def _normalize_structured_link(value: Any) -> Optional[Dict[str, Any]]:
     if isinstance(value, str):
         normalized_url = _normalize_text(value)
@@ -301,6 +343,111 @@ def _normalize_structured_summary(
         "text": text,
         "links": links,
     }
+
+
+def _render_structured_section_text(section: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(section, dict):
+        return None
+
+    raw_text = _normalize_text(section.get("rawText"))
+    entries = section.get("entries")
+    if raw_text and (
+        _contains_education_institution_hint(raw_text) or not isinstance(entries, list) or not entries
+    ):
+        return raw_text
+    if not isinstance(entries, list):
+        return None
+
+    rendered_entries: List[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        title = _normalize_text(entry.get("title"))
+        subtitle = _normalize_text(entry.get("subtitle"))
+        location = _normalize_text(entry.get("location"))
+        date_range = _normalize_text(entry.get("dateRange"))
+        description = _normalize_text(entry.get("description"))
+        bullets = _normalize_string_list(entry.get("bullets"))
+
+        primary_line_parts: List[str] = []
+        if title:
+            primary_line_parts.append(title)
+        institution = subtitle or location
+        if institution and _normalize_search_text(institution) not in _normalize_search_text(" ".join(primary_line_parts)):
+            primary_line_parts.append(institution)
+        if date_range:
+            primary_line_parts.append(date_range)
+
+        primary_line = ", ".join(primary_line_parts)
+        lines: List[str] = []
+        if primary_line:
+            lines.append(primary_line)
+
+        if description and _normalize_search_text(description) != _normalize_search_text(primary_line):
+            lines.append(description)
+
+        for bullet in bullets:
+            bullet_normalized = _normalize_search_text(bullet)
+            if bullet_normalized and all(
+                bullet_normalized != _normalize_search_text(existing_line)
+                for existing_line in lines
+            ):
+                lines.append(bullet)
+
+        if lines:
+            rendered_entries.append("\n".join(lines))
+
+    if not rendered_entries:
+        return None
+    return "\n\n".join(rendered_entries)
+
+
+def _render_structured_summary_text(summary: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(summary, dict):
+        return None
+    return _normalize_text(summary.get("text"))
+
+
+def _select_education_text(
+    parsed: Dict[str, Any],
+    structured_profile: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    education_text = _normalize_text(parsed.get("education"))
+    structured_education_text = _render_structured_section_text(
+        (structured_profile or {}).get("education")
+    )
+
+    if education_text and _contains_education_institution_hint(education_text):
+        return education_text
+    if structured_education_text:
+        return structured_education_text
+    return education_text
+
+
+def _select_structured_section_text(
+    parsed: Dict[str, Any],
+    structured_profile: Optional[Dict[str, Any]],
+    *,
+    parsed_key: str,
+    structured_key: str,
+) -> Optional[str]:
+    section_text = _normalize_text(parsed.get(parsed_key))
+    structured_text = _render_structured_section_text(
+        (structured_profile or {}).get(structured_key)
+    )
+    return structured_text or section_text
+
+
+def _select_summary_text(
+    parsed: Dict[str, Any],
+    structured_profile: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    summary_text = _normalize_text(parsed.get("summary"))
+    structured_summary_text = _render_structured_summary_text(
+        (structured_profile or {}).get("summary")
+    )
+    return structured_summary_text or summary_text
 
 
 def _normalize_structured_profile(
@@ -482,12 +629,28 @@ def _log_resume_llm_attempt(
 
 
 def _resume_text_parse_provider_specs() -> List[tuple[str, str]]:
-    return [
-        (ProviderType.GROQ.value, settings.RESUME_PARSE_MODEL_NAME),
-        (ProviderType.SHOPAIKEY.value, settings.SHOPAIKEY_MODEL_NAME),
-        (ProviderType.GROQ.value, settings.RESUME_PARSE_MODEL_NAME),
+    specs = [
+        (ProviderType.SHOPAIKEY.value, settings.RESUME_PARSE_MODEL_NAME),
         (ProviderType.SHOPAIKEY.value, settings.SHOPAIKEY_MODEL_NAME),
     ]
+    deduped: List[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for spec in specs:
+        normalized_spec = _normalize_model_spec(*spec)
+        if normalized_spec in seen or normalized_spec in _UNAVAILABLE_RESUME_PARSE_MODELS:
+            continue
+        seen.add(normalized_spec)
+        deduped.append(spec)
+    return deduped
+
+
+def _normalize_model_spec(provider_name: str, model_name: str) -> tuple[str, str]:
+    return ((provider_name or "").strip().lower(), (model_name or "").strip())
+
+
+def _is_unavailable_model_error(exc: BaseException) -> bool:
+    message = str(exc or "").lower()
+    return "model_not_found" in message or "no available channel for model" in message
 
 
 def _generate_resume_json_with_retries(
@@ -504,6 +667,8 @@ def _generate_resume_json_with_retries(
         _resume_text_parse_provider_specs(),
         start=1,
     ):
+        if _normalize_model_spec(provider_name, model_name) in _UNAVAILABLE_RESUME_PARSE_MODELS:
+            continue
         if not last_response_text:
             prompt_text = prompt
         else:
@@ -528,6 +693,22 @@ def _generate_resume_json_with_retries(
             )
         except Exception as exc:
             last_error = exc
+            if _is_unavailable_model_error(exc):
+                _UNAVAILABLE_RESUME_PARSE_MODELS.add(
+                    _normalize_model_spec(provider_name, model_name)
+                )
+                if (
+                    provider_name == ProviderType.SHOPAIKEY.value
+                    and model_name == settings.RESUME_PARSE_MODEL_NAME
+                    and settings.SHOPAIKEY_MODEL_NAME
+                    and settings.SHOPAIKEY_MODEL_NAME != settings.RESUME_PARSE_MODEL_NAME
+                ):
+                    logger.warning(
+                        "Resume parse model %s is unavailable; falling back to %s for subsequent attempts",
+                        model_name,
+                        settings.SHOPAIKEY_MODEL_NAME,
+                    )
+                    settings.RESUME_PARSE_MODEL_NAME = settings.SHOPAIKEY_MODEL_NAME
             _log_resume_llm_attempt(
                 trace_id=trace_id,
                 attempt_number=attempt_number,
@@ -556,6 +737,22 @@ def _generate_resume_json_with_retries(
             request_duration_ms = round((time.perf_counter() - request_started_at) * 1000, 3)
         except Exception as exc:
             last_error = exc
+            if _is_unavailable_model_error(exc):
+                _UNAVAILABLE_RESUME_PARSE_MODELS.add(
+                    _normalize_model_spec(provider_name, model_name)
+                )
+                if (
+                    provider_name == ProviderType.SHOPAIKEY.value
+                    and model_name == settings.RESUME_PARSE_MODEL_NAME
+                    and settings.SHOPAIKEY_MODEL_NAME
+                    and settings.SHOPAIKEY_MODEL_NAME != settings.RESUME_PARSE_MODEL_NAME
+                ):
+                    logger.warning(
+                        "Resume parse model %s is unavailable; falling back to %s for subsequent attempts",
+                        model_name,
+                        settings.SHOPAIKEY_MODEL_NAME,
+                    )
+                    settings.RESUME_PARSE_MODEL_NAME = settings.SHOPAIKEY_MODEL_NAME
             _log_resume_llm_attempt(
                 trace_id=trace_id,
                 attempt_number=attempt_number,
@@ -849,25 +1046,70 @@ def _build_profile_from_parsed(
         phone=_normalize_text(parsed.get("phone")),
         email=_pick_candidate_email(parsed.get("email"), normalized_submitted_email),
         submitted_email=normalized_submitted_email,
-        location_normalized=_normalize_text(parsed.get("location")),
+        location_normalized=_normalize_location_name(parsed.get("location")),
         contact=_normalize_text(parsed.get("contact")),
         current_job_title=_normalize_text(parsed.get("current_job_title")),
         ever_studied_abroad=_normalize_bool(parsed.get("ever_studied_abroad")),
         graduation_status=_normalize_graduation_status(parsed.get("graduation_status"), parsed),
         major=_normalize_text(parsed.get("major")),
         cpa=_normalize_text(parsed.get("cpa")),
-        education_text=_normalize_text(parsed.get("education")),
-        experience_text=_normalize_text(parsed.get("experience")),
+        education_text=_select_education_text(parsed, structured_profile),
+        experience_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="experience",
+            structured_key="experience",
+        ),
         experience_years=_normalize_decimal(parsed.get("experience_years")),
-        skills_text=_normalize_text(parsed.get("skills")),
-        languages_text=_normalize_text(parsed.get("languages")),
-        projects_text=_normalize_text(parsed.get("projects")),
-        summary_text=_normalize_text(parsed.get("summary")),
-        achievements_text=_normalize_text(parsed.get("achievements")),
-        publications_text=_normalize_text(parsed.get("publications")),
-        certifications_text=_normalize_text(parsed.get("certifications")),
-        references_text=_normalize_text(parsed.get("references")),
-        other_text=_normalize_text(parsed.get("other")),
+        skills_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="skills",
+            structured_key="skills",
+        ),
+        languages_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="languages",
+            structured_key="languages",
+        ),
+        projects_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="projects",
+            structured_key="projects",
+        ),
+        summary_text=_select_summary_text(parsed, structured_profile),
+        achievements_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="achievements",
+            structured_key="achievements",
+        ),
+        publications_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="publications",
+            structured_key="publications",
+        ),
+        certifications_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="certifications",
+            structured_key="certifications",
+        ),
+        references_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="references",
+            structured_key="references",
+        ),
+        other_text=_select_structured_section_text(
+            parsed,
+            structured_profile,
+            parsed_key="other",
+            structured_key="other",
+        ),
         structured_profile=structured_profile,
         profile_status=ProfileStatus.REVIEWED.value,
     )

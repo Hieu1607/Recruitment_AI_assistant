@@ -80,6 +80,11 @@ if "src.services.ai_agent.graph" not in sys.modules:
 
 if "src.services.job_description_service" not in sys.modules:
     jd_stub = types.ModuleType("src.services.job_description_service")
+    jd_stub.create_job_description = lambda *args, **kwargs: None
+    jd_stub.delete_job_description = lambda *args, **kwargs: True
+    jd_stub.get_job_description = lambda *args, **kwargs: None
+    jd_stub.list_job_descriptions = lambda *args, **kwargs: []
+    jd_stub.update_job_description = lambda *args, **kwargs: None
     jd_stub._jd_to_dict = lambda jd: {}
     sys.modules["src.services.job_description_service"] = jd_stub
 
@@ -94,6 +99,8 @@ if "src.services.google_oauth" not in sys.modules:
 
 if "src.services.resume_service" not in sys.modules:
     resume_stub = types.ModuleType("src.services.resume_service")
+    resume_stub._get_resume_extraction_mode = lambda resume: None
+    resume_stub._normalize_location_name = lambda value: value
     resume_stub._resume_to_dict = lambda resume: {}
     resume_stub.create_resume_document = lambda **kwargs: types.SimpleNamespace(
         id=uuid.uuid4()
@@ -363,6 +370,10 @@ def test_upload_public_resume_succeeds_without_auth_and_returns_minimal_payload(
             "src.api.v1.endpoints.public_jobs.process_resume.delay",
             return_value=task,
         ) as enqueue_resume,
+        patch(
+            "src.api.v1.endpoints.public_jobs.create_notification",
+            create=True,
+        ) as create_notification,
     ):
         import asyncio
 
@@ -398,3 +409,8 @@ def test_upload_public_resume_succeeds_without_auth_and_returns_minimal_payload(
         submitted_full_name="Candidate Name",
         submitted_email="candidate@example.com",
     )
+    create_notification.assert_called_once()
+    assert create_notification.call_args.kwargs["db"] is db
+    assert create_notification.call_args.kwargs["user_id"] == job.owner_user_id
+    assert create_notification.call_args.kwargs["notification_type"] == "candidate_applied"
+    assert create_notification.call_args.kwargs["target_url"] == f"/candidates/{created_resume.id}"

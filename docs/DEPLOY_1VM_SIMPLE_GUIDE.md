@@ -327,12 +327,10 @@ POSTGRES_DB=recruitment_db
 
 SECRET_KEY=replace-this-with-a-long-random-secret
 
-LLM_PROVIDER=groq
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL_NAME=llama-3.1-8b-instant
+LLM_PROVIDER=shopaikey
 SHOPAIKEY_API_KEY=your_shopaikey_api_key_here
-SHOPAIKEY_BASE_URL=https://api.shopaikey.com/v1
 SHOPAIKEY_MODEL_NAME=llama-3.1-8b
+SHOPAIKEY_BASE_URL=https://api.shopaikey.com/v1
 
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin123

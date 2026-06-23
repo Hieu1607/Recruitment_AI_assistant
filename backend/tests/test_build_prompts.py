@@ -133,8 +133,10 @@ def test_jd_rubric_prompt_does_not_seed_a_concrete_years_requirement_example():
 def test_router_prompt_guides_name_lookup_count_and_comparison_queries():
     prompt = BuildPrompts().build_router_prompt("How many people named Hieu?")
 
+    assert '"response_intent": "inventory_list" | "candidate_match" | "attribute_lookup"' in prompt
     assert "Questions that mention explicit candidate names should use DSL with full_name." in prompt
     assert "If the user asks to compare, rank, or evaluate specifically named candidates, use both DSL and LLM when possible." in prompt
+    assert "Use response_intent = inventory_list when the user asks to list, enumerate, show, or count the candidates currently in scope" in prompt
     assert "Use DSL for: full_name, phone, email, location_normalized, graduation_status, ever_studied_abroad, experience_years." in prompt
     assert "Use LLM for: contact, current_job_title, major, cpa" in prompt
     assert "Do not rely on graduation_status alone for broader concepts such as not yet graduating" in prompt
@@ -200,4 +202,60 @@ def test_dsl_prompt_includes_current_time_context():
     prompt = BuildPrompts().build_dsl_query_prompt("Ai có 3 năm kinh nghiệm Python?")
 
     assert "Current time (UTC):" in prompt
-    assert "Do not generate filters for current_job_title, major, cpa, or contact" in prompt
+    assert "must be handled by the semantic LLM path instead" in prompt
+    assert "skills_text" in prompt
+    assert "experience_text" in prompt
+
+
+def test_chat_semantic_map_prompt_requests_json_schema_only():
+    prompt = BuildPrompts().build_chat_semantic_map_prompt(
+        "Who knows Python?",
+        [{"id": "cand-1", "full_name": "Taylor", "skills_text": "Python"}],
+    )
+
+    assert "Return JSON only" in prompt
+    assert "qualifiedCandidates" in prompt
+    assert '"id": "uuid"' in prompt
+    assert '"name": "string"' in prompt
+    assert '"score": 0.0' in prompt
+    assert '"reason": "short string"' in prompt
+
+
+def test_chat_reduce_prompt_uses_map_summaries_not_full_profiles():
+    prompt = BuildPrompts().build_chat_reduce_prompt(
+        "Who knows Python?",
+        [
+            {
+                "qualifiedCandidates": [
+                    {
+                        "id": "cand-1",
+                        "name": "Taylor",
+                        "score": 0.8,
+                        "reason": "Python",
+                    }
+                ],
+                "batchQualifiedCount": 1,
+            }
+        ],
+    )
+
+    assert "map summaries" in prompt.lower()
+    assert "rankedCandidates" in prompt
+    assert "skills_text" not in prompt
+    assert "experience_text" not in prompt
+
+
+def test_compact_answer_prompt_uses_only_identity_fields():
+    prompt = BuildPrompts().build_compact_answer_prompt(
+        "Who knows Python?",
+        [{"id": "cand-1", "full_name": "Taylor", "skills_text": "Python"}],
+        total_count=12,
+        omitted_count=11,
+    )
+
+    assert '"id": "cand-1"' in prompt
+    assert '"full_name": "Taylor"' in prompt
+    assert "skills_text" not in prompt
+    assert "experience_text" not in prompt
+    assert "12" in prompt
+    assert "11" in prompt

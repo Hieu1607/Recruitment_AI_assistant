@@ -165,6 +165,156 @@ def test_build_profile_falls_back_to_submitted_name_and_email_when_parse_is_spar
     assert profile.submitted_email == "submitted@example.com"
 
 
+def test_build_profile_normalizes_hanoi_location_variants():
+    profile = resume_service._build_profile_from_parsed(
+        uuid.uuid4(),
+        {
+            "name": "Candidate Hanoi",
+            "location": "Hanoi",
+        },
+    )
+
+    assert profile.location_normalized == "Hà Nội"
+
+
+def test_build_profile_uses_structured_education_when_scalar_text_drops_school_name():
+    profile = resume_service._build_profile_from_parsed(
+        uuid.uuid4(),
+        {
+            "name": "Nguyen Minh Hieu",
+            "education": "Bachelor of Computer Science",
+            "structured_profile": {
+                "education": {
+                    "entries": [
+                        {
+                            "title": "Bachelor of Computer Science",
+                            "location": "Hanoi University of Science and Technology (HUST)",
+                            "description": (
+                                "Bachelor of Computer Science, Hanoi University of Science and "
+                                "Technology (HUST), GPA: 3.24, Expected graduation year: 2026"
+                            ),
+                            "bullets": [
+                                "GPA: 3.24",
+                                "Expected graduation year: 2026",
+                            ],
+                        }
+                    ]
+                }
+            },
+        },
+    )
+
+    assert "Hanoi University of Science and Technology" in profile.education_text
+
+
+def test_build_profile_prefers_full_structured_text_for_all_profile_sections():
+    profile = resume_service._build_profile_from_parsed(
+        uuid.uuid4(),
+        {
+            "name": "Structured Candidate",
+            "summary": "Short summary",
+            "experience": "AI Engineer Intern",
+            "education": "Bachelor of Computer Science",
+            "skills": "Python",
+            "languages": "English",
+            "projects": "Recruitment AI assistant",
+            "achievements": "Top student",
+            "certifications": "TOEIC",
+            "structured_profile": {
+                "summary": {
+                    "text": (
+                        "Final-year Computer Science student building production-ready AI "
+                        "systems with FastAPI, Docker, and vector databases."
+                    ),
+                },
+                "experience": {
+                    "entries": [
+                        {
+                            "title": "AI Engineer Intern",
+                            "subtitle": "KIAISOFT company",
+                            "location": "Dich Vong, Cau Giay, Ha Noi",
+                            "dateRange": "June 2025 - October 2025",
+                            "description": "Built AI chatbot systems for legal use cases.",
+                            "bullets": [
+                                "Designed RAG pipelines.",
+                                "Implemented production APIs.",
+                            ],
+                        }
+                    ]
+                },
+                "education": {
+                    "entries": [
+                        {
+                            "title": "Bachelor of Computer Science",
+                            "location": "Hanoi University of Science and Technology (HUST)",
+                            "description": "GPA: 3.24",
+                            "bullets": ["Expected graduation year: 2026"],
+                        }
+                    ]
+                },
+                "skills": {
+                    "entries": [
+                        {
+                            "title": "Programming & Frameworks",
+                            "description": "Python, PyTorch, TensorFlow, scikit-learn",
+                            "bullets": ["Python", "PyTorch", "TensorFlow"],
+                        }
+                    ]
+                },
+                "languages": {
+                    "entries": [
+                        {
+                            "title": "English",
+                            "description": "TOEIC 935",
+                            "bullets": ["Professional working proficiency"],
+                        }
+                    ]
+                },
+                "projects": {
+                    "entries": [
+                        {
+                            "title": "Recruitment AI assistant",
+                            "subtitle": "Hanoi University of Science and Technology",
+                            "dateRange": "February 2026 - May 2026",
+                            "description": "Automated candidate screening and interview scheduling.",
+                            "bullets": ["Integrated with HR systems."],
+                        }
+                    ]
+                },
+                "achievements": {
+                    "entries": [
+                        {
+                            "title": "Top 5 AI Challenge",
+                            "description": "Ranked in the top 5 nationwide.",
+                        }
+                    ]
+                },
+                "certifications": {
+                    "entries": [
+                        {
+                            "title": "TOEIC",
+                            "dateRange": "2025",
+                            "description": "Score: 935",
+                        }
+                    ]
+                },
+            },
+        },
+    )
+
+    assert "production-ready AI systems" in profile.summary_text
+    assert "KIAISOFT company" in profile.experience_text
+    assert "Designed RAG pipelines." in profile.experience_text
+    assert "Hanoi University of Science and Technology" in profile.education_text
+    assert "Programming & Frameworks" in profile.skills_text
+    assert "PyTorch" in profile.skills_text
+    assert "Professional working proficiency" in profile.languages_text
+    assert "February 2026 - May 2026" in profile.projects_text
+    assert "Integrated with HR systems." in profile.projects_text
+    assert "top 5 nationwide" in profile.achievements_text
+    assert "Score: 935" in profile.certifications_text
+
+
 def test_candidate_profile_cpa_column_supports_unbounded_text():
     cpa_column = CandidateProfile.__table__.columns["cpa"]
 
@@ -189,7 +339,7 @@ def test_parse_pdf_to_sections_persists_submitted_values_and_uses_fallbacks(
 
     class FakeProvider:
         def __init__(self):
-            self.provider = "groq"
+            self.provider = "shopaikey"
             self.model_name = "fake-model"
 
         def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
@@ -360,8 +510,8 @@ def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
     class FakeProvider:
         def __init__(self):
             self.calls = 0
-            self.model_name = "llama-3.1-8b-instant"
-            self.provider = "groq"
+            self.model_name = "shopaikey-primary-model"
+            self.provider = "shopaikey"
 
         def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
             self.provider = provider or self.provider
@@ -373,8 +523,8 @@ def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
             if self.calls == 1:
                 return types.SimpleNamespace(
                     text='{"name":"Broken"',
-                    provider="groq",
-                    model="llama-3.1-8b-instant",
+                    provider="shopaikey",
+                    model="shopaikey-primary-model",
                 )
             return types.SimpleNamespace(
                 text=json.dumps(
@@ -384,8 +534,8 @@ def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
                         "skills": "Python",
                     }
                 ),
-                provider="groq",
-                model="llama-3.1-8b-instant",
+                provider="shopaikey",
+                model="shopaikey-primary-model",
             )
 
     provider = FakeProvider()
@@ -412,18 +562,28 @@ def test_parse_pdf_to_sections_retries_invalid_json_and_records_trace(
     assert trace_payload["status"] == "success"
     assert trace_payload["metadata"]["file_name"] == "resume.pdf"
     assert trace_payload["metadata"]["extraction_mode"] == "text"
-    assert trace_payload["result"]["llm"]["model"] == "llama-3.1-8b-instant"
+    assert trace_payload["result"]["llm"]["model"] == "shopaikey-primary-model"
     assert len(trace_payload["llm_attempts"]) == 2
     assert trace_payload["llm_attempts"][0]["parse_error"]["message"] == "LLM did not return a valid JSON object"
 
 
-def test_generate_resume_json_with_retries_uses_groq_shopaikey_sequence():
+def test_generate_resume_json_with_retries_uses_shopaikey_only_sequence(monkeypatch):
     call_order = []
-    provider_call_counts = {"groq": 0, "shopaikey": 0}
+    provider_call_counts = {"shopaikey": 0}
     logged_attempts = []
+    monkeypatch.setattr(
+        resume_service.settings,
+        "RESUME_PARSE_MODEL_NAME",
+        "resume-parse-model",
+    )
+    monkeypatch.setattr(
+        resume_service.settings,
+        "SHOPAIKEY_MODEL_NAME",
+        "shopaikey-fallback-model",
+    )
 
     class FakeProvider:
-        def __init__(self, provider="groq", model_name="groq-model"):
+        def __init__(self, provider="shopaikey", model_name="resume-parse-model"):
             self.provider = provider
             self.model_name = model_name
             self.temperature = 0.2
@@ -443,7 +603,7 @@ def test_generate_resume_json_with_retries_uses_groq_shopaikey_sequence():
             attempt = provider_call_counts[self.provider]
             call_order.append(self.provider)
 
-            if self.provider == "groq" and attempt == 2:
+            if attempt == 2:
                 text = json.dumps(
                     {
                         "name": "Retry Candidate",
@@ -477,11 +637,11 @@ def test_generate_resume_json_with_retries_uses_groq_shopaikey_sequence():
         resume_service.get_resume_parse_trace_logger = original_logger_factory
 
     assert parsed["name"] == "Retry Candidate"
-    assert llm_response.provider == "groq"
-    assert attempt_count == 3
-    assert call_order == ["groq", "shopaikey", "groq"]
-    assert len(logged_attempts) == 3
-    assert logged_attempts[0]["provider"] == "groq"
+    assert llm_response.provider == "shopaikey"
+    assert attempt_count == 2
+    assert call_order == ["shopaikey", "shopaikey"]
+    assert len(logged_attempts) == 2
+    assert logged_attempts[0]["provider"] == "shopaikey"
     assert logged_attempts[0]["model"] == resume_service.settings.RESUME_PARSE_MODEL_NAME
     assert logged_attempts[0]["response_chars"] == len('{"name":"Broken"')
     assert logged_attempts[0]["prompt_chars"] == len("prompt")
@@ -490,8 +650,81 @@ def test_generate_resume_json_with_retries_uses_groq_shopaikey_sequence():
     assert logged_attempts[0]["parse_error"]["message"] == "LLM did not return a valid JSON object"
     assert logged_attempts[1]["provider"] == "shopaikey"
     assert logged_attempts[1]["model"] == resume_service.settings.SHOPAIKEY_MODEL_NAME
-    assert logged_attempts[2]["provider"] == "groq"
-    assert logged_attempts[2]["parse_error"] is None
+    assert logged_attempts[1]["parse_error"] is None
+
+
+def test_generate_resume_json_with_retries_marks_unavailable_models_for_future_calls(monkeypatch):
+    unavailable_models = getattr(resume_service, "_UNAVAILABLE_RESUME_PARSE_MODELS", None)
+    original_unavailable = set(unavailable_models or set())
+    if unavailable_models is None:
+        resume_service._UNAVAILABLE_RESUME_PARSE_MODELS = set()
+    else:
+        unavailable_models.clear()
+
+    monkeypatch.setattr(
+        resume_service.settings,
+        "RESUME_PARSE_MODEL_NAME",
+        "llama-3.1-8b-instant",
+    )
+    monkeypatch.setattr(
+        resume_service.settings,
+        "SHOPAIKEY_MODEL_NAME",
+        "llama-3.1-8b",
+    )
+
+    seen_models: list[str] = []
+
+    class FakeProvider:
+        def __init__(self, provider="shopaikey", model_name="resume-parse-model"):
+            self.provider = provider
+            self.model_name = model_name
+            self.temperature = 0.2
+            self.max_tokens = 4096
+            self.timeout_seconds = 60
+            self.max_retries = 0
+
+        def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
+            return FakeProvider(
+                provider=provider or self.provider,
+                model_name=model_name or self.model_name,
+            )
+
+        def generate(self, prompt):
+            seen_models.append(self.model_name)
+            if self.model_name == "llama-3.1-8b-instant":
+                raise RuntimeError(
+                    'ShopAIKey HTTP 503: {"error":{"code":"model_not_found","message":"No available channel for model llama-3.1-8b-instant"}}'
+                )
+            return types.SimpleNamespace(
+                text=json.dumps(
+                    {
+                        "name": "Retry Candidate",
+                        "email": "retry@example.com",
+                        "skills": "Python",
+                    }
+                ),
+                provider=self.provider,
+                model=self.model_name,
+            )
+
+    try:
+        parsed, llm_response, attempt_count = resume_service._generate_resume_json_with_retries(
+            trace_id="trace-123",
+            stage="text",
+            llm_provider=FakeProvider(),
+            prompt="prompt",
+        )
+        assert parsed["name"] == "Retry Candidate"
+        assert llm_response.model == "llama-3.1-8b"
+        assert attempt_count == 2
+        assert seen_models == ["llama-3.1-8b-instant", "llama-3.1-8b"]
+        assert ("shopaikey", "llama-3.1-8b-instant") in resume_service._UNAVAILABLE_RESUME_PARSE_MODELS
+        assert resume_service.settings.RESUME_PARSE_MODEL_NAME == "llama-3.1-8b"
+        assert resume_service._resume_text_parse_provider_specs() == [
+            ("shopaikey", "llama-3.1-8b")
+        ]
+    finally:
+        resume_service._UNAVAILABLE_RESUME_PARSE_MODELS = original_unavailable
 
 
 def test_parse_pdf_to_sections_records_failure_trace_file(monkeypatch, tmp_path):
@@ -509,8 +742,8 @@ def test_parse_pdf_to_sections_records_failure_trace_file(monkeypatch, tmp_path)
     class FakeProvider:
         def __init__(self):
             self.calls = 0
-            self.provider = "groq"
-            self.model_name = "llama-3.1-8b-instant"
+            self.provider = "shopaikey"
+            self.model_name = "shopaikey-primary-model"
 
         def clone_with_model(self, *, provider=None, model_name=None, allow_fallback=None):
             self.provider = provider or self.provider
@@ -521,8 +754,8 @@ def test_parse_pdf_to_sections_records_failure_trace_file(monkeypatch, tmp_path)
             self.calls += 1
             return types.SimpleNamespace(
                 text="not-json",
-                provider="groq",
-                model="llama-3.1-8b-instant",
+                provider="shopaikey",
+                model="shopaikey-primary-model",
             )
 
     provider = FakeProvider()

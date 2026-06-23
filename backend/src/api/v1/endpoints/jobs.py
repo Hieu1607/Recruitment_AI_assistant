@@ -22,6 +22,7 @@ from src.models.resume_document import ResumeDocument
 from src.models.user_account import UserAccount
 from src.services.ai_agent.graph import get_graph
 from src.services.job_description_service import _jd_to_dict
+from src.services.notification_service import create_notification
 from src.services.job_scope import (
     apply_public_job_settings,
     get_current_user_owned_job,
@@ -36,6 +37,7 @@ from src.services.object_storage import build_object_key, get_object_storage
 from src.services.public_job_service import generate_public_apply_token
 from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 from src.services.resume_service import (
+    _normalize_location_name,
     _resume_to_dict,
     create_resume_document,
     parse_pdf_to_sections,
@@ -393,7 +395,7 @@ def _load_job_candidates(
             "full_name": r.full_name,
             "phone": r.phone,
             "email": r.email,
-            "location_normalized": r.location_normalized,
+            "location_normalized": _normalize_location_name(r.location_normalized),
             "contact": r.contact,
             "current_job_title": r.current_job_title,
             "graduation_status": r.graduation_status,
@@ -992,7 +994,7 @@ def score_job_candidates(
         for candidate_id in body.candidate_profile_ids:
             get_job_scoped_candidate(db, current_user.id, job_id, candidate_id)
     try:
-        return score_candidates(
+        result = score_candidates(
             db=db,
             job_description_id=jd.id,
             initiated_by_user_id=current_user.id,
@@ -1001,6 +1003,25 @@ def score_job_candidates(
             section_weights=body.section_weights,
             batch_size=body.batch_size,
         )
+        create_notification(
+            db=db,
+            user_id=current_user.id,
+            notification_type="scoring_completed",
+            title="Scoring completed",
+            body=(
+                f"Scored {result.get('total_candidates', 0)} candidate"
+                f"{'' if result.get('total_candidates', 0) == 1 else 's'} for this workspace."
+            ),
+            target_url=f"/scoring/{result.get('match_run_id')}",
+            metadata={
+                "job_id": str(job_id),
+                "job_description_id": str(jd.id),
+                "match_run_id": str(result.get("match_run_id")),
+                "total_candidates": result.get("total_candidates", 0),
+                "total_passed_candidates": result.get("total_passed_candidates", 0),
+            },
+        )
+        return result
     except ScoringProviderLimitError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1366,6 +1387,11 @@ def chat_about_job(
             for candidate in dsl_pool
             if isinstance(candidate, dict) and candidate.get("id") is not None
         ]
+    else:
+        llm_result = result.get("llm_result") or {}
+        qualified_candidates = llm_result.get("qualified_candidates") or {}
+        if isinstance(qualified_candidates, dict) and qualified_candidates:
+            matched_candidate_ids = [str(candidate_id) for candidate_id in qualified_candidates.keys()]
     answer = result.get("answer") or ""
     turn = _persist_chat_turn(
         db,
