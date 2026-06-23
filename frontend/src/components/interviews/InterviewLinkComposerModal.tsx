@@ -2,7 +2,7 @@ import {
   api,
   type CandidateProfileResponse,
   type DispatchCandidateResponse,
-  type QuestionSetResponse,
+  type InterviewTemplateResponse,
 } from "@/api";
 import {
   Button,
@@ -35,13 +35,6 @@ type CreateSummary = {
   skippedCount: number;
   failedCount: number;
 };
-
-function formatQuestionSetLabel(questionSet: QuestionSetResponse) {
-  const createdAt = new Date(questionSet.created_at).toLocaleDateString();
-  return questionSet.candidate_full_name
-    ? `${questionSet.candidate_full_name} · ${createdAt}`
-    : `${questionSet.job_description_title || "Question set"} · ${createdAt}`;
-}
 
 function toPreviewCandidate(candidate: CandidateProfileResponse | DispatchCandidateResponse): PreviewCandidate {
   if ("candidate_profile_id" in candidate) {
@@ -117,7 +110,7 @@ export function InterviewLinkComposerModal({
   const queryClient = useQueryClient();
   const userId = useUserId();
   const [sourceMode, setSourceMode] = useState<SourceMode>("individual");
-  const [questionSetId, setQuestionSetId] = useState("");
+  const [templateId, setTemplateId] = useState("");
   const [expiresInHours, setExpiresInHours] = useState("72");
   const [shortlistId, setShortlistId] = useState("");
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
@@ -125,7 +118,7 @@ export function InterviewLinkComposerModal({
   useEffect(() => {
     if (!open) return;
     setSourceMode("individual");
-    setQuestionSetId("");
+    setTemplateId("");
     setExpiresInHours("72");
     setShortlistId("");
     setSelectedCandidateIds(new Set());
@@ -138,16 +131,10 @@ export function InterviewLinkComposerModal({
     }
   }, [sourceMode]);
 
-  const { data: jobDescription, isLoading: jobDescriptionLoading } = useQuery({
-    queryKey: ["job-description", jobId],
-    queryFn: () => api.jobs.jobDescription.get(jobId!).catch(() => null),
+  const { data: templatesData, isLoading: templatesLoading } = useQuery({
+    queryKey: ["interview-templates", jobId],
+    queryFn: () => api.interviewTemplates.list(jobId!),
     enabled: open && !!jobId,
-  });
-
-  const { data: questionSetsData, isLoading: questionSetsLoading } = useQuery({
-    queryKey: ["interview-question-sets", jobDescription?.id],
-    queryFn: () => api.interviewQuestions.list({ job_description_id: jobDescription!.id, limit: 200 }),
-    enabled: open && !!jobDescription?.id,
   });
 
   const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
@@ -157,7 +144,7 @@ export function InterviewLinkComposerModal({
   });
 
   const { data: shortlistsData, isLoading: shortlistsLoading } = useQuery({
-    queryKey: ["shortlist-collections", userId],
+    queryKey: ["collections", userId],
     queryFn: () => api.shortlist.collections.list({ user_id: userId!, limit: 200 }),
     enabled: open && sourceMode === "shortlist" && !!userId,
   });
@@ -195,7 +182,9 @@ export function InterviewLinkComposerModal({
 
   const selectedPreviewCandidates = previewCandidates.filter((candidate) => selectedCandidateIds.has(candidate.id));
   const allSelected = previewCandidates.length > 0 && selectedCandidateIds.size === previewCandidates.length;
-  const questionSets = questionSetsData?.items ?? [];
+  const templates = (templatesData?.items ?? []).filter(
+    (template: InterviewTemplateResponse) => template.status === "active",
+  );
 
   const createMutation = useMutation({
     mutationFn: async (): Promise<CreateSummary> => {
@@ -204,7 +193,7 @@ export function InterviewLinkComposerModal({
         const result = await api.shortlist.dispatch.createInterviewInvitations(shortlistId, {
           candidate_profile_ids: [...selectedCandidateIds],
           job_id: jobId!,
-          interview_question_set_id: questionSetId,
+          interview_template_id: templateId,
           expires_in_hours: expires,
           send_email: false,
         });
@@ -220,7 +209,7 @@ export function InterviewLinkComposerModal({
           api.interviewInvitations.create({
             job_id: jobId!,
             candidate_profile_id: candidateId,
-            interview_question_set_id: questionSetId,
+            interview_template_id: templateId,
             expires_in_hours: expires,
             send_email: false,
           }),
@@ -277,7 +266,7 @@ export function InterviewLinkComposerModal({
 
   const createDisabled =
     !jobId ||
-    !questionSetId ||
+    !templateId ||
     selectedCandidateIds.size === 0 ||
     (sourceMode === "shortlist" && (!shortlistId || !shortlistMatchesJob));
 
@@ -287,7 +276,7 @@ export function InterviewLinkComposerModal({
         <ModalHeader>
           <ModalTitle>Create interview links</ModalTitle>
           <ModalDescription>
-            Choose a source, pick an interview question set, then review who should receive a draft link. Links are created now and not sent yet.
+            Choose a source, pick an interview template, then review who should receive a draft link. Links are created now and not sent yet.
           </ModalDescription>
         </ModalHeader>
 
@@ -295,15 +284,6 @@ export function InterviewLinkComposerModal({
           <EmptyState
             heading="Select a job first"
             body="Pick the active job in the top bar before creating interview links."
-          />
-        ) : jobDescriptionLoading ? (
-          <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] px-4 py-6 text-sm text-fg-muted">
-            Loading job context...
-          </div>
-        ) : !jobDescription ? (
-          <EmptyState
-            heading="No active job description"
-            body="Interview question sets depend on the active job description for the selected job."
           />
         ) : (
           <div className="space-y-5">
@@ -329,22 +309,22 @@ export function InterviewLinkComposerModal({
 
             <section className="space-y-4">
               <label className="space-y-1.5">
-                <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Interview question set</span>
+                <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Interview template</span>
                 <select
-                  aria-label="Interview question set"
-                  value={questionSetId}
-                  onChange={(event) => setQuestionSetId(event.target.value)}
+                  aria-label="Interview template"
+                  value={templateId}
+                  onChange={(event) => setTemplateId(event.target.value)}
                   className={cn(
                     "h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3",
                     "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
                   )}
                 >
                   <option value="">
-                    {questionSetsLoading ? "Loading question sets..." : "Select question set..."}
+                    {templatesLoading ? "Loading templates..." : "Select template..."}
                   </option>
-                  {questionSets.map((questionSet) => (
-                    <option key={questionSet.id} value={questionSet.id}>
-                      {formatQuestionSetLabel(questionSet)}
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
                     </option>
                   ))}
                 </select>
@@ -389,10 +369,10 @@ export function InterviewLinkComposerModal({
               </label>
             </section>
 
-            {questionSets.length === 0 && !questionSetsLoading ? (
+            {templates.length === 0 && !templatesLoading ? (
               <EmptyState
-                heading="No interview question sets"
-                body="Generate at least one interview question set for this job before creating links here."
+                heading="No active interview templates"
+                body="Create at least one active interview template for this job before creating links here."
               />
             ) : sourceMode === "shortlist" && shortlistId && !shortlistMatchesJob ? (
               <div className="rounded-[var(--radius-md)] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
