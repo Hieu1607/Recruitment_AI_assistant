@@ -119,6 +119,10 @@ Avoid:
 - heavy animation dependence
 - oversimplified wireframes that no longer feel like the EasyHR product
 
+Implementation reminder:
+
+- if any showcase frame is built from placeholder or reconstructed UI imagery during implementation, replace it with real EasyHR interface captures before final sign-off when better product-faithful screens are available
+
 ## Component Shape
 
 Keep the work local to the landing route unless extraction meaningfully improves readability.

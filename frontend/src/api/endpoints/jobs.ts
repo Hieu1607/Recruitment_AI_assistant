@@ -102,13 +102,33 @@ export const jobsApi = {
       return data;
     },
     async batchParse(jobId: string, files: File[]): Promise<ResumeBatchParseResponse> {
-      const fd = new FormData();
-      files.forEach((file) => fd.append("files", file));
-      const { data } = await client.post<ResumeBatchParseResponse>(`/jobs/${jobId}/resumes`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-        timeout: 300_000,
-      });
-      return data;
+      const uploadSingleResume = async (file: File): Promise<ResumeBatchParseResponse> => {
+        const fd = new FormData();
+        fd.append("files", file);
+        const { data } = await client.post<ResumeBatchParseResponse>(`/jobs/${jobId}/resumes`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 300_000,
+        });
+        return data;
+      };
+
+      const responses: ResumeBatchParseResponse[] = [];
+      for (const file of files) {
+        responses.push(await uploadSingleResume(file));
+      }
+
+      return responses.reduce<ResumeBatchParseResponse>(
+        (merged, response) => ({
+          total_files: merged.total_files + response.total_files,
+          queued_files: merged.queued_files + response.queued_files,
+          items: merged.items.concat(response.items),
+        }),
+        {
+          total_files: 0,
+          queued_files: 0,
+          items: [],
+        },
+      );
     },
   },
 
