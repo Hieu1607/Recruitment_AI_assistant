@@ -5,7 +5,7 @@ import { Button, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader
 import { Avatar } from "@/components/ui/avatar";
 import { SidebarResizeHandle } from "@/components/layout/SidebarResizeHandle";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
-import { useSelectedJobId, useUserId } from "@/lib/auth";
+import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useResizableSidebar } from "@/lib/useResizableSidebar";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -617,7 +617,6 @@ export default function ChatRoute() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const selectedJobId = useSelectedJobId();
-  const userId = useUserId();
   const queryClient = useQueryClient();
   const candidatePreviewBounds = getCandidatePreviewBounds();
 
@@ -869,12 +868,11 @@ export default function ChatRoute() {
 
   const createShortlistMutation = useMutation({
     mutationFn: async () => {
-      if (!userId || !shortlistDraft || selectedShortlistIds.length === 0 || !shortlistName.trim()) {
+      if (!shortlistDraft || selectedShortlistIds.length === 0 || !shortlistName.trim()) {
         throw new Error("Missing shortlist inputs");
       }
 
       const collection = await api.shortlist.collections.create({
-        created_by_user_id: userId,
         name: shortlistName.trim(),
         source_query_turn_id: shortlistDraft.sourceTurnId,
       });

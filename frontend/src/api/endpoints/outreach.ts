@@ -7,6 +7,8 @@ import type {
   OutreachTemplateCreateRequest,
   OutreachTemplateListResponse,
   OutreachTemplateResponse,
+  OutreachTemplateGenerateRequest,
+  OutreachTemplateGenerateResponse,
   OutreachTemplateUpdateRequest,
   OutreachUpdateRequest,
   SentStatus,
@@ -87,6 +89,13 @@ export const outreachApi = {
     body: OutreachTemplateUpdateRequest,
   ): Promise<OutreachTemplateResponse> {
     const { data } = await client.patch<OutreachTemplateResponse>(`/outreach/templates/${templateId}`, body);
+    return data;
+  },
+
+  async generateTemplateDraft(
+    body: OutreachTemplateGenerateRequest,
+  ): Promise<OutreachTemplateGenerateResponse> {
+    const { data } = await client.post<OutreachTemplateGenerateResponse>("/outreach/templates/generate-draft", body);
     return data;
   },
 

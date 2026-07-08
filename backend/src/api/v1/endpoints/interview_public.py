@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from src.models.deps import get_db
@@ -21,6 +23,10 @@ from src.services.interview_session_service import (
     start_public_interview_session,
     synthesize_public_interview_prompt,
 )
+from src.services.tts_service import TTSProviderError
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -67,5 +73,12 @@ def synthesize_interview_tts(
     body: PublicInterviewTTSRequest,
     db: Session = Depends(get_db),
 ):
-    audio, _language_code = synthesize_public_interview_prompt(db, token=token, body=body)
+    try:
+        audio, _language_code = synthesize_public_interview_prompt(db, token=token, body=body)
+    except TTSProviderError as exc:
+        logger.error("TTS synthesis failed for interview token=%s: %s", token, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Speech synthesis is temporarily unavailable. Please try again.",
+        ) from exc
     return Response(content=audio, media_type="audio/mpeg")

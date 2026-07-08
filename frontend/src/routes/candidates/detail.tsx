@@ -1,4 +1,5 @@
 import type {
+  CandidateEvaluationResponse,
   CandidateProfileResponse,
   InterviewInvitationResponse,
   OutreachResponse,
@@ -20,7 +21,7 @@ import { ArrowLeft, BookOpen, Calendar, ExternalLink, Mail } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
-type Tab = "overview" | "resume" | "outreach" | "interview";
+type Tab = "overview" | "resume" | "evaluation" | "outreach" | "interview";
 
 function fileToName(value: string) {
   return value.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
@@ -43,11 +44,28 @@ function absoluteDate(value: string | null) {
   return new Date(value).toLocaleDateString();
 }
 
+function dateDisplayValue(value: string | null) {
+  if (!value) return null;
+  return new Date(value).toLocaleDateString();
+}
+
 function statusVariant(status: string): "neutral" | "warning" | "success" | "danger" {
   if (status === "processed" || status === "completed" || status === "sent") return "success";
   if (status === "processing" || status === "pending") return "warning";
   if (status === "failed" || status === "cancelled") return "danger";
   return "neutral";
+}
+
+function resumeStatusMessage(status: ResumeResponse["upload_status"]) {
+  switch (status) {
+    case "uploaded":
+    case "processing":
+      return "CV is being processed";
+    case "failed":
+      return "CV processing failed";
+    default:
+      return null;
+  }
 }
 
 const missingDisplayValues = new Set(["-", "--", "n/a", "na", "none", "null", "notapplicable"]);
@@ -146,11 +164,11 @@ function cleanStructuredEntry(entry: StructuredEntry): StructuredEntry | null {
   return null;
 }
 
-function displayValue(value: string | number | boolean | null | undefined) {
-  if (value === null || value === undefined) return "No infomation";
+function displayValue(value: string | number | boolean | null | undefined, emptyValue = "No infomation") {
+  if (value === null || value === undefined) return emptyValue;
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") return String(value);
-  return cleanDisplayText(value) || "No infomation";
+  return cleanDisplayText(value) || emptyValue;
 }
 
 function renderLinks(links: StructuredLink[]) {
@@ -178,12 +196,20 @@ function hasStructuredSection(section: StructuredSection | null | undefined) {
   return !!section && (section.entries.length > 0 || !!section.rawText);
 }
 
-function StructuredSummaryBlock({ summary, fallbackText }: { summary?: StructuredSummary | null; fallbackText?: string | null }) {
+function StructuredSummaryBlock({
+  summary,
+  fallbackText,
+  emptyValue,
+}: {
+  summary?: StructuredSummary | null;
+  fallbackText?: string | null;
+  emptyValue?: string;
+}) {
   const text = cleanDisplayText(summary?.text) || cleanDisplayText(fallbackText);
   const links = summary?.links ?? [];
   return (
     <>
-      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(text)}</p>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(text, emptyValue)}</p>
       {renderLinks(links)}
     </>
   );
@@ -192,19 +218,23 @@ function StructuredSummaryBlock({ summary, fallbackText }: { summary?: Structure
 function StructuredSectionBlock({
   section,
   fallbackText,
+  emptyValue,
 }: {
   section?: StructuredSection | null;
   fallbackText?: string | null;
+  emptyValue?: string;
 }) {
+  const emptyText = emptyValue ?? "No infomation";
+
   if (!hasStructuredSection(section)) {
-    return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(fallbackText)}</p>;
+    return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{displayValue(fallbackText, emptyText)}</p>;
   }
 
   const entries = section!.entries.map(cleanStructuredEntry).filter((entry): entry is StructuredEntry => entry !== null);
   const rawText = cleanDisplayText(section?.rawText) || cleanDisplayText(fallbackText);
 
   if (entries.length === 0 && !rawText) {
-    return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">No infomation</p>;
+    return <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{emptyText}</p>;
   }
 
   return (
@@ -292,6 +322,7 @@ function OverviewTab({
   resume: ResumeResponse;
   profile: CandidateProfileResponse | undefined;
 }) {
+  const emptyValue = resumeStatusMessage(resume.upload_status) ?? "No infomation";
   const displayName = profile?.full_name || profile?.submitted_full_name;
   const displayEmail = profile?.email || profile?.submitted_email;
   const sectionFields = [
@@ -312,8 +343,8 @@ function OverviewTab({
 
   const resumeInfoRows = [
     { label: "Status", value: resume.upload_status, badge: true },
-    { label: "Uploaded", value: absoluteDate(resume.uploaded_at) },
-    { label: "Processed", value: absoluteDate(resume.processed_at) },
+    { label: "Uploaded", value: dateDisplayValue(resume.uploaded_at) },
+    { label: "Processed", value: dateDisplayValue(resume.processed_at) },
     { label: "Extraction mode", value: profile?.extraction_mode },
     { label: "Email", value: displayEmail },
     { label: "Phone", value: profile?.phone },
@@ -344,14 +375,14 @@ function OverviewTab({
             <h2 className="font-display text-xl font-medium text-fg">{section.title}</h2>
             {section.kind === "plain" && (
               <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
-                {displayValue(section.content)}
+                {displayValue(section.content, emptyValue)}
               </p>
             )}
             {section.kind === "summary" && (
-              <StructuredSummaryBlock summary={section.structured} fallbackText={section.content} />
+              <StructuredSummaryBlock summary={section.structured} fallbackText={section.content} emptyValue={emptyValue} />
             )}
             {section.kind === "structured" && (
-              <StructuredSectionBlock section={section.structured} fallbackText={section.content} />
+              <StructuredSectionBlock section={section.structured} fallbackText={section.content} emptyValue={emptyValue} />
             )}
           </section>
         ))}
@@ -366,7 +397,7 @@ function OverviewTab({
               {row.badge ? (
                 <Badge variant={statusVariant(String(row.value ?? ""))}>{displayValue(row.value)}</Badge>
               ) : (
-                <span className="text-right text-fg">{displayValue(row.value)}</span>
+                <span className="text-right text-fg">{displayValue(row.value, emptyValue)}</span>
               )}
             </div>
           ))}
@@ -392,10 +423,17 @@ function ResumeTab({ resume }: { resume: ResumeResponse }) {
   }, [pdfUrl]);
 
   if (resume.upload_status !== "processed") {
+    const statusMessage = resumeStatusMessage(resume.upload_status);
     return (
       <EmptyState
         heading="Resume preview unavailable"
-        body={`Preview will appear after processing finishes. Current status: ${resume.upload_status}.`}
+        body={
+          statusMessage
+            ? resume.upload_status === "failed"
+              ? `${statusMessage}. Preview is unavailable until the CV is reprocessed.`
+              : `${statusMessage}. Preview will appear after processing finishes.`
+            : `Preview will appear after processing finishes. Current status: ${resume.upload_status}.`
+        }
       />
     );
   }
@@ -493,6 +531,76 @@ function InterviewsTab({ items }: { items: InterviewInvitationResponse[] }) {
   );
 }
 
+function EvaluationTab({
+  evaluation,
+  loading,
+}: {
+  evaluation?: CandidateEvaluationResponse;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <Skeleton className="h-64 w-full rounded-[var(--radius-lg)]" />;
+  }
+
+  if (!evaluation) {
+    return (
+      <EmptyState
+        heading="Evaluation unavailable"
+        body="Scoring will appear after this candidate is evaluated against the current job description."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-3xl">
+            <h2 className="font-display text-xl font-medium text-fg">JD match</h2>
+            <p className="mt-2 text-sm leading-6 text-fg-muted">{evaluation.rationale || "No rationale available yet."}</p>
+          </div>
+          <div className="text-right">
+            <p className="font-display text-4xl font-medium text-fg tabular-nums">{evaluation.totalScore.toFixed(1)}</p>
+            <Badge variant={statusVariant(evaluation.status)}>{evaluation.status}</Badge>
+          </div>
+        </div>
+      </section>
+
+      {evaluation.componentScores.length === 0 ? (
+        <EmptyState
+          heading="No component scores yet"
+          body="This evaluation is still being prepared, or scoring failed before criterion-level output was saved."
+        />
+      ) : (
+        evaluation.componentScores.map((component) => (
+          <section
+            key={component.criterionKey}
+            className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="max-w-3xl">
+                <h3 className="text-sm font-medium text-fg">
+                  {component.requirementText || component.criterionKey}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-fg-muted">{component.evidenceSummary || "No evidence available."}</p>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-lg text-fg tabular-nums">{component.scorePercent.toFixed(1)}%</p>
+                <Badge
+                  variant={component.evaluationMode === "measurable" ? "success" : "neutral"}
+                  size="sm"
+                >
+                  {component.evaluationMode === "measurable" ? "Rule-based" : "Semantic"}
+                </Badge>
+              </div>
+            </div>
+          </section>
+        ))
+      )}
+    </div>
+  );
+}
+
 export default function CandidateDetailRoute() {
   const { id } = useParams<{ id: string }>();
   const selectedJobId = useSelectedJobId();
@@ -526,6 +634,16 @@ export default function CandidateDetailRoute() {
     queryKey: ["interview-invitations", selectedJobId],
     queryFn: () => api.interviewInvitations.list(selectedJobId!),
     enabled: !!selectedJobId,
+  });
+
+  const { data: evaluation, isLoading: evaluationLoading } = useQuery({
+    queryKey: ["jobs", selectedJobId, "candidate-evaluation", profile?.id],
+    queryFn: () => api.jobs.evaluations.getCandidate(selectedJobId!, profile!.id),
+    enabled: !!selectedJobId && !!profile?.id,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "pending" || status === "running" ? 3000 : false;
+    },
   });
 
   const invitations = useMemo(
@@ -602,6 +720,9 @@ export default function CandidateDetailRoute() {
           <TabButton active={activeTab === "resume"} onClick={() => setActiveTab("resume")}>
             Resume PDF
           </TabButton>
+          <TabButton active={activeTab === "evaluation"} onClick={() => setActiveTab("evaluation")}>
+            Evaluation
+          </TabButton>
           <TabButton active={activeTab === "outreach"} onClick={() => setActiveTab("outreach")}>
             Outreach
           </TabButton>
@@ -613,6 +734,9 @@ export default function CandidateDetailRoute() {
         <div>
           {activeTab === "overview" && <OverviewTab resume={resume} profile={profile} />}
           {activeTab === "resume" && <ResumeTab resume={resume} />}
+          {activeTab === "evaluation" && (
+            <EvaluationTab evaluation={evaluation} loading={evaluationLoading} />
+          )}
           {activeTab === "outreach" && <OutreachTab items={outreachItems} />}
           {activeTab === "interview" && <InterviewsTab items={invitations} />}
         </div>

@@ -36,6 +36,7 @@ export function WorkspaceJobDescriptionEditor() {
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [localIsActive, setLocalIsActive] = useState(true);
+  const [hiddenText, setHiddenText] = useState("");
   const [, forceRender] = useState(0);
 
   useEffect(() => {
@@ -57,25 +58,34 @@ export function WorkspaceJobDescriptionEditor() {
     enabled: !!selectedJobId,
   });
 
+  const { data: evaluations } = useQuery({
+    queryKey: ["jobs", selectedJobId, "evaluations"],
+    queryFn: () => selectedJobId ? api.jobs.evaluations.list(selectedJobId) : Promise.resolve(null),
+    enabled: !!selectedJobId,
+  });
+
   useEffect(() => {
     if (!jd) return;
     if (titleRef.current && !titleRef.current.value) {
       titleRef.current.value = jd.title ?? "";
     }
     setLocalIsActive(jd.is_active);
+    setHiddenText(jd.hidden_text ?? "");
   }, [jd]);
 
   const createMutation = useMutation({
-    mutationFn: (body: { title: string; jd_text: string }) =>
+    mutationFn: (body: { title: string; jd_text: string; hidden_text: string }) =>
       api.jobs.jobDescription.upsert(selectedJobId!, {
         title: body.title || undefined,
         jd_text: body.jd_text,
+        hidden_text: body.hidden_text,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
       qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "job-description"] });
       qc.invalidateQueries({ queryKey: ["dashboard-jds", selectedJobId] });
       qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "setup-status"] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "evaluations"] });
       setSaveState("saved");
       setSavedAt(new Date());
     },
@@ -86,13 +96,14 @@ export function WorkspaceJobDescriptionEditor() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (body: Partial<{ title: string; jd_text: string; is_active: boolean }>) =>
+    mutationFn: (body: Partial<{ title: string; jd_text: string; hidden_text: string; is_active: boolean }>) =>
       api.jobs.jobDescription.patch(selectedJobId!, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["jobDescriptions"] });
       qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "job-description"] });
       qc.invalidateQueries({ queryKey: ["dashboard-jds", selectedJobId] });
       qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "setup-status"] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "evaluations"] });
       setSaveState("saved");
       setSavedAt(new Date());
     },
@@ -109,6 +120,7 @@ export function WorkspaceJobDescriptionEditor() {
       qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "job-description"] });
       qc.invalidateQueries({ queryKey: ["dashboard-jds", selectedJobId] });
       qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "setup-status"] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "evaluations"] });
       setDeleteOpen(false);
       setLocalIsActive(false);
       toast.success("Job description deactivated");
@@ -116,22 +128,33 @@ export function WorkspaceJobDescriptionEditor() {
     onError: () => toast.error("Failed to delete job description"),
   });
 
+  const scoreAgainMutation = useMutation({
+    mutationFn: () => api.jobs.evaluations.scoreAgain(selectedJobId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "evaluations"] });
+      qc.invalidateQueries({ queryKey: ["jobs", selectedJobId, "setup-status"] });
+      toast.success("Scoring queued");
+    },
+    onError: () => toast.error("Failed to queue scoring"),
+  });
+
   function getCurrentValues() {
     return {
       title: titleRef.current?.value.trim() ?? "",
       jd_text: htmlToMarkdown(editorRef.current?.innerHTML ?? ""),
+      hidden_text: hiddenText,
     };
   }
 
   function saveNow(extra?: Partial<{ is_active: boolean }>) {
-    const { title, jd_text } = getCurrentValues();
+    const { title, jd_text, hidden_text } = getCurrentValues();
     if (!jd_text && !title) return;
     setSaveState("saving");
     if (!jd) {
-      createMutation.mutate({ title, jd_text });
+      createMutation.mutate({ title, jd_text, hidden_text });
       return;
     }
-    updateMutation.mutate({ title, jd_text, ...extra });
+    updateMutation.mutate({ title, jd_text, hidden_text, ...extra });
   }
 
   function scheduleAutosave() {
@@ -195,6 +218,15 @@ export function WorkspaceJobDescriptionEditor() {
   }
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  const scoringStatus =
+    !evaluations || evaluations.total_candidates === 0
+      ? "Not scored"
+      : evaluations.outdated_count > 0
+        ? "Outdated"
+        : evaluations.running_count > 0 || evaluations.pending_count > 0
+          ? "Scoring"
+          : "Current";
+  const showScoreAgain = scoringStatus === "Outdated" || scoringStatus === "Not scored";
 
   return (
     <div className="px-8 py-8 min-h-full">
@@ -237,7 +269,7 @@ export function WorkspaceJobDescriptionEditor() {
       </div>
 
       <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
-        <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8">
+          <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8">
           <input
             ref={titleRef}
             type="text"
@@ -251,14 +283,27 @@ export function WorkspaceJobDescriptionEditor() {
             onBlur={scheduleAutosave}
           />
           <div className="h-px bg-[color:var(--hairline)] mb-6" />
-          <JobDescriptionRichTextBody
-            editorRef={editorRef}
-            initialMarkdown={jd?.jd_text ?? ""}
-            onInput={scheduleAutosave}
-            onBlur={cancelAndSaveNow}
-            minHeightClassName="min-h-[400px]"
-          />
-        </section>
+            <JobDescriptionRichTextBody
+              editorRef={editorRef}
+              initialMarkdown={jd?.jd_text ?? ""}
+              onInput={scheduleAutosave}
+              onBlur={cancelAndSaveNow}
+              minHeightClassName="min-h-[400px]"
+            />
+            <div className="mt-8 border-t border-[color:var(--hairline)] pt-6">
+              <h2 className="font-display text-xl font-medium text-fg">Recruiter-only hidden information</h2>
+              <p className="mt-2 text-sm leading-6 text-fg-muted">
+                This content is stored on the job description and affects evaluation signatures, but is not shown to candidates.
+              </p>
+              <textarea
+                aria-label="Recruiter-only hidden information"
+                value={hiddenText}
+                onChange={(event) => setHiddenText(event.target.value)}
+                onBlur={cancelAndSaveNow}
+                className="mt-4 min-h-28 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2 text-sm text-fg"
+              />
+            </div>
+          </section>
 
         <aside className="space-y-4">
           <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6">
@@ -289,6 +334,50 @@ export function WorkspaceJobDescriptionEditor() {
                 {localIsActive ? "Active" : "Inactive"}
               </Badge>
             </div>
+          </section>
+
+          <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6">
+            <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-3">
+              Scoring
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-fg">Evaluation status</span>
+              <Badge
+                variant={
+                  scoringStatus === "Current"
+                    ? "success"
+                    : scoringStatus === "Scoring"
+                      ? "warning"
+                      : scoringStatus === "Outdated"
+                        ? "danger"
+                        : "neutral"
+                }
+                size="sm"
+              >
+                {scoringStatus}
+              </Badge>
+            </div>
+            <p className="mt-3 text-xs leading-6 text-fg-muted">
+              {scoringStatus === "Current"
+                ? "Current evaluations match the active JD signature."
+                : scoringStatus === "Scoring"
+                  ? "New candidate evaluations are still running."
+                  : scoringStatus === "Outdated"
+                    ? "The JD text or hidden information changed after the last completed evaluation."
+                    : "No candidate evaluation has been saved for this job yet."}
+            </p>
+            {showScoreAgain && (
+              <div className="mt-4">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={scoreAgainMutation.isPending}
+                  onClick={() => void scoreAgainMutation.mutate()}
+                >
+                  Score again
+                </Button>
+              </div>
+            )}
           </section>
 
           {jd && (

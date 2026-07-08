@@ -2,12 +2,15 @@ import { client } from "../client";
 import type {
   CandidateProfileResponse,
   ChatResponse,
+  CandidateEvaluationResponse,
   ChatSessionListResponse,
   ChatSessionResponse,
   ChatTurnResponse,
   JobDescriptionResponse,
+  JobEvaluationListResponse,
   JobApplicationLinkResponse,
   JobListResponse,
+  JobScoringPreferenceResponse,
   JobResponse,
   JobSetupStatusResponse,
   ResumeBatchParseResponse,
@@ -102,33 +105,14 @@ export const jobsApi = {
       return data;
     },
     async batchParse(jobId: string, files: File[]): Promise<ResumeBatchParseResponse> {
-      const uploadSingleResume = async (file: File): Promise<ResumeBatchParseResponse> => {
-        const fd = new FormData();
-        fd.append("files", file);
-        const { data } = await client.post<ResumeBatchParseResponse>(`/jobs/${jobId}/resumes`, fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-          timeout: 300_000,
-        });
-        return data;
-      };
+      const fd = new FormData();
+      files.forEach((file) => fd.append("files", file));
 
-      const responses: ResumeBatchParseResponse[] = [];
-      for (const file of files) {
-        responses.push(await uploadSingleResume(file));
-      }
-
-      return responses.reduce<ResumeBatchParseResponse>(
-        (merged, response) => ({
-          total_files: merged.total_files + response.total_files,
-          queued_files: merged.queued_files + response.queued_files,
-          items: merged.items.concat(response.items),
-        }),
-        {
-          total_files: 0,
-          queued_files: 0,
-          items: [],
-        },
-      );
+      const { data } = await client.post<ResumeBatchParseResponse>(`/jobs/${jobId}/resumes`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 300_000,
+      });
+      return data;
     },
   },
 
@@ -148,6 +132,31 @@ export const jobsApi = {
   scoreRuns: {
     async get(jobId: string, matchRunId: string): Promise<ScoreResponse> {
       const { data } = await client.get<ScoreResponse>(`/jobs/${jobId}/score-runs/${matchRunId}`);
+      return data;
+    },
+  },
+
+  evaluations: {
+    async list(jobId: string): Promise<JobEvaluationListResponse> {
+      const { data } = await client.get<JobEvaluationListResponse>(`/jobs/${jobId}/evaluations`);
+      return data;
+    },
+    async getCandidate(jobId: string, candidateProfileId: string): Promise<CandidateEvaluationResponse> {
+      const { data } = await client.get<CandidateEvaluationResponse>(`/jobs/${jobId}/candidates/${candidateProfileId}/evaluation`);
+      return data;
+    },
+    async scoreAgain(jobId: string): Promise<{ queued: number; total_candidates: number }> {
+      const { data } = await client.post<{ queued: number; total_candidates: number }>(`/jobs/${jobId}/evaluations/score-again`);
+      return data;
+    },
+  },
+
+  scoringPreferences: {
+    async update(
+      jobId: string,
+      body: { section_weights: Record<string, number>; score_threshold: number },
+    ): Promise<JobScoringPreferenceResponse> {
+      const { data } = await client.put<JobScoringPreferenceResponse>(`/jobs/${jobId}/scoring-preferences`, body);
       return data;
     },
   },

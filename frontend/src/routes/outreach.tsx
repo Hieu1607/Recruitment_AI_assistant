@@ -1,7 +1,15 @@
-import type { CandidateProfileResponse, ContentSource, OutreachResponse, OutreachTemplateResponse, SentStatus } from "@/api";
+import type { CandidateProfileResponse, OutreachResponse, SentStatus } from "@/api";
 import { api } from "@/api";
 import { parseAxiosError } from "@/api/errors";
+import { OutreachWorkspaceNav } from "@/components/outreach/OutreachWorkspaceNav";
 import { OutreachRichEditor } from "@/components/outreach/OutreachRichEditor";
+import {
+  TEMPLATE_DEFAULT_VARIABLES,
+  TEMPLATE_VARIABLES,
+  missingRequiredTemplateDefaults,
+  outreachContentSourceLabel,
+  renderTemplateString,
+} from "@/components/outreach/outreach-constants";
 import { htmlToPlainText } from "@/components/outreach/rich-text";
 import { Badge, Button, EmptyState, Modal, ModalContent, ModalDescription, ModalFooter, ModalHeader, ModalTitle, Skeleton } from "@/components/ui";
 import { useAuthStore, useSelectedJobId, useUserId } from "@/lib/auth";
@@ -26,13 +34,6 @@ const STATUS_VARIANT: Record<SentStatus, "neutral" | "success" | "danger"> = {
   sent:     "success",
   failed:   "danger",
 };
-
-const TEMPLATE_VARIABLES = [
-  { key: "candidate_name", label: "Candidate Name" },
-  { key: "candidate_email", label: "Candidate Email" },
-  { key: "company_name", label: "Company Name" },
-  { key: "job_title", label: "Job Title" },
-];
 
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -223,11 +224,12 @@ function MessageList({
             ))}
           </>
         ) : messages.length === 0 ? (
-          <div className="py-12">
+          <div className="h-full flex items-center justify-center">
             <EmptyState
               icon={<Inbox size={24} strokeWidth={1.25} />}
               heading="No messages here yet"
               body="Messages you compose will appear in this folder. Start with + New message."
+              className="py-0"
             />
           </div>
         ) : (
@@ -433,7 +435,7 @@ function MessageDetailPanel({
             {message.candidate_full_name ?? "Unknown candidate"}
           </span>
           <Badge variant="neutral" size="sm" dot={false}>
-            {message.content_source === "ai_draft" ? "AI Draft" : "Template"}
+            {outreachContentSourceLabel(message.content_source)}
           </Badge>
           <Badge variant={STATUS_VARIANT[message.sent_status]} size="sm" dot={false}>
             {message.sent_status.replace("_", " ")}
@@ -510,12 +512,11 @@ function ComposeModal({
   const userId = useUserId();
   const selectedJobId = useSelectedJobId();
   const [candidateId, setCandidateId] = useState("");
-  const [contentSource, setContentSource] = useState<ContentSource>("ai_draft");
+  const [sourceMode, setSourceMode] = useState<"blank" | "template">("blank");
   const [subject, setSubject] = useState("");
   const [bodyHtml, setBodyHtml] = useState("");
   const [bodyText, setBodyText] = useState("");
   const [templateId, setTemplateId] = useState("");
-  const [templateName, setTemplateName] = useState("");
   const [discardWarning, setDiscardWarning] = useState(false);
   const [candidateError, setCandidateError] = useState(false);
 
@@ -532,19 +533,53 @@ function ComposeModal({
 
   const templates = templatesData?.items ?? [];
   const hasContent = !!subject.trim() || !!bodyHtml.trim() || !!candidateId;
-  const canSave = !!candidateId && !!subject.trim() && !!bodyHtml.trim();
+
+  const selectedCandidate = candidates.find((c) => c.id === candidateId);
+  const selectedTemplate = sourceMode === "template" ? templates.find((t) => t.id === templateId) : undefined;
+
+  // job_title/company_name only ever come from the template's configured
+  // defaults; candidate_name/candidate_email always auto-resolve from the
+  // candidate picked above — the user never types these in here.
+  const missingDefaults = selectedTemplate
+    ? missingRequiredTemplateDefaults(selectedTemplate.variables_used, selectedTemplate.default_variables)
+    : [];
+  const missingDefaultLabels = missingDefaults.map(
+    (key) => TEMPLATE_DEFAULT_VARIABLES.find((item) => item.key === key)?.label ?? key,
+  );
+
+  const canSave = !!candidateId && !!subject.trim() && !!bodyHtml.trim() && missingDefaults.length === 0;
+
+  function resolvedRenderVariables(): Record<string, string> {
+    const defaults = selectedTemplate?.default_variables ?? {};
+    return {
+      candidate_name: selectedCandidate?.full_name ?? "",
+      candidate_email: selectedCandidate?.email ?? "",
+      job_title: defaults.job_title ?? "",
+      company_name: defaults.company_name ?? "",
+    };
+  }
 
   const composeMutation = useMutation({
-    mutationFn: () =>
-      api.outreach.create({
+    mutationFn: () => {
+      const mergedVariables = resolvedRenderVariables();
+      const finalSubject = renderTemplateString(subject.trim(), mergedVariables);
+      const finalBodyHtml = renderTemplateString(bodyHtml.trim(), mergedVariables);
+      const finalBodyText = renderTemplateString(
+        bodyText.trim() || htmlToPlainText(bodyHtml),
+        mergedVariables,
+      );
+
+      return api.outreach.create({
         candidate_profile_id: candidateId,
         created_by_user_id: userId ?? "",
-        content_source: contentSource,
-        subject: subject.trim(),
-        body_html: bodyHtml.trim(),
-        body_text: bodyText.trim() || htmlToPlainText(bodyHtml),
+        content_source: templateId ? "template" : "manual",
+        subject: finalSubject,
+        body_html: finalBodyHtml,
+        body_text: finalBodyText,
         template_id: templateId || null,
-      }),
+        render_variables: mergedVariables,
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["outreach"] });
       qc.invalidateQueries({ queryKey: ["outreach-count"] });
@@ -552,8 +587,11 @@ function ComposeModal({
       onClose();
     },
     onError: (err: unknown) => {
-      if (parseAxiosError(err).status === 404) {
+      const parsed = parseAxiosError(err);
+      if (parsed.status === 404) {
         setCandidateError(true);
+      } else if (parsed.status === 422) {
+        toast.error("This template still needs default variables configured. Check the Templates workspace.");
       } else {
         toast.error("Something went wrong. Please try again.");
       }
@@ -571,27 +609,6 @@ function ComposeModal({
   function candidateLabel(candidate: CandidateProfileResponse): string {
     return candidate.full_name || candidate.current_job_title || candidate.email || candidate.id;
   }
-
-  const saveTemplateMutation = useMutation({
-    mutationFn: () =>
-      api.outreach.createTemplate({
-        created_by_user_id: userId ?? "",
-        job_id: selectedJobId ?? null,
-        name: templateName.trim(),
-        content_source: "template",
-        subject_template: subject.trim(),
-        body_text_template: bodyText.trim() || htmlToPlainText(bodyHtml),
-        body_html_template: bodyHtml.trim(),
-        variables_used: TEMPLATE_VARIABLES.map((item) => item.key),
-      }),
-    onSuccess: (created: OutreachTemplateResponse) => {
-      toast.success("Template saved");
-      setTemplateId(created.id);
-      setTemplateName("");
-      qc.invalidateQueries({ queryKey: ["outreach-templates", userId, selectedJobId] });
-    },
-    onError: () => toast.error("Failed to save template"),
-  });
 
   return (
     <Modal open onOpenChange={(open) => !open && handleDiscard()}>
@@ -632,31 +649,36 @@ function ComposeModal({
             )}
           </div>
 
-          {/* Content source toggle */}
+          {/* Message source */}
           <div>
             <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
-              Content source
+              Start from
             </label>
             <div className="flex rounded-[var(--radius-md)] border border-[color:var(--hairline)] overflow-hidden">
-              {(["ai_draft", "template"] as ContentSource[]).map((src) => (
+              {(["blank", "template"] as const).map((src) => (
                 <button
                   key={src}
                   type="button"
-                  onClick={() => setContentSource(src)}
+                  onClick={() => {
+                    setSourceMode(src);
+                    if (src === "blank") {
+                      setTemplateId("");
+                    }
+                  }}
                   className={cn(
                     "flex-1 px-4 py-2 text-sm font-sans transition-colors",
-                    contentSource === src
+                    sourceMode === src
                       ? "bg-accent text-accent-fg font-medium"
                       : "bg-bg text-fg-muted hover:bg-[color:var(--hairline)]",
                   )}
                 >
-                  {src === "ai_draft" ? "AI Draft" : "Template"}
+                  {src === "blank" ? "Write from scratch" : "Use template"}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+          {sourceMode === "template" ? (
             <div>
               <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
                 Template
@@ -671,43 +693,30 @@ function ComposeModal({
                     setSubject(selected.subject_template);
                     setBodyHtml(selected.body_html_template);
                     setBodyText(selected.body_text_template);
-                    setContentSource("template");
                   }
                 }}
                 className="w-full h-9 px-3 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)] border border-[color:var(--hairline)] focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none"
               >
-                <option value="">Blank message</option>
+                <option value="">Select a template…</option>
                 {templates.map((template) => (
                   <option key={template.id} value={template.id}>
                     {template.name}
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-xs font-sans text-fg-muted">
+                Manage reusable templates from the Templates workspace.
+              </p>
+              {missingDefaults.length > 0 && (
+                <div className="mt-2 rounded-[var(--radius-md)] border border-danger/40 bg-danger/5 px-3 py-2">
+                  <p className="text-xs font-sans text-danger">
+                    This template uses {missingDefaultLabels.join(", ")} but no default value is configured yet.
+                    Configure it in the Templates workspace before you can save this draft.
+                  </p>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="block text-[11px] font-sans font-medium text-fg-subtle uppercase tracking-wide mb-1.5">
-                Save as template
-              </label>
-              <div className="flex gap-2">
-                <input
-                  value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                  placeholder="Template name"
-                  className="w-full h-9 px-3 text-sm font-sans text-fg bg-bg rounded-[var(--radius-md)] border border-[color:var(--hairline)] focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent outline-none"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={!templateName.trim() || !subject.trim() || !bodyHtml.trim()}
-                  loading={saveTemplateMutation.isPending}
-                  onClick={() => saveTemplateMutation.mutate()}
-                >
-                  Save
-                </Button>
-              </div>
-            </div>
-          </div>
+          ) : null}
 
           {/* Subject */}
           <div>
@@ -780,7 +789,7 @@ function GmailOnboardingPanel({
   onConnect: () => void;
 }) {
   return (
-    <div className="flex overflow-hidden" style={{ height: "calc(100vh - var(--topbar-height))" }}>
+    <div className="min-h-0 flex-1 overflow-hidden">
       <div className="flex-1 bg-bg-elevated p-6 md:p-8">
         <div className="flex h-full items-center justify-center rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg">
           <div className="max-w-md px-6 py-10 text-center">
@@ -913,30 +922,54 @@ export default function OutreachRoute() {
   };
 
   if (needsGmailOnboarding) {
-    return <GmailOnboardingPanel isPending={isConnectPending} onConnect={handleConnectGmail} />;
+    return (
+      <div className="flex h-[calc(100vh-var(--topbar-height))] flex-col overflow-hidden">
+        <div className="shrink-0 pl-4 pr-8 py-8 pb-4 space-y-6">
+          <div>
+            <h1 className="font-display text-[2rem] font-medium text-fg">Outreach</h1>
+            <p className="mt-1 text-sm text-fg-muted">
+              Draft recruiter emails from the Messages workspace and maintain reusable copy in Templates.
+            </p>
+          </div>
+          <OutreachWorkspaceNav />
+        </div>
+        <GmailOnboardingPanel isPending={isConnectPending} onConnect={handleConnectGmail} />
+      </div>
+    );
   }
 
   return (
-    <div className="flex overflow-hidden" style={{ height: "calc(100vh - var(--topbar-height))" }}>
-      <FolderSidebar
-        folder={folder}
-        counts={counts}
-        candidate={candidate}
-        candidates={candidates}
-        onFolderChange={setFolder}
-        onCandidateChange={setCandidate}
-        onNewMessage={() => setComposeOpen(true)}
-      />
-      <MessageList
-        messages={messages}
-        isLoading={isLoading}
-        selectedId={messageId}
-        onSelect={(id) => setMessage(id)}
-        folderLabel={folderDef.label}
-        total={listData?.total ?? 0}
-      />
-      <MessageDetailPanel messageId={messageId} onClose={() => setMessage(undefined)} />
-      {composeOpen && <ComposeModal candidates={candidates} onClose={() => setComposeOpen(false)} />}
+    <div className="flex h-[calc(100vh-var(--topbar-height))] flex-col overflow-hidden">
+      <div className="shrink-0 pl-4 pr-8 py-8 pb-4 space-y-6">
+        <div>
+          <h1 className="font-display text-[2rem] font-medium text-fg">Outreach</h1>
+          <p className="mt-1 text-sm text-fg-muted">
+            Draft recruiter emails from the Messages workspace and maintain reusable copy in Templates.
+          </p>
+        </div>
+        <OutreachWorkspaceNav />
+      </div>
+      <div className="min-h-0 flex flex-1 overflow-hidden">
+        <FolderSidebar
+          folder={folder}
+          counts={counts}
+          candidate={candidate}
+          candidates={candidates}
+          onFolderChange={setFolder}
+          onCandidateChange={setCandidate}
+          onNewMessage={() => setComposeOpen(true)}
+        />
+        <MessageList
+          messages={messages}
+          isLoading={isLoading}
+          selectedId={messageId}
+          onSelect={(id) => setMessage(id)}
+          folderLabel={folderDef.label}
+          total={listData?.total ?? 0}
+        />
+        <MessageDetailPanel messageId={messageId} onClose={() => setMessage(undefined)} />
+        {composeOpen && <ComposeModal candidates={candidates} onClose={() => setComposeOpen(false)} />}
+      </div>
     </div>
   );
 }

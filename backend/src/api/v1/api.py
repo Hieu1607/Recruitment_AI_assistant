@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from src.api.v1.endpoints import (
+    activities,
     auth,
     chat,
     interview_public,
@@ -18,6 +19,7 @@ from src.api.v1.endpoints import (
 )
 
 api_router = APIRouter()
+api_router.include_router(activities.router, prefix="/activities", tags=["activities"])
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(public_jobs.router, prefix="/public", tags=["public-jobs"])

@@ -60,7 +60,10 @@ class Job(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     owner: Mapped["UserAccount"] = relationship(back_populates="jobs")
-    job_descriptions: Mapped[list["JobDescription"]] = relationship(back_populates="job")
+    job_descriptions: Mapped[list["JobDescription"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
     interview_templates: Mapped[list["InterviewTemplate"]] = relationship(
         back_populates="job",
         cascade="all, delete-orphan",
@@ -70,4 +73,7 @@ class Job(Base):
         cascade="all, delete-orphan",
         overlaps="interview_template,invitations",
     )
-    resumes: Mapped[list["ResumeDocument"]] = relationship(back_populates="job")
+    resumes: Mapped[list["ResumeDocument"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )

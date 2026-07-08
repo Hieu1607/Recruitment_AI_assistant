@@ -70,6 +70,7 @@ if "src.services.job_description_service" not in sys.modules:
 
 if "src.services.resume_service" not in sys.modules:
     resume_stub = types.ModuleType("src.services.resume_service")
+    resume_stub._normalize_location_name = lambda value: value
     resume_stub._resume_to_dict = lambda resume: {}
     resume_stub.create_resume_document = lambda **kwargs: types.SimpleNamespace(
         id=uuid.uuid4()

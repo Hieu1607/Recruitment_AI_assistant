@@ -1,15 +1,13 @@
 import { api, type JobResponse } from "@/api";
-import { JobDescriptionRichTextBody } from "@/components/jobs/JobDescriptionRichTextBody";
 import { Button, EmptyState, FilterChip, Skeleton } from "@/components/ui";
 import { useAuthStore } from "@/lib/auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, BriefcaseBusiness, FileText, MessageSquare, Plus, Search, Sparkles, Users } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { ArrowRight, BriefcaseBusiness, FileUp, MessageSquare, Plus, Search, Sparkles, Users } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { routes } from "@/routes";
 import { cn } from "@/lib/cn";
-import { htmlToMarkdown } from "@/components/jobs/job-description-markdown";
 import { CurrentWorkspaceBadge, JobStatusBadge } from "./job-ui";
 import {
   fieldClasses,
@@ -40,48 +38,21 @@ export function JobWorkspaceGate({
   const [jobTitle, setJobTitle] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<JobFilter>("all");
-  const jobDescriptionRef = useRef<HTMLDivElement>(null);
 
   const createJob = useMutation({
     mutationFn: async () => {
       const title = jobTitle.trim();
-      const description = htmlToMarkdown(jobDescriptionRef.current?.innerHTML ?? "");
       const job = await api.jobs.create({ title });
-
-      if (!description) {
-        return { job, descriptionSaved: false, descriptionSaveError: null };
-      }
-
-      try {
-        await api.jobs.jobDescription.upsert(job.id, {
-          title,
-          jd_text: description,
-          is_active: true,
-        });
-        return { job, descriptionSaved: true, descriptionSaveError: null };
-      } catch (saveError) {
-        return {
-          job,
-          descriptionSaved: false,
-          descriptionSaveError:
-            saveError instanceof Error ? saveError.message : "Unable to save job description",
-        };
-      }
+      return { job };
     },
-    onSuccess: ({ job, descriptionSaved, descriptionSaveError }) => {
+    onSuccess: ({ job }) => {
       setSelectedJobId(job.id);
       setJobTitle("");
-      if (jobDescriptionRef.current) {
-        jobDescriptionRef.current.innerText = "";
-      }
       qc.invalidateQueries({ queryKey: ["jobs"] });
       qc.invalidateQueries({ queryKey: ["jobs", job.id, "job-description", "summary"] });
       qc.invalidateQueries({ queryKey: ["dashboard-jds", job.id] });
       qc.invalidateQueries({ queryKey: ["jobs", job.id, "setup-status"] });
       toast.success("Workspace created");
-      if (descriptionSaveError && !descriptionSaved) {
-        toast.error(`Workspace created, but the description was not saved. ${descriptionSaveError}`);
-      }
       navigate(routes.dashboard);
     },
     onError: (mutationError) => {
@@ -138,7 +109,7 @@ export function JobWorkspaceGate({
                 </h1>
                 <p className="mt-4 text-base leading-7 text-fg-muted">
                   {jobs.length === 0
-                    ? "Create the workspace context and draft the full job description together before you enter the dashboard."
+                    ? "Create the workspace boundary first. You will add the full job description from the dashboard next."
                     : "Every resume, JD, score, and chat session is scoped to one job."}
                 </p>
               </div>
@@ -171,7 +142,7 @@ export function JobWorkspaceGate({
               ) : jobs.length === 0 ? (
                 <div className="relative mx-auto mt-12 max-w-4xl overflow-hidden rounded-[28px] border border-[color:var(--hairline-strong)] bg-bg-elevated shadow-[var(--shadow-lg)]">
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-[radial-gradient(circle_at_top_left,rgba(31,58,46,0.16),transparent_52%),radial-gradient(circle_at_top_right,rgba(31,58,46,0.09),transparent_42%)]" />
-                  <div className="relative grid lg:grid-cols-[minmax(0,1.15fr)_320px]">
+                  <div className="relative grid lg:grid-cols-[minmax(0,1fr)_300px]">
                     <form
                       className="space-y-6 p-6 sm:p-8 lg:p-10"
                       onSubmit={(event) => {
@@ -181,7 +152,7 @@ export function JobWorkspaceGate({
                     >
                       <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(31,58,46,0.10)] bg-bg px-3 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-fg-muted shadow-[var(--shadow-sm)]">
                         <BriefcaseBusiness size={12} strokeWidth={1.75} className="text-accent" />
-                        Step 1 of 4
+                        First-time setup
                       </div>
 
                       <div>
@@ -213,28 +184,9 @@ export function JobWorkspaceGate({
                         </p>
                       </div>
 
-                      <div>
-                        <p
-                          id="first-job-description-label"
-                          className="text-sm font-medium text-fg-muted"
-                        >
-                          Job description <span className="text-fg-subtle">(optional)</span>
-                        </p>
-                        <div
-                          id="first-job-description"
-                          aria-labelledby="first-job-description-label"
-                          className="mt-2 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg px-4 py-4 shadow-[var(--shadow-sm)]"
-                        >
-                          <JobDescriptionRichTextBody
-                            editorRef={jobDescriptionRef}
-                            minHeightClassName="min-h-[220px]"
-                          />
-                        </div>
-                      </div>
-
                       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-[color:var(--hairline)] pt-5">
                         <p className="text-xs uppercase tracking-[0.18em] text-fg-subtle">
-                          You can edit both fields later.
+                          The dashboard will guide the next setup steps.
                         </p>
                         <Button
                           type="submit"
@@ -254,21 +206,21 @@ export function JobWorkspaceGate({
                             What this unlocks
                           </p>
                           <div className="mt-4 space-y-4">
-                            {[
+                            {[ 
                               {
                                 icon: Users,
                                 title: "Candidate scope",
                                 body: "Uploaded resumes stay tied to the right role and pipeline.",
                               },
                               {
-                                icon: FileText,
-                                title: "JD authoring",
-                                body: "Draft the full job description now so later scoring stays grounded.",
+                                icon: MessageSquare,
+                                title: "Workspace context",
+                                body: "Scoring, AI chat, and candidate activity all stay grounded in the selected role.",
                               },
                               {
-                                icon: MessageSquare,
-                                title: "AI recruiter chat",
-                                body: "Chat answers stay grounded in the selected job workspace.",
+                                icon: FileUp,
+                                title: "Guided next steps",
+                                body: "After entering the dashboard, add the JD first, then start uploading resumes.",
                               },
                             ].map((item) => {
                               const Icon = item.icon;
@@ -295,10 +247,10 @@ export function JobWorkspaceGate({
                           </p>
                           <div className="mt-3 space-y-2">
                             {[
-                              "Upload resumes to generate candidate profiles.",
-                              "Refine the JD if hiring priorities change.",
-                              "Run scoring once both are ready.",
-                              "Use AI chat to interrogate the pipeline.",
+                              "Add the full job description from the dashboard.",
+                              "Upload resumes once the JD is ready.",
+                              "Run scoring after both data sources exist.",
+                              "Use AI chat with the workspace context in place.",
                             ].map((step, index) => (
                               <div
                                 key={step}
@@ -317,9 +269,9 @@ export function JobWorkspaceGate({
 
                         <div className="mt-auto pt-6">
                           <div className="flex items-center gap-2 rounded-[var(--radius-lg)] border border-white/10 bg-white/5 px-4 py-3">
-                            <BarChart3 size={16} strokeWidth={1.75} className="shrink-0" />
+                            <ArrowRight size={16} strokeWidth={1.75} className="shrink-0" />
                             <p className="text-sm leading-6 text-[rgba(250,250,247,0.78)]">
-                              The dashboard will guide the rest of the setup after this step.
+                              Create the workspace now, then complete the JD inside the dashboard.
                             </p>
                           </div>
                         </div>

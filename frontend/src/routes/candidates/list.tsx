@@ -16,7 +16,7 @@ import {
     type ColumnDef,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { useSelectedJobId, useUserId } from "@/lib/auth";
+import { useSelectedJobId } from "@/lib/auth";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -71,6 +71,18 @@ function candidateDisplayName(resume: ResumeResponse): string {
 
 function uploaderDisplayName(resume: ResumeResponse): string {
   return resume.uploader_display_name?.trim() || truncateUserId(resume.uploaded_by_user_id);
+}
+
+function uploadStatusMessage(status: UploadStatus): string | null {
+  switch (status) {
+    case "uploaded":
+    case "processing":
+      return "CV is being processed";
+    case "failed":
+      return "CV processing failed";
+    default:
+      return null;
+  }
 }
 
 type UploadStatusVariant = "neutral" | "warning" | "success" | "danger";
@@ -142,7 +154,6 @@ function errorStatus(err: unknown): number | undefined {
 export default function CandidatesListRoute() {
   const qc = useQueryClient();
   const selectedJobId = useSelectedJobId();
-  const userId = useUserId();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
 
@@ -218,9 +229,9 @@ export default function CandidatesListRoute() {
   });
 
   const { data: collectionsData, isLoading: isCollectionsLoading } = useQuery({
-    queryKey: ["collections", userId],
-    queryFn: () => api.shortlist.collections.list({ user_id: userId ?? "", limit: 100 }),
-    enabled: shortlistOpen && !!userId,
+    queryKey: ["collections"],
+    queryFn: () => api.shortlist.collections.list({ limit: 100 }),
+    enabled: shortlistOpen,
     staleTime: 30_000,
   });
 
@@ -329,15 +340,11 @@ export default function CandidatesListRoute() {
 
   const createShortlistMutation = useMutation({
     mutationFn: async (name: string) => {
-      if (!userId) {
-        throw new Error("Missing user session");
-      }
       if (selectedCandidateProfileIds.length === 0) {
         throw new Error("No candidate profiles available for shortlisting");
       }
 
       const collection = await api.shortlist.collections.create({
-        created_by_user_id: userId,
         name: name.trim(),
       });
 
@@ -468,6 +475,16 @@ export default function CandidatesListRoute() {
             {candidateDisplayName(row) !== row.original_file_name && (
               <span className="font-mono text-[0.6875rem] text-fg-subtle truncate">
                 {row.original_file_name}
+              </span>
+            )}
+            {uploadStatusMessage(row.upload_status) && (
+              <span
+                className={cn(
+                  "text-xs truncate",
+                  row.upload_status === "failed" ? "text-danger" : "text-warning",
+                )}
+              >
+                {uploadStatusMessage(row.upload_status)}
               </span>
             )}
           </div>
@@ -1148,6 +1165,8 @@ function CandidateCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const statusMessage = uploadStatusMessage(resume.upload_status);
+
   return (
     <div
       className={cn(
@@ -1175,6 +1194,17 @@ function CandidateCard({
       <p className="text-xs text-fg-muted truncate mb-4">
         Uploaded by {uploaderDisplayName(resume)}
       </p>
+
+      {statusMessage && (
+        <p
+          className={cn(
+            "mb-4 text-xs font-medium",
+            resume.upload_status === "failed" ? "text-danger" : "text-warning",
+          )}
+        >
+          {statusMessage}
+        </p>
+      )}
 
       <div className="flex items-center justify-between">
         <span

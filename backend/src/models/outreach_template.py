@@ -40,6 +40,7 @@ class OutreachTemplate(Base):
     body_html_template: Mapped[str] = mapped_column(Text, nullable=False)
     editor_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     variables_used: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    default_variables: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

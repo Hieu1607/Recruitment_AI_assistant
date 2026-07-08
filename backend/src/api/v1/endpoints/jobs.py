@@ -21,6 +21,16 @@ from src.models.query_shortlist import QuerySession, QueryTurn
 from src.models.resume_document import ResumeDocument
 from src.models.user_account import UserAccount
 from src.services.ai_agent.graph import get_graph
+from src.services.candidate_evaluation_service import (
+    current_signature_for_jd,
+    enqueue_missing_current_evaluations,
+    get_job_scoring_preference,
+    get_latest_candidate_evaluation,
+    list_latest_job_evaluations,
+    mark_job_evaluations_outdated,
+    serialize_candidate_evaluation,
+    upsert_job_scoring_preference,
+)
 from src.services.job_description_service import _jd_to_dict
 from src.services.notification_service import create_notification
 from src.services.job_scope import (
@@ -44,6 +54,7 @@ from src.services.resume_service import (
 )
 from src.services.score_candidate import score_candidates
 from src.services.scoring_errors import ScoringProviderLimitError
+from src.services.scoring_preferences import DEFAULT_SECTION_WEIGHTS, derive_default_section_weights_percent
 from worker.tasks import process_resume
 
 router = APIRouter()
@@ -166,11 +177,14 @@ class ScoreRequest(BaseModel):
 
 class ComponentScoreResponse(BaseModel):
     criterionKey: str
+    section: Optional[str] = None
     criterionType: str
     evaluationMode: str
     requirementText: str
     weight: float
     score: float
+    scorePercent: Optional[float] = None
+    effectiveWeight: Optional[float] = None
     weightedScore: float
     evidenceSummary: str
     measurable: Optional[dict[str, Any]] = None
@@ -194,6 +208,52 @@ class ScoreRunResponse(BaseModel):
     total_passed_candidates: int
     batches: int
     scores: list[CandidateScoreResponse]
+
+
+class JobScoringPreferenceRequest(BaseModel):
+    section_weights: dict[str, float]
+    score_threshold: float = Field(50.0, ge=0, le=100)
+
+
+class JobScoringPreferenceResponse(BaseModel):
+    job_id: str
+    section_weights: dict[str, float]
+    score_threshold: float
+    updated_at: datetime
+
+
+class CandidateEvaluationResponse(BaseModel):
+    id: str
+    job_id: str
+    job_description_id: str
+    candidate_profile_id: str
+    candidateName: Optional[str] = None
+    resumeFileName: Optional[str] = None
+    candidateDisplayName: Optional[str] = None
+    scoring_signature: str
+    status: str
+    totalScore: float
+    passedThreshold: bool
+    rationale: str
+    error_message: Optional[str] = None
+    scored_at: Optional[datetime] = None
+    componentScores: list[ComponentScoreResponse]
+
+
+class JobEvaluationListResponse(BaseModel):
+    job_id: str
+    section_weights: dict[str, float]
+    score_threshold: float
+    scoring_preferences_applied: bool = False
+    total_candidates: int
+    completed_count: int
+    pending_count: int
+    running_count: int
+    failed_count: int
+    outdated_count: int
+    average_score: float
+    highest_score: float
+    items: list[CandidateEvaluationResponse]
 
 
 class ChatRequest(BaseModel):
@@ -288,11 +348,26 @@ def _serialize_candidate(profile: CandidateProfile) -> CandidateResponse:
 def _serialize_component_score(component: dict[str, Any]) -> ComponentScoreResponse:
     return ComponentScoreResponse(
         criterionKey=str(component.get("criterionKey") or ""),
+        section=(
+            str(component.get("section"))
+            if component.get("section") is not None
+            else None
+        ),
         criterionType=str(component.get("criterionType") or ""),
         evaluationMode=str(component.get("evaluationMode") or ""),
         requirementText=str(component.get("requirementText") or ""),
         weight=float(component.get("weight") or 0.0),
         score=float(component.get("score") or 0.0),
+        scorePercent=(
+            float(component.get("scorePercent"))
+            if component.get("scorePercent") is not None
+            else None
+        ),
+        effectiveWeight=(
+            float(component.get("effectiveWeight"))
+            if component.get("effectiveWeight") is not None
+            else None
+        ),
         weightedScore=float(component.get("weightedScore") or 0.0),
         evidenceSummary=str(component.get("evidenceSummary") or ""),
         measurable=component.get("measurable")
@@ -336,6 +411,30 @@ def _serialize_match_run(run: MatchRun, results: list[MatchResult]) -> ScoreRunR
         ),
         batches=1,
         scores=serialized_scores,
+    )
+
+
+def _serialize_candidate_evaluation_payload(payload: dict[str, Any]) -> CandidateEvaluationResponse:
+    return CandidateEvaluationResponse(
+        id=str(payload.get("id") or ""),
+        job_id=str(payload.get("job_id") or ""),
+        job_description_id=str(payload.get("job_description_id") or ""),
+        candidate_profile_id=str(payload.get("candidate_profile_id") or ""),
+        candidateName=payload.get("candidateName"),
+        resumeFileName=payload.get("resumeFileName"),
+        candidateDisplayName=payload.get("candidateDisplayName"),
+        scoring_signature=str(payload.get("scoring_signature") or ""),
+        status=str(payload.get("status") or ""),
+        totalScore=float(payload.get("totalScore") or 0.0),
+        passedThreshold=bool(payload.get("passedThreshold")),
+        rationale=str(payload.get("rationale") or ""),
+        error_message=payload.get("error_message"),
+        scored_at=payload.get("scored_at"),
+        componentScores=[
+            _serialize_component_score(component)
+            for component in (payload.get("componentScores") or [])
+            if isinstance(component, dict)
+        ],
     )
 
 
@@ -745,6 +844,7 @@ def create_or_replace_job_description(
 ):
     get_current_user_owned_job(db, current_user.id, job_id)
     existing = get_job_scoped_jd(db, current_user.id, job_id)
+    scoring_input_changed = False
     if existing is None:
         existing = JobDescription(
             job_id=job_id,
@@ -756,11 +856,22 @@ def create_or_replace_job_description(
         )
         db.add(existing)
     else:
+        scoring_input_changed = (
+            existing.jd_text != body.jd_text.strip()
+            or existing.hidden_text != body.hidden_text.strip()
+        )
         existing.title = body.title
         existing.jd_text = body.jd_text.strip()
         existing.hidden_text = body.hidden_text.strip()
         existing.is_active = body.is_active
     db.commit()
+    if scoring_input_changed:
+        mark_job_evaluations_outdated(
+            db=db,
+            job_id=job_id,
+            current_scoring_signature=current_signature_for_jd(existing),
+        )
+        db.commit()
     db.refresh(existing)
     return _jd_to_dict(existing)
 
@@ -773,17 +884,27 @@ def patch_job_description(
     current_user: UserAccount = Depends(get_current_user),
 ):
     jd = require_job_scoped_jd(db, current_user.id, job_id)
+    scoring_input_changed = False
     if body.title is not None:
         jd.title = body.title
     if body.jd_text is not None:
         if not body.jd_text.strip():
             raise HTTPException(status_code=422, detail="jd_text must not be empty")
+        scoring_input_changed = scoring_input_changed or jd.jd_text != body.jd_text.strip()
         jd.jd_text = body.jd_text.strip()
     if body.hidden_text is not None:
+        scoring_input_changed = scoring_input_changed or jd.hidden_text != body.hidden_text.strip()
         jd.hidden_text = body.hidden_text.strip()
     if body.is_active is not None:
         jd.is_active = body.is_active
     db.commit()
+    if scoring_input_changed:
+        mark_job_evaluations_outdated(
+            db=db,
+            job_id=job_id,
+            current_scoring_signature=current_signature_for_jd(jd),
+        )
+        db.commit()
     db.refresh(jd)
     return _jd_to_dict(jd)
 
@@ -1062,6 +1183,113 @@ def get_score_run(
         .all()
     )
     return _serialize_match_run(run, results)
+
+
+@router.get("/{job_id}/evaluations", response_model=JobEvaluationListResponse)
+def list_job_evaluations(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    get_current_user_owned_job(db, current_user.id, job_id)
+    rows = list_latest_job_evaluations(db, job_id)
+    preference = get_job_scoring_preference(db, job_id)
+    default_section_weights = {}
+    if preference is None:
+        for row in rows:
+            default_section_weights = derive_default_section_weights_percent(
+                raw_component_scores=row.raw_component_scores,
+                rubric_payload=row.rubric_payload,
+            )
+            if default_section_weights:
+                break
+    items = [
+        _serialize_candidate_evaluation_payload(
+            serialize_candidate_evaluation(row, preference)
+        )
+        for row in rows
+    ]
+    scores = [item.totalScore for item in items if item.status in {"completed", "outdated"}]
+    return JobEvaluationListResponse(
+        job_id=str(job_id),
+        section_weights=(
+            {key: float(value) for key, value in preference.section_weights.items()}
+            if preference
+            else (
+                default_section_weights
+                if default_section_weights
+                else {key: float(value) for key, value in DEFAULT_SECTION_WEIGHTS.items()}
+            )
+        ),
+        score_threshold=float(preference.score_threshold) if preference else 50.0,
+        scoring_preferences_applied=preference is not None,
+        total_candidates=len(items),
+        completed_count=sum(1 for item in items if item.status == "completed"),
+        pending_count=sum(1 for item in items if item.status == "pending"),
+        running_count=sum(1 for item in items if item.status == "running"),
+        failed_count=sum(1 for item in items if item.status == "failed"),
+        outdated_count=sum(1 for item in items if item.status == "outdated"),
+        average_score=round(sum(scores) / len(scores), 2) if scores else 0.0,
+        highest_score=max(scores) if scores else 0.0,
+        items=items,
+    )
+
+
+@router.get(
+    "/{job_id}/candidates/{candidate_profile_id}/evaluation",
+    response_model=CandidateEvaluationResponse,
+)
+def get_candidate_evaluation(
+    job_id: uuid.UUID,
+    candidate_profile_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    get_current_user_owned_job(db, current_user.id, job_id)
+    evaluation = get_latest_candidate_evaluation(
+        db=db,
+        job_id=job_id,
+        candidate_profile_id=candidate_profile_id,
+    )
+    if evaluation is None:
+        raise HTTPException(status_code=404, detail="Candidate evaluation not found")
+    preference = get_job_scoring_preference(db, job_id)
+    return _serialize_candidate_evaluation_payload(
+        serialize_candidate_evaluation(evaluation, preference)
+    )
+
+
+@router.put("/{job_id}/scoring-preferences", response_model=JobScoringPreferenceResponse)
+def update_job_scoring_preferences(
+    job_id: uuid.UUID,
+    body: JobScoringPreferenceRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    get_current_user_owned_job(db, current_user.id, job_id)
+    preference = upsert_job_scoring_preference(
+        db=db,
+        job_id=job_id,
+        section_weights={key: float(value) for key, value in body.section_weights.items()},
+        score_threshold=Decimal(str(body.score_threshold)),
+        updated_by_user_id=current_user.id,
+    )
+    return JobScoringPreferenceResponse(
+        job_id=str(preference.job_id),
+        section_weights={key: float(value) for key, value in preference.section_weights.items()},
+        score_threshold=float(preference.score_threshold),
+        updated_at=preference.updated_at,
+    )
+
+
+@router.post("/{job_id}/evaluations/score-again")
+def score_again_job_evaluations(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    jd = require_job_scoped_jd(db, current_user.id, job_id)
+    return enqueue_missing_current_evaluations(db=db, job_id=job_id, jd=jd)
 
 
 @router.get("/{job_id}/setup-status", response_model=JobSetupStatusResponse)

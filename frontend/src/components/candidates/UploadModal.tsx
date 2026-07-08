@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Upload, FileText, X, CheckCircle, XCircle, AlertTriangle, Clock3 } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, type ResumeBatchParseResponse } from "@/api";
+import { ApiError, api, type ResumeBatchParseResponse } from "@/api";
 import {
   Modal,
   ModalContent,
@@ -14,6 +14,8 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { useSelectedJobId } from "@/lib/auth";
+import { useNavigate } from "react-router";
+import { routes } from "@/routes";
 
 const UPLOAD_MESSAGES = [
   "Uploading PDFs...",
@@ -37,6 +39,7 @@ interface SelectedFile {
 
 export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const selectedJobId = useSelectedJobId();
   const [state, setState] = useState<ModalState>("idle");
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
@@ -45,6 +48,19 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { data: jobDescription, isLoading: jobDescriptionLoading } = useQuery({
+    queryKey: ["jobs", selectedJobId, "job-description", "upload-gate"],
+    enabled: open && !!selectedJobId,
+    queryFn: async () => {
+      try {
+        return await api.jobs.jobDescription.get(selectedJobId!);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    staleTime: 30_000,
+  });
 
   const uploadMutation = useMutation({
     mutationFn: (files: File[]) => {
@@ -151,13 +167,82 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
 
   const validFiles = selectedFiles.filter((f) => !f.error);
   const invalidFiles = selectedFiles.filter((f) => f.error);
+  const hasJobDescription = Boolean(jobDescription?.jd_text?.trim());
+  const showJobDescriptionGate = open && !jobDescriptionLoading && !!selectedJobId && !hasJobDescription;
 
   return (
     <Modal open={open} onOpenChange={handleOpenChange}>
       <ModalContent size="large" showClose={state !== "processing"}>
+        {open && !selectedJobId && (
+          <>
+            <ModalHeader>
+              <ModalTitle>Select a workspace first</ModalTitle>
+              <ModalDescription>
+                Choose or create a job workspace before uploading resumes.
+              </ModalDescription>
+            </ModalHeader>
+
+            <ModalFooter>
+              <Button variant="ghost" onClick={() => handleOpenChange(false)}>
+                Cancel
+              </Button>
+            </ModalFooter>
+          </>
+        )}
+
+        {open && selectedJobId && jobDescriptionLoading && (
+          <>
+            <ModalHeader>
+              <ModalTitle>Checking workspace setup</ModalTitle>
+              <ModalDescription>
+                Verifying whether this workspace already has a job description.
+              </ModalDescription>
+            </ModalHeader>
+
+            <div className="flex flex-col items-center gap-4 py-8 text-center">
+              <div className="h-10 w-10 animate-spin rounded-full border-2 border-[color:var(--hairline-strong)] border-t-accent" />
+              <p className="text-sm text-fg-muted">Loading job description status…</p>
+            </div>
+          </>
+        )}
+
+        {showJobDescriptionGate && (
+          <>
+            <ModalHeader>
+              <ModalTitle>Add a job description first</ModalTitle>
+              <ModalDescription>
+                This workspace only has the job name so far. Add the JD before uploading CVs so candidate parsing, scoring, and later screening stay anchored to the role.
+              </ModalDescription>
+            </ModalHeader>
+
+            <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated px-5 py-4">
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-fg-subtle">
+                Required next step
+              </p>
+              <p className="mt-2 text-sm leading-6 text-fg-muted">
+                Open the workspace JD page, write the hiring requirements, then come back to upload resumes.
+              </p>
+            </div>
+
+            <ModalFooter>
+              <Button variant="ghost" onClick={() => handleOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  handleOpenChange(false);
+                  navigate(routes.jobDescriptions);
+                }}
+              >
+                Go to job description
+              </Button>
+            </ModalFooter>
+          </>
+        )}
 
         {/* ── IDLE / FILES-SELECTED ── */}
-        {(state === "idle" || state === "files-selected") && (
+        {!showJobDescriptionGate && !jobDescriptionLoading && selectedJobId && (state === "idle" || state === "files-selected") && (
           <>
             <ModalHeader>
               <ModalTitle>Upload resumes</ModalTitle>
@@ -278,7 +363,7 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
         )}
 
         {/* ── PROCESSING ── */}
-        {state === "processing" && (
+        {!showJobDescriptionGate && !jobDescriptionLoading && selectedJobId && state === "processing" && (
           <div className="flex flex-col items-center gap-6 py-10">
             {/* Editorial SVG spinner */}
             <div className="relative h-20 w-20 shrink-0">
@@ -334,7 +419,7 @@ export function UploadModal({ open, onOpenChange, onComplete }: UploadModalProps
         )}
 
         {/* ── COMPLETE ── */}
-        {state === "complete" && result && (
+        {!showJobDescriptionGate && !jobDescriptionLoading && selectedJobId && state === "complete" && result && (
           <>
             <ModalHeader>
               <ModalTitle>

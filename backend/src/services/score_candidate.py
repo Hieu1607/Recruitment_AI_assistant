@@ -24,6 +24,7 @@ from src.services.llm_service import (
     is_provider_limit_error as is_llm_provider_limit_error,
 )
 from src.services.scoring_batching import build_scoring_batch_plan
+from src.services.scoring_preferences import derive_default_section_weights
 from src.services.scoring_debug import ScoringDebugLogger, preview_text
 from src.services.scoring_errors import ScoringProviderLimitError
 from src.services.token_budget import BudgetWindow, estimate_json_tokens, estimate_tokens
@@ -522,7 +523,11 @@ def _normalize_rubric(
         return {"criteria": [], "sectionWeights": {}}
 
     active_sections = list(dict.fromkeys(criterion["section"] for criterion in normalized_criteria))
-    normalized_section_weights = _normalize_runtime_section_weights(section_weights, active_sections)
+    normalized_section_weights = (
+        _normalize_runtime_section_weights(section_weights, active_sections)
+        if section_weights is not None
+        else derive_default_section_weights(rubric_payload={"criteria": normalized_criteria})
+    )
     section_counts = Counter(criterion["section"] for criterion in normalized_criteria)
 
     for criterion in normalized_criteria:
@@ -640,8 +645,10 @@ def _parse_semantic_scores(raw_text: str) -> Dict[str, Dict[str, Any]]:
                 criterion_key = str(row.get("criterionKey") or "").strip()
                 if not criterion_key:
                     continue
+                normalized_score = _normalize_llm_score(row.get("scorePercent", row.get("score", 0)))
                 mapped_criteria[criterion_key] = {
-                    "score": _normalize_llm_score(row.get("score", 0)),
+                    "score": normalized_score,
+                    "scorePercent": normalized_score,
                     "evidenceSummary": str(row.get("evidenceSummary") or "").strip(),
                 }
         by_candidate[candidate_id] = {
@@ -783,7 +790,7 @@ def _format_rationale_item(component: Dict[str, Any]) -> str:
 
 def _build_rationale_summary(total_score: float, component_scores: List[Dict[str, Any]]) -> str:
     vi = _ui_language() == "vi"
-    parts = [f"Điểm tổng {round(total_score, 2)}/100." if vi else f"Overall score {round(total_score, 2)}/100."]
+    parts: List[str] = []
     scored_components = sorted(
         component_scores,
         key=lambda component: float(component.get("score") or 0),
@@ -837,29 +844,33 @@ def _build_candidate_score(
             evaluation_mode = "measurable"
         else:
             semantic_detail = semantic_criteria.get(criterion["key"], {})
-            score = _normalize_llm_score(semantic_detail.get("score", 0))
+            score = _normalize_llm_score(semantic_detail.get("scorePercent", semantic_detail.get("score", 0)))
             evidence = str(semantic_detail.get("evidenceSummary") or "").strip()
             evaluation_mode = "semantic"
             measurable_detail = None
         component_scores.append(
             {
                 "criterionKey": criterion["key"],
+                "section": criterion.get("section"),
                 "criterionType": criterion["type"],
                 "evaluationMode": evaluation_mode,
                 "requirementText": criterion["requirementText"],
                 "weight": round(weight, 4),
                 "score": score,
+                "scorePercent": score,
                 "weightedScore": round(weight * score, 2),
                 "evidenceSummary": evidence,
             }
         )
         debug_component = {
             "criterionKey": criterion["key"],
+            "section": criterion.get("section"),
             "criterionType": criterion["type"],
             "evaluationMode": evaluation_mode,
             "requirementText": criterion["requirementText"],
             "weight": round(weight, 4),
             "score": score,
+            "scorePercent": score,
             "weightedScore": round(weight * score, 2),
             "evidenceSummary": evidence,
         }
@@ -897,6 +908,63 @@ def _build_candidate_score(
         "passedThreshold": passed_threshold,
         "rationale": rationale,
         "componentScores": component_scores,
+    }
+
+
+def evaluate_candidate_profile_raw(
+    *,
+    candidate: Dict[str, Any],
+    job_description_text: str,
+    section_weights: Optional[Dict[str, float]] = None,
+    debug_logger: Optional[ScoringDebugLogger] = None,
+) -> Dict[str, Any]:
+    llm = _scoring_llm_provider()
+    rubric = _extract_locked_rubric(
+        llm=llm,
+        job_description_text=job_description_text,
+        section_weights=section_weights,
+        debug_logger=debug_logger,
+    )
+    if not rubric or not rubric.get("criteria"):
+        return {
+            "rubricPayload": {"criteria": [], "sectionWeights": {}},
+            "rawComponentScores": [],
+            "rationaleSummary": _build_rationale_summary(0.0, []),
+        }
+
+    semantic_criteria = [criterion for criterion in rubric.get("criteria", []) if not criterion.get("measurable")]
+    semantic_result: Dict[str, Any] = {}
+    if semantic_criteria:
+        semantic_scores = _generate_semantic_scores_with_retries(
+            llm=llm,
+            prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
+                candidates=[candidate],
+                rubric={"criteria": semantic_criteria},
+            ),
+            debug_logger=debug_logger,
+        )
+        semantic_result = semantic_scores.get(str(candidate.get("id") or ""), {})
+
+    raw_score = _build_candidate_score(
+        candidate=candidate,
+        rubric=rubric,
+        semantic_result=semantic_result,
+        score_threshold=Decimal("0"),
+        debug_logger=debug_logger,
+    )
+    raw_component_scores: List[Dict[str, Any]] = []
+    for component in raw_score.get("componentScores", []):
+        raw_component = dict(component)
+        raw_component.pop("weightedScore", None)
+        raw_component["scorePercent"] = _normalize_llm_score(
+            raw_component.get("scorePercent", raw_component.get("score", 0))
+        )
+        raw_component_scores.append(raw_component)
+
+    return {
+        "rubricPayload": rubric,
+        "rawComponentScores": raw_component_scores,
+        "rationaleSummary": str(raw_score.get("rationale") or "").strip(),
     }
 
 

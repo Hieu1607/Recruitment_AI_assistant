@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -71,32 +72,67 @@ def _synthesize_with_shopaikey_openai_tts(text: str, *, language_code: str) -> b
     else:
         payload["instructions"] = "Speak naturally in English with clear pronunciation."
 
-    request = Request(
-        url=f"{settings.SHOPAIKEY_BASE_URL.rstrip('/')}/audio/speech",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        },
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=settings.TTS_TIMEOUT_SECONDS) as response:
-            audio = response.read()
-    except HTTPError as exc:  # pragma: no cover
-        body = ""
-        try:
-            body = exc.read().decode("utf-8")
-        except Exception:
-            body = ""
-        raise TTSProviderError(f"ShopAIKey TTS HTTP {exc.code}: {body or exc.reason}") from exc
-    except (URLError, TimeoutError) as exc:  # pragma: no cover
-        raise TTSProviderError(f"ShopAIKey TTS request failed: {exc}") from exc
+    max_retries = max(settings.TTS_MAX_RETRIES, 0)
+    last_exc: Exception | None = None
 
-    if not audio:
-        raise TTSProviderError("ShopAIKey TTS returned no audio")
-    return audio
+    for attempt in range(max_retries + 1):
+        request = Request(
+            url=f"{settings.SHOPAIKEY_BASE_URL.rstrip('/')}/audio/speech",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=settings.TTS_TIMEOUT_SECONDS) as response:
+                audio = response.read()
+        except HTTPError as exc:  # pragma: no cover
+            body = ""
+            try:
+                body = exc.read().decode("utf-8")
+            except Exception:
+                body = ""
+            # Retry on transient server-side errors, fail fast on client errors (4xx).
+            if exc.code < 500 or attempt >= max_retries:
+                raise TTSProviderError(f"ShopAIKey TTS HTTP {exc.code}: {body or exc.reason}") from exc
+            last_exc = exc
+            logger.warning(
+                "ShopAIKey TTS HTTP %s on attempt %s/%s; retrying. body=%s",
+                exc.code,
+                attempt + 1,
+                max_retries + 1,
+                body or exc.reason,
+            )
+        except (URLError, TimeoutError) as exc:  # pragma: no cover
+            if attempt >= max_retries:
+                raise TTSProviderError(f"ShopAIKey TTS request failed: {exc}") from exc
+            last_exc = exc
+            logger.warning(
+                "ShopAIKey TTS request failed on attempt %s/%s; retrying. error=%s",
+                attempt + 1,
+                max_retries + 1,
+                exc,
+            )
+        else:
+            if not audio:
+                if attempt >= max_retries:
+                    raise TTSProviderError("ShopAIKey TTS returned no audio")
+                last_exc = TTSProviderError("ShopAIKey TTS returned no audio")
+                logger.warning(
+                    "ShopAIKey TTS returned empty audio on attempt %s/%s; retrying.",
+                    attempt + 1,
+                    max_retries + 1,
+                )
+            else:
+                return audio
+
+        time.sleep(min(2**attempt, 8))
+
+    # Should be unreachable, but keep mypy/pylint happy and guard against logic drift above.
+    raise TTSProviderError(f"ShopAIKey TTS request failed after {max_retries + 1} attempts: {last_exc}")
 
 
 def synthesize_speech(text: str, *, language_code: str) -> bytes:

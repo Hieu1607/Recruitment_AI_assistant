@@ -156,7 +156,8 @@ class Settings(BaseSettings):
     EDGE_TTS_VOICE_VI: str = os.getenv("EDGE_TTS_VOICE_VI", "vi-VN-HoaiMyNeural")
     EDGE_TTS_RATE: str = os.getenv("EDGE_TTS_RATE", "+0%")
     EDGE_TTS_VOLUME: str = os.getenv("EDGE_TTS_VOLUME", "+0%")
-    TTS_TIMEOUT_SECONDS: int = int(os.getenv("TTS_TIMEOUT_SECONDS", "30"))
+    TTS_TIMEOUT_SECONDS: int = int(os.getenv("TTS_TIMEOUT_SECONDS", "60"))
+    TTS_MAX_RETRIES: int = int(os.getenv("TTS_MAX_RETRIES", "2"))
 
     APP_UI_LANGUAGE: str = os.getenv("APP_UI_LANGUAGE", "en")
 

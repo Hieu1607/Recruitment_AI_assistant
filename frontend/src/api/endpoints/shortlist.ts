@@ -26,11 +26,10 @@ import type {
  */
 const sessions = {
   /**
-   * List sessions for a user (ordered by most recently updated).
+   * List sessions for the current user (ordered by most recently updated).
    * GET /shortlist/sessions/
    */
-  async list(params: {
-    user_id: string;
+  async list(params?: {
     limit?: number;
     offset?: number;
   }): Promise<SessionListResponse> {
@@ -149,11 +148,10 @@ const turns = {
  */
 const collections = {
   /**
-   * List collections for a user (ordered by most recently created).
+   * List collections for the current user (ordered by most recently created).
    * GET /shortlist/collections/
    */
-  async list(params: {
-    user_id: string;
+  async list(params?: {
     limit?: number;
     offset?: number;
   }): Promise<CollectionListResponse> {
