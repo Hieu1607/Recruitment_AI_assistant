@@ -4,7 +4,7 @@ Route map
 ---------
 Sessions
   POST   /shortlist/sessions/                          create session
-  GET    /shortlist/sessions/                          list sessions for a user
+  GET    /shortlist/sessions/                          list sessions for current user
   GET    /shortlist/sessions/{session_id}              get session + turn count
   PATCH  /shortlist/sessions/{session_id}              update title
   DELETE /shortlist/sessions/{session_id}              delete session (cascades turns)
@@ -17,7 +17,7 @@ Turns
 
 Collections
   POST   /shortlist/collections/                       create collection
-  GET    /shortlist/collections/                       list collections for a user
+  GET    /shortlist/collections/                       list collections for current user
   GET    /shortlist/collections/{collection_id}        get collection + items
   PATCH  /shortlist/collections/{collection_id}        rename collection
   DELETE /shortlist/collections/{collection_id}        delete collection (cascades items)
@@ -32,11 +32,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session, joinedload
 from src.models.candidate_profile import CandidateProfile
+from src.models.deps import get_current_user, get_db
 from src.models.enums import ContentSource, SentStatus
 from src.models.interview_invitation import InterviewInvitation
 from src.models.interview_template import InterviewTemplate
@@ -51,7 +52,7 @@ from src.models.query_shortlist import (
     ShortlistItem,
 )
 from src.models.resume_document import ResumeDocument
-from src.models.session import SessionLocal
+from src.models.user_account import UserAccount
 from src.services.interview_template_service import (
     get_job_scoped_interview_question_set,
     materialize_question_set_template,
@@ -61,22 +62,21 @@ from src.services.outreach_service import (
     normalize_rich_message,
     render_template_string,
 )
+from src.services.shortlist_scope import (
+    get_current_user_latest_interview,
+    get_current_user_latest_outreach,
+    get_current_user_owned_active_interview_template,
+    get_current_user_owned_outreach_template,
+    get_current_user_owned_query_session,
+    get_current_user_owned_query_turn,
+    get_current_user_owned_shortlist_collection,
+    get_current_user_owned_shortlist_item,
+)
 
 router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _get_or_404(db, model, record_id: uuid.UUID, label: str):
-    obj = db.get(model, record_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail=f"{label} '{record_id}' not found")
-    return obj
-
-
 def _is_unique_violation(exc: Exception, *markers: str) -> bool:
     message = str(exc).lower()
     return any(marker.lower() in message for marker in markers)
@@ -90,7 +90,6 @@ def _is_unique_violation(exc: Exception, *markers: str) -> bool:
 
 
 class SessionCreateRequest(BaseModel):
-    user_id: uuid.UUID
     session_title: Optional[str] = Field(None, max_length=255)
 
 
@@ -133,7 +132,6 @@ class TurnResponse(BaseModel):
 
 
 class CollectionCreateRequest(BaseModel):
-    created_by_user_id: uuid.UUID
     name: str = Field(..., min_length=1, max_length=255)
     source_query_turn_id: Optional[uuid.UUID] = None
 
@@ -340,8 +338,10 @@ def _render_candidate_template(
     )
 
 
-def _load_collection_candidates(db, collection_id: uuid.UUID) -> tuple[ShortlistCollection, list[CandidateProfile]]:
-    collection = _get_or_404(db, ShortlistCollection, collection_id, "Collection")
+def _load_collection_candidates(
+    db: Session,
+    collection: ShortlistCollection,
+) -> list[CandidateProfile]:
     rows = (
         db.query(ShortlistItem)
         .options(
@@ -349,11 +349,11 @@ def _load_collection_candidates(db, collection_id: uuid.UUID) -> tuple[Shortlist
             .joinedload(CandidateProfile.resume_document)
             .joinedload(ResumeDocument.job)
         )
-        .filter(ShortlistItem.shortlist_collection_id == collection_id)
+        .filter(ShortlistItem.shortlist_collection_id == collection.id)
         .order_by(ShortlistItem.added_at.asc())
         .all()
     )
-    return collection, [row.candidate_profile for row in rows if row.candidate_profile is not None]
+    return [row.candidate_profile for row in rows if row.candidate_profile is not None]
 
 
 def _candidate_job(candidate: CandidateProfile | None) -> Job | None:
@@ -368,26 +368,6 @@ def _collection_job(candidates: list[CandidateProfile]) -> Job | None:
         if job is not None:
             return job
     return None
-
-
-def _latest_outreach(db, candidate_id: uuid.UUID) -> OutreachMessage | None:
-    return (
-        db.query(OutreachMessage)
-        .filter(OutreachMessage.candidate_profile_id == candidate_id)
-        .order_by(OutreachMessage.created_at.desc())
-        .first()
-    )
-
-
-def _latest_interview(
-    db, candidate_id: uuid.UUID, job_id: uuid.UUID | None = None
-) -> InterviewInvitation | None:
-    query = db.query(InterviewInvitation).filter(
-        InterviewInvitation.candidate_profile_id == candidate_id
-    )
-    if job_id is not None:
-        query = query.filter(InterviewInvitation.job_id == job_id)
-    return query.order_by(InterviewInvitation.created_at.desc()).first()
 
 
 def _active_interview_template_count(db, job_id: uuid.UUID | None) -> int:
@@ -420,12 +400,13 @@ def _serialize_dispatch_candidate(
     db,
     candidate: CandidateProfile,
     *,
+    current_user_id: uuid.UUID,
     job_id: uuid.UUID | None,
     gmail_connected: bool,
     active_template_count: int,
 ) -> DispatchCandidateResponse:
-    outreach = _latest_outreach(db, candidate.id)
-    interview = _latest_interview(db, candidate.id, job_id)
+    outreach = get_current_user_latest_outreach(db, current_user_id, candidate.id)
+    interview = get_current_user_latest_interview(db, current_user_id, candidate.id, job_id)
     blockers: list[str] = []
     if not candidate.email:
         blockers.append("missing_email")
@@ -495,74 +476,72 @@ def _batch_response(results: list[BatchCandidateResult]) -> BatchActionResponse:
 @router.post(
     "/sessions/", response_model=SessionResponse, status_code=201, tags=["sessions"]
 )
-def create_session(body: SessionCreateRequest):
-    db = SessionLocal()
-    try:
-        session = QuerySession(user_id=body.user_id, session_title=body.session_title)
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-        return _ser_session(session)
-    finally:
-        db.close()
+def create_session(
+    body: SessionCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    session = QuerySession(user_id=current_user.id, session_title=body.session_title)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return _ser_session(session)
 
 
 @router.get("/sessions/", response_model=SessionListResponse, tags=["sessions"])
 def list_sessions(
-    user_id: uuid.UUID = Query(..., description="Filter sessions by user UUID"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ):
-    db = SessionLocal()
-    try:
-        query = db.query(QuerySession).filter(QuerySession.user_id == user_id)
-        total = query.count()
-        rows = (
-            query.order_by(QuerySession.updated_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-        return SessionListResponse(items=[_ser_session(s) for s in rows], total=total)
-    finally:
-        db.close()
+    query = db.query(QuerySession).filter(QuerySession.user_id == current_user.id)
+    total = query.count()
+    rows = (
+        query.order_by(QuerySession.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return SessionListResponse(items=[_ser_session(s) for s in rows], total=total)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse, tags=["sessions"])
-def get_session(session_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        session = _get_or_404(db, QuerySession, session_id, "Session")
-        return _ser_session(session)
-    finally:
-        db.close()
+def get_session(
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    session = get_current_user_owned_query_session(db, current_user.id, session_id)
+    return _ser_session(session)
 
 
 @router.patch(
     "/sessions/{session_id}", response_model=SessionResponse, tags=["sessions"]
 )
-def update_session(session_id: uuid.UUID, body: SessionUpdateRequest):
-    db = SessionLocal()
-    try:
-        session = _get_or_404(db, QuerySession, session_id, "Session")
-        if body.session_title is not None:
-            session.session_title = body.session_title
-        db.commit()
-        db.refresh(session)
-        return _ser_session(session)
-    finally:
-        db.close()
+def update_session(
+    session_id: uuid.UUID,
+    body: SessionUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    session = get_current_user_owned_query_session(db, current_user.id, session_id)
+    if body.session_title is not None:
+        session.session_title = body.session_title
+    db.commit()
+    db.refresh(session)
+    return _ser_session(session)
 
 
 @router.delete("/sessions/{session_id}", status_code=204, tags=["sessions"])
-def delete_session(session_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        session = _get_or_404(db, QuerySession, session_id, "Session")
-        db.delete(session)
-        db.commit()
-    finally:
-        db.close()
+def delete_session(
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    session = get_current_user_owned_query_session(db, current_user.id, session_id)
+    db.delete(session)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -576,24 +555,25 @@ def delete_session(session_id: uuid.UUID):
     status_code=201,
     tags=["turns"],
 )
-def create_turn(session_id: uuid.UUID, body: TurnCreateRequest):
-    db = SessionLocal()
-    try:
-        _get_or_404(db, QuerySession, session_id, "Session")
-        turn = QueryTurn(
-            query_session_id=session_id,
-            user_question=body.user_question,
-            answer_text=body.answer_text,
-            matched_candidate_ids=body.matched_candidate_ids,
-            matched_count=body.matched_count,
-            tool_trace_masked=body.tool_trace_masked,
-        )
-        db.add(turn)
-        db.commit()
-        db.refresh(turn)
-        return _ser_turn(turn)
-    finally:
-        db.close()
+def create_turn(
+    session_id: uuid.UUID,
+    body: TurnCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    session = get_current_user_owned_query_session(db, current_user.id, session_id)
+    turn = QueryTurn(
+        query_session_id=session.id,
+        user_question=body.user_question,
+        answer_text=body.answer_text,
+        matched_candidate_ids=body.matched_candidate_ids,
+        matched_count=body.matched_count,
+        tool_trace_masked=body.tool_trace_masked,
+    )
+    db.add(turn)
+    db.commit()
+    db.refresh(turn)
+    return _ser_turn(turn)
 
 
 @router.get(
@@ -605,42 +585,40 @@ def list_turns(
     session_id: uuid.UUID,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ):
-    db = SessionLocal()
-    try:
-        _get_or_404(db, QuerySession, session_id, "Session")
-        rows = (
-            db.query(QueryTurn)
-            .filter(QueryTurn.query_session_id == session_id)
-            .order_by(QueryTurn.created_at.asc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-        return [_ser_turn(t) for t in rows]
-    finally:
-        db.close()
+    session = get_current_user_owned_query_session(db, current_user.id, session_id)
+    rows = (
+        db.query(QueryTurn)
+        .filter(QueryTurn.query_session_id == session.id)
+        .order_by(QueryTurn.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_ser_turn(t) for t in rows]
 
 
 @router.get("/turns/{turn_id}", response_model=TurnResponse, tags=["turns"])
-def get_turn(turn_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        turn = _get_or_404(db, QueryTurn, turn_id, "Turn")
-        return _ser_turn(turn)
-    finally:
-        db.close()
+def get_turn(
+    turn_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    turn = get_current_user_owned_query_turn(db, current_user.id, turn_id)
+    return _ser_turn(turn)
 
 
 @router.delete("/turns/{turn_id}", status_code=204, tags=["turns"])
-def delete_turn(turn_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        turn = _get_or_404(db, QueryTurn, turn_id, "Turn")
-        db.delete(turn)
-        db.commit()
-    finally:
-        db.close()
+def delete_turn(
+    turn_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    turn = get_current_user_owned_query_turn(db, current_user.id, turn_id)
+    db.delete(turn)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -654,12 +632,21 @@ def delete_turn(turn_id: uuid.UUID):
     status_code=201,
     tags=["collections"],
 )
-def create_collection(body: CollectionCreateRequest):
-    db = SessionLocal()
+def create_collection(
+    body: CollectionCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
     try:
+        if body.source_query_turn_id is not None:
+            get_current_user_owned_query_turn(
+                db,
+                current_user.id,
+                body.source_query_turn_id,
+            )
         collection = ShortlistCollection(
             name=body.name,
-            created_by_user_id=body.created_by_user_id,
+            created_by_user_id=current_user.id,
             source_query_turn_id=body.source_query_turn_id,
         )
         db.add(collection)
@@ -678,8 +665,6 @@ def create_collection(body: CollectionCreateRequest):
                 detail=f"Collection named '{body.name}' already exists for this user",
             ) from exc
         raise
-    finally:
-        db.close()
 
 
 @router.get(
@@ -688,29 +673,24 @@ def create_collection(body: CollectionCreateRequest):
     tags=["collections"],
 )
 def list_collections(
-    user_id: uuid.UUID = Query(
-        ..., description="Filter collections by creator user UUID"
-    ),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ):
-    db = SessionLocal()
-    try:
-        query = db.query(ShortlistCollection).filter(
-            ShortlistCollection.created_by_user_id == user_id
-        )
-        total = query.count()
-        rows = (
-            query.order_by(ShortlistCollection.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-        return CollectionListResponse(
-            items=[_ser_collection(c) for c in rows], total=total
-        )
-    finally:
-        db.close()
+    query = db.query(ShortlistCollection).filter(
+        ShortlistCollection.created_by_user_id == current_user.id
+    )
+    total = query.count()
+    rows = (
+        query.order_by(ShortlistCollection.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return CollectionListResponse(
+        items=[_ser_collection(c) for c in rows], total=total
+    )
 
 
 @router.get(
@@ -718,13 +698,17 @@ def list_collections(
     response_model=CollectionResponse,
     tags=["collections"],
 )
-def get_collection(collection_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        collection = _get_or_404(db, ShortlistCollection, collection_id, "Collection")
-        return _ser_collection(collection)
-    finally:
-        db.close()
+def get_collection(
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    collection = get_current_user_owned_shortlist_collection(
+        db,
+        current_user.id,
+        collection_id,
+    )
+    return _ser_collection(collection)
 
 
 @router.get(
@@ -732,43 +716,49 @@ def get_collection(collection_id: uuid.UUID):
     response_model=DispatchSummaryResponse,
     tags=["collections"],
 )
-def get_dispatch_summary(collection_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        collection, candidates = _load_collection_candidates(db, collection_id)
-        job = _collection_job(candidates)
-        job_id = job.id if job is not None else None
-        active_template_count = _active_interview_template_count(db, job_id)
-        gmail_connected = _gmail_connected(db, collection.created_by_user_id)
+def get_dispatch_summary(
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    collection = get_current_user_owned_shortlist_collection(
+        db,
+        current_user.id,
+        collection_id,
+    )
+    candidates = _load_collection_candidates(db, collection)
+    job = _collection_job(candidates)
+    job_id = job.id if job is not None else None
+    active_template_count = _active_interview_template_count(db, job_id)
+    gmail_connected = _gmail_connected(db, current_user.id)
 
-        return DispatchSummaryResponse(
-            collection=DispatchCollectionResponse(
-                id=str(collection.id),
-                name=collection.name,
-                item_count=len(candidates),
-            ),
-            job=(
-                DispatchJobResponse(id=str(job.id), title=job.title)
-                if job is not None
-                else None
-            ),
-            candidates=[
-                _serialize_dispatch_candidate(
-                    db,
-                    candidate,
-                    job_id=job_id,
-                    gmail_connected=gmail_connected,
-                    active_template_count=active_template_count,
-                )
-                for candidate in candidates
-            ],
-            capabilities=DispatchCapabilitiesResponse(
+    return DispatchSummaryResponse(
+        collection=DispatchCollectionResponse(
+            id=str(collection.id),
+            name=collection.name,
+            item_count=len(candidates),
+        ),
+        job=(
+            DispatchJobResponse(id=str(job.id), title=job.title)
+            if job is not None
+            else None
+        ),
+        candidates=[
+            _serialize_dispatch_candidate(
+                db,
+                candidate,
+                current_user_id=current_user.id,
+                job_id=job_id,
                 gmail_connected=gmail_connected,
-                active_interview_templates_count=active_template_count,
-            ),
-        )
-    finally:
-        db.close()
+                active_template_count=active_template_count,
+            )
+            for candidate in candidates
+        ],
+        capabilities=DispatchCapabilitiesResponse(
+            gmail_connected=gmail_connected,
+            active_interview_templates_count=active_template_count,
+        ),
+    )
 
 
 @router.post(
@@ -778,15 +768,26 @@ def get_dispatch_summary(collection_id: uuid.UUID):
     tags=["collections"],
 )
 def create_collection_outreach_drafts(
-    collection_id: uuid.UUID, body: OutreachDraftBatchRequest
+    collection_id: uuid.UUID,
+    body: OutreachDraftBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ):
-    db = SessionLocal()
     try:
-        collection, candidates = _load_collection_candidates(db, collection_id)
+        collection = get_current_user_owned_shortlist_collection(
+            db,
+            current_user.id,
+            collection_id,
+        )
+        candidates = _load_collection_candidates(db, collection)
         job = _collection_job(candidates)
         template = None
         if body.template_id is not None:
-            template = _get_or_404(db, OutreachTemplate, body.template_id, "OutreachTemplate")
+            template = get_current_user_owned_outreach_template(
+                db,
+                current_user.id,
+                body.template_id,
+            )
         source_subject = template.subject_template if template is not None else body.subject_template
         source_text = (
             template.body_text_template
@@ -823,7 +824,11 @@ def create_collection_outreach_drafts(
                 )
                 continue
 
-            existing = _latest_outreach(db, candidate.id)
+            existing = get_current_user_latest_outreach(
+                db,
+                current_user.id,
+                candidate.id,
+            )
             if (
                 existing is not None
                 and existing.sent_status != SentStatus.FAILED
@@ -893,8 +898,6 @@ def create_collection_outreach_drafts(
     except Exception:
         db.rollback()
         raise
-    finally:
-        db.close()
 
 
 @router.post(
@@ -904,27 +907,29 @@ def create_collection_outreach_drafts(
     tags=["collections"],
 )
 def create_collection_interview_invitations(
-    collection_id: uuid.UUID, body: InterviewInvitationBatchRequest
+    collection_id: uuid.UUID,
+    body: InterviewInvitationBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ):
-    db = SessionLocal()
     try:
-        collection, candidates = _load_collection_candidates(db, collection_id)
+        collection = get_current_user_owned_shortlist_collection(
+            db,
+            current_user.id,
+            collection_id,
+        )
+        candidates = _load_collection_candidates(db, collection)
         if body.interview_template_id is not None:
-            template = (
-                db.query(InterviewTemplate)
-                .filter(
-                    InterviewTemplate.id == body.interview_template_id,
-                    InterviewTemplate.job_id == body.job_id,
-                    InterviewTemplate.status == "active",
-                )
-                .first()
+            template = get_current_user_owned_active_interview_template(
+                db,
+                current_user.id,
+                body.job_id,
+                body.interview_template_id,
             )
-            if template is None:
-                raise HTTPException(status_code=404, detail="Active interview template not found")
         else:
             question_set = get_job_scoped_interview_question_set(
                 db,
-                user_id=collection.created_by_user_id,
+                user_id=current_user.id,
                 job_id=body.job_id,
                 question_set_id=body.interview_question_set_id,
             )
@@ -1023,8 +1028,6 @@ def create_collection_interview_invitations(
     except Exception:
         db.rollback()
         raise
-    finally:
-        db.close()
 
 
 @router.patch(
@@ -1032,10 +1035,18 @@ def create_collection_interview_invitations(
     response_model=CollectionResponse,
     tags=["collections"],
 )
-def update_collection(collection_id: uuid.UUID, body: CollectionUpdateRequest):
-    db = SessionLocal()
+def update_collection(
+    collection_id: uuid.UUID,
+    body: CollectionUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
     try:
-        collection = _get_or_404(db, ShortlistCollection, collection_id, "Collection")
+        collection = get_current_user_owned_shortlist_collection(
+            db,
+            current_user.id,
+            collection_id,
+        )
         collection.name = body.name
         db.commit()
         db.refresh(collection)
@@ -1052,19 +1063,21 @@ def update_collection(collection_id: uuid.UUID, body: CollectionUpdateRequest):
                 detail=f"Collection named '{body.name}' already exists for this user",
             ) from exc
         raise
-    finally:
-        db.close()
 
 
 @router.delete("/collections/{collection_id}", status_code=204, tags=["collections"])
-def delete_collection(collection_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        collection = _get_or_404(db, ShortlistCollection, collection_id, "Collection")
-        db.delete(collection)
-        db.commit()
-    finally:
-        db.close()
+def delete_collection(
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    collection = get_current_user_owned_shortlist_collection(
+        db,
+        current_user.id,
+        collection_id,
+    )
+    db.delete(collection)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -1078,12 +1091,20 @@ def delete_collection(collection_id: uuid.UUID):
     status_code=201,
     tags=["items"],
 )
-def add_item(collection_id: uuid.UUID, body: ItemAddRequest):
-    db = SessionLocal()
+def add_item(
+    collection_id: uuid.UUID,
+    body: ItemAddRequest,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
     try:
-        _get_or_404(db, ShortlistCollection, collection_id, "Collection")
+        collection = get_current_user_owned_shortlist_collection(
+            db,
+            current_user.id,
+            collection_id,
+        )
         item = ShortlistItem(
-            shortlist_collection_id=collection_id,
+            shortlist_collection_id=collection.id,
             candidate_profile_id=body.candidate_profile_id,
         )
         db.add(item)
@@ -1102,8 +1123,6 @@ def add_item(collection_id: uuid.UUID, body: ItemAddRequest):
                 detail=f"Candidate '{body.candidate_profile_id}' is already in this collection",
             ) from exc
         raise
-    finally:
-        db.close()
 
 
 @router.get(
@@ -1115,26 +1134,28 @@ def list_items(
     collection_id: uuid.UUID,
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
 ):
-    db = SessionLocal()
-    try:
-        _get_or_404(db, ShortlistCollection, collection_id, "Collection")
-        total = (
-            db.query(ShortlistItem)
-            .filter(ShortlistItem.shortlist_collection_id == collection_id)
-            .count()
-        )
-        rows = (
-            db.query(ShortlistItem)
-            .filter(ShortlistItem.shortlist_collection_id == collection_id)
-            .order_by(ShortlistItem.added_at.asc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-        return ItemListResponse(items=[_ser_item(i) for i in rows], total=total)
-    finally:
-        db.close()
+    collection = get_current_user_owned_shortlist_collection(
+        db,
+        current_user.id,
+        collection_id,
+    )
+    total = (
+        db.query(ShortlistItem)
+        .filter(ShortlistItem.shortlist_collection_id == collection.id)
+        .count()
+    )
+    rows = (
+        db.query(ShortlistItem)
+        .filter(ShortlistItem.shortlist_collection_id == collection.id)
+        .order_by(ShortlistItem.added_at.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return ItemListResponse(items=[_ser_item(i) for i in rows], total=total)
 
 
 @router.delete(
@@ -1142,23 +1163,17 @@ def list_items(
     status_code=204,
     tags=["items"],
 )
-def remove_item(collection_id: uuid.UUID, candidate_id: uuid.UUID):
-    db = SessionLocal()
-    try:
-        item = (
-            db.query(ShortlistItem)
-            .filter(
-                ShortlistItem.shortlist_collection_id == collection_id,
-                ShortlistItem.candidate_profile_id == candidate_id,
-            )
-            .first()
-        )
-        if item is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Candidate '{candidate_id}' not found in collection '{collection_id}'",
-            )
-        db.delete(item)
-        db.commit()
-    finally:
-        db.close()
+def remove_item(
+    collection_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    item = get_current_user_owned_shortlist_item(
+        db,
+        current_user.id,
+        collection_id,
+        candidate_id,
+    )
+    db.delete(item)
+    db.commit()

@@ -1,6 +1,7 @@
 import uuid
 from pathlib import Path
 from typing import Annotated, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -23,6 +24,19 @@ from src.services.resume_service import (
 from worker.tasks import process_resume
 
 router = APIRouter()
+
+
+def _build_pdf_content_disposition(filename: str) -> str:
+    safe_name = Path(filename or "resume.pdf").name or "resume.pdf"
+    ascii_fallback = "".join(char if ord(char) < 128 else "_" for char in safe_name)
+    ascii_fallback = ascii_fallback.replace('"', "_")
+    if not ascii_fallback:
+        ascii_fallback = "resume.pdf"
+    encoded_filename = quote(safe_name, safe="")
+    return (
+        f'inline; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{encoded_filename}"
+    )
 
 
 class BatchUploadResponse(BaseModel):
@@ -366,9 +380,10 @@ def get_resume_document_file(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail="Failed to load resume file") from exc
 
-    filename = Path(resume.original_file_name or "resume.pdf").name or "resume.pdf"
     headers = {
-        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Disposition": _build_pdf_content_disposition(
+            resume.original_file_name
+        ),
         "Cache-Control": "no-store",
     }
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)

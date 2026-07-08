@@ -6,10 +6,10 @@ function prettyDate(value: string) {
 }
 
 export function ReportView({ report }: { report: InterviewReportResponse }) {
-  const status =
-    typeof report.report_payload.status === "string"
-      ? String(report.report_payload.status)
-      : "ready";
+  const payload = report.report_payload;
+  const status = payload?.status ?? "pending";
+  const summary = payload?.summary ?? null;
+  const failure = payload?.failure ?? null;
 
   return (
     <div className="space-y-6">
@@ -21,7 +21,9 @@ export function ReportView({ report }: { report: InterviewReportResponse }) {
               Session {report.interview_session_id}
             </p>
           </div>
-          <Badge variant={status === "failed" ? "danger" : "success"}>{status}</Badge>
+          <Badge variant={status === "failed" ? "danger" : status === "pending" ? "warning" : "success"}>
+            {status}
+          </Badge>
         </div>
         <div className="mt-4 grid gap-3 text-sm text-fg-muted md:grid-cols-2">
           <div>Created {prettyDate(report.created_at)}</div>
@@ -29,19 +31,69 @@ export function ReportView({ report }: { report: InterviewReportResponse }) {
         </div>
       </div>
 
-      <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
-        <h2 className="font-display text-xl font-medium text-fg">Summary</h2>
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
-          {report.summary_text || "No summary text is available for this report yet."}
-        </p>
-      </section>
+      {status === "failed" && (
+        <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+          <h2 className="font-display text-xl font-medium text-fg">Report Generation Failed</h2>
+          <p className="mt-3 text-sm leading-relaxed text-danger">
+            {failure?.message || "The report could not be generated."}
+          </p>
+        </section>
+      )}
 
-      <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
-        <h2 className="font-display text-xl font-medium text-fg">Report Payload</h2>
-        <pre className="mt-3 overflow-x-auto rounded-[var(--radius-md)] bg-bg-elevated p-4 text-xs text-fg">
-          {JSON.stringify(report.report_payload, null, 2)}
-        </pre>
-      </section>
+      {status === "pending" && (
+        <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+          <p className="text-sm leading-relaxed text-fg-muted">
+            The report is still being generated. Check back shortly.
+          </p>
+        </section>
+      )}
+
+      {status === "completed" && summary && (
+        <>
+          <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+            <h2 className="font-display text-xl font-medium text-fg">Candidate Overview</h2>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
+              {summary.candidate_overview}
+            </p>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="font-display text-xl font-medium text-fg">Questions &amp; Answers</h2>
+            {summary.questions.map((item, index) => (
+              <div
+                key={item.question_transcript_turn_id || index}
+                className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5"
+              >
+                <p className="text-sm font-medium text-fg">
+                  {index + 1}. {item.question_text}
+                </p>
+                <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg-muted">
+                  {item.answer_text}
+                </p>
+                <div className="mt-4 rounded-[var(--radius-md)] bg-bg-elevated p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">Evaluation</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-fg">{item.evaluation}</p>
+                </div>
+              </div>
+            ))}
+          </section>
+
+          <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+            <h2 className="font-display text-xl font-medium text-fg">Overall Summary</h2>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
+              {summary.overall_summary}
+            </p>
+          </section>
+        </>
+      )}
+
+      {status === "completed" && !summary && (
+        <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-5">
+          <p className="text-sm leading-relaxed text-fg-muted">
+            {report.summary_text || "No summary is available for this report yet."}
+          </p>
+        </section>
+      )}
     </div>
   );
 }

@@ -34,7 +34,9 @@ test("job description management follows the selected workspace", async ({ page,
   await expect(page.getByRole("textbox", { name: "Job title" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Job description" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Bold" })).toBeVisible();
-  await expect(page.getByText("Start writing the job description")).toBeVisible();
+  await expect(
+    page.getByText("Write the full JD here while you create the workspace so scoring and AI workflows are ready from the start."),
+  ).toBeVisible();
 
   await page.goto(`${baseURL}/job-descriptions/new`);
   await expect(page).toHaveURL(`${baseURL}/job-descriptions`);

@@ -158,8 +158,13 @@ export function MarkdownRenderer({ text }: { text: string }) {
   const lines = text.split("\n");
   const elements: React.ReactNode[] = [];
 
+  type ListItem = {
+    content: string;
+    nestedUnorderedItems: string[];
+  };
+
   let currentListType: "ul" | "ol" | null = null;
-  let currentListItems: React.ReactNode[] = [];
+  let currentListItems: ListItem[] = [];
 
   // Table accumulator
   let tableBuffer: string[] = [];
@@ -176,7 +181,11 @@ export function MarkdownRenderer({ text }: { text: string }) {
           key={`ul-${key}`}
           className="list-disc pl-5 mb-3 space-y-1 text-sm font-sans text-fg"
         >
-          {currentListItems}
+          {currentListItems.map((item, index) => (
+            <li key={index} className="leading-relaxed">
+              {parseInline(item.content)}
+            </li>
+          ))}
         </ul>
       );
     } else if (currentListType === "ol") {
@@ -185,7 +194,20 @@ export function MarkdownRenderer({ text }: { text: string }) {
           key={`ol-${key}`}
           className="list-decimal pl-5 mb-3 space-y-1 text-sm font-sans text-fg"
         >
-          {currentListItems}
+          {currentListItems.map((item, index) => (
+            <li key={index} className="leading-relaxed">
+              {parseInline(item.content)}
+              {item.nestedUnorderedItems.length > 0 && (
+                <ul className="list-disc pl-5 mt-2 space-y-1 text-sm font-sans text-fg">
+                  {item.nestedUnorderedItems.map((nestedItem, nestedIndex) => (
+                    <li key={nestedIndex} className="leading-relaxed">
+                      {parseInline(nestedItem)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
         </ol>
       );
     }
@@ -280,16 +302,16 @@ export function MarkdownRenderer({ text }: { text: string }) {
     // ── unordered list ──
     const ulMatch = line.match(/^(\s*)[-*]\s+(.*)$/);
     if (ulMatch) {
+      if (currentListType === "ol" && currentListItems.length > 0) {
+        currentListItems[currentListItems.length - 1].nestedUnorderedItems.push(ulMatch[2]);
+        return;
+      }
       if (currentListType !== "ul") {
         flushList(idx);
         currentListType = "ul";
       }
       const content = ulMatch[2];
-      currentListItems.push(
-        <li key={idx} className="leading-relaxed">
-          {parseInline(content)}
-        </li>
-      );
+      currentListItems.push({ content, nestedUnorderedItems: [] });
       return;
     }
 
@@ -301,18 +323,16 @@ export function MarkdownRenderer({ text }: { text: string }) {
         currentListType = "ol";
       }
       const content = olMatch[2];
-      currentListItems.push(
-        <li key={idx} className="leading-relaxed">
-          {parseInline(content)}
-        </li>
-      );
+      currentListItems.push({ content, nestedUnorderedItems: [] });
+      return;
+    }
+
+    if (trimmed === "") {
       return;
     }
 
     // ── default: flush any list and render paragraph ──
     if (currentListType) flushList(idx);
-
-    if (trimmed === "") return;
 
     elements.push(
       <p key={idx} className="text-sm font-sans text-fg leading-relaxed mb-2">

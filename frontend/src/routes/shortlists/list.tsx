@@ -12,7 +12,6 @@ import {
     Skeleton,
     Tooltip,
 } from "@/components/ui";
-import { useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -240,12 +239,9 @@ function NewCollectionModal({
 }) {
   const [name, setName] = useState("");
   const qc = useQueryClient();
-  const userId = useUserId();
-
   const createMutation = useMutation({
     mutationFn: () =>
       api.shortlist.collections.create({
-        created_by_user_id: userId ?? "",
         name: name.trim(),
       }),
     onSuccess: (col) => {
@@ -300,14 +296,13 @@ function NewCollectionModal({
 
 export default function ShortlistsListRoute() {
   const qc = useQueryClient();
-  const userId = useUserId();
   const [newColOpen, setNewColOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<CollectionResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CollectionResponse | null>(null);
 
   const { data: collectionsData, isLoading } = useQuery({
     queryKey: ["collections"],
-    queryFn: () => api.shortlist.collections.list({ user_id: userId ?? "", limit: 100 }),
+    queryFn: () => api.shortlist.collections.list({ limit: 100 }),
     staleTime: 30_000,
   });
   const collections = collectionsData?.items ?? [];

@@ -1,4 +1,4 @@
-import { api, type CollectionResponse, type ResumeResponse } from "@/api";
+import { api, type ActivityKind, type ActivityResponse, type CollectionResponse, type ResumeResponse } from "@/api";
 import { UploadModal } from "@/components/candidates/UploadModal";
 import { Button } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,9 +9,11 @@ import { isVietnameseUi } from "@/lib/ui-language";
 import { useQuery } from "@tanstack/react-query";
 import {
     ArrowRight,
+    CircleAlert,
     BarChart3,
     CheckCircle2,
     Circle,
+    FileWarning,
     FileText,
     FileUp,
     Layers,
@@ -22,6 +24,7 @@ import {
     TrendingUp,
     Upload,
     Users,
+    XCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -91,16 +94,6 @@ function buildSparkline(dates: (string | null)[], days = 7): number[] {
 function pctChange(current: number, previous: number): number | null {
   if (previous === 0) return current > 0 ? 100 : null;
   return Math.round(((current - previous) / previous) * 100);
-}
-
-function fileToName(f: string): string {
-  return (
-    f
-      .replace(/\.pdf$/i, "")
-      .replace(/[_-]+/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase())
-      .trim() || f
-  );
 }
 
 // ── Sparkline SVG ─────────────────────────────────────────────────────────────
@@ -199,33 +192,46 @@ function MetricCard({
 
 // ── ActivityItem ──────────────────────────────────────────────────────────────
 
-type ActivityKind = "upload" | "outreach" | "chat" | "scoring";
-
 interface ActivityEntry {
   id: string;
   kind: ActivityKind;
   label: string;
   sub?: string;
   timestamp: string | null;
+  targetUrl?: string | null;
 }
 
 const ACTIVITY_ICONS: Record<ActivityKind, React.ElementType> = {
-  upload: Upload,
-  outreach: Mail,
-  chat: MessageSquare,
-  scoring: BarChart3,
+  resume_uploaded: Upload,
+  resume_processed: CheckCircle2,
+  resume_failed: FileWarning,
+  shortlist_added: Layers,
+  outreach_sent: Mail,
+  outreach_failed: XCircle,
+  interview_link_created: FileText,
+  interview_invitation_sent: Mail,
+  interview_completed: Sparkles,
+  interview_cancelled: CircleAlert,
+  scoring_completed: BarChart3,
 };
 
 const ACTIVITY_COLORS: Record<ActivityKind, string> = {
-  upload: "text-accent",
-  outreach: "text-warning",
-  chat: "text-success",
-  scoring: "text-fg-muted",
+  resume_uploaded: "text-accent",
+  resume_processed: "text-success",
+  resume_failed: "text-danger",
+  shortlist_added: "text-fg-muted",
+  outreach_sent: "text-warning",
+  outreach_failed: "text-danger",
+  interview_link_created: "text-accent",
+  interview_invitation_sent: "text-warning",
+  interview_completed: "text-success",
+  interview_cancelled: "text-danger",
+  scoring_completed: "text-fg-muted",
 };
 
 function ActivityItem({ entry }: { entry: ActivityEntry }) {
   const Icon = ACTIVITY_ICONS[entry.kind];
-  return (
+  const content = (
     <div className="flex items-start gap-3 py-3 hairline-b last:border-b-0">
       <div
         className={cn(
@@ -248,6 +254,122 @@ function ActivityItem({ entry }: { entry: ActivityEntry }) {
       </span>
     </div>
   );
+  if (entry.targetUrl) {
+    return (
+      <Link to={entry.targetUrl} className="block hover:bg-[color:var(--hairline)] transition-colors rounded-[var(--radius-sm)]">
+        {content}
+      </Link>
+    );
+  }
+  return content;
+}
+
+function formatActivityEntry(item: ActivityResponse): ActivityEntry {
+  const subject = item.subject_name ?? (viUi ? "mục chưa đặt tên" : "unnamed item");
+  const context = item.context_name;
+  const message = typeof item.metadata?.message === "string" ? item.metadata.message : null;
+
+  switch (item.kind) {
+    case "resume_uploaded":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã tải CV lên: ${subject}` : `CV uploaded: ${subject}`,
+        sub: viUi ? "Đang chờ phân tích hồ sơ" : "Waiting for resume parsing",
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "resume_processed":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã xử lý CV: ${subject}` : `CV processed: ${subject}`,
+        sub: context ?? (viUi ? "Hồ sơ ứng viên đã sẵn sàng" : "Candidate profile is ready"),
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "resume_failed":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Xử lý CV thất bại: ${subject}` : `CV processing failed: ${subject}`,
+        sub: message ?? context ?? (viUi ? "Cần kiểm tra lại file hoặc thử lại" : "Review the file and retry"),
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "shortlist_added":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã thêm ${subject} vào shortlist` : `Added ${subject} to shortlist`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "outreach_sent":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã gửi email cho ${subject}` : `Sent email to ${subject}`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "outreach_failed":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Gửi email cho ${subject} thất bại` : `Email send failed for ${subject}`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "interview_link_created":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã tạo link phỏng vấn cho ${subject}` : `Created interview link for ${subject}`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "interview_invitation_sent":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã gửi lời mời phỏng vấn cho ${subject}` : `Sent interview invitation to ${subject}`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "interview_completed":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `${subject} đã hoàn thành phỏng vấn` : `${subject} completed the interview`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "interview_cancelled":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã hủy lời mời phỏng vấn của ${subject}` : `Interview invitation cancelled for ${subject}`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+    case "scoring_completed":
+      return {
+        id: item.id,
+        kind: item.kind,
+        label: viUi ? `Đã hoàn tất chấm điểm cho ${subject}` : `Scoring completed for ${subject}`,
+        sub: context ?? undefined,
+        timestamp: item.timestamp,
+        targetUrl: item.target_url,
+      };
+  }
 }
 
 // ── QuickActionButton ─────────────────────────────────────────────────────────
@@ -403,12 +525,6 @@ const ONBOARDING_STEPS = [
     href: "/job-descriptions",
   },
   {
-    id: "score",
-    label: "Run AI scoring",
-    sub: "Compare candidates once resumes and the JD are ready",
-    href: "/scoring",
-  },
-  {
     id: "chat",
     label: "Ask the AI Recruiter",
     sub: "Interrogate your candidate pool after data starts flowing in",
@@ -442,7 +558,7 @@ function FirstRunDashboardState({
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-fg-muted sm:text-base">
               The job has been created. Next, upload resumes or add the full job description.
-              Scoring and AI chat become much more useful once one of those data sources exists.
+              AI chat becomes much more useful once one of those data sources exists.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Button
@@ -469,8 +585,7 @@ function FirstRunDashboardState({
               {[
                 "Upload resumes to build candidate profiles.",
                 "Add the full job description to define fit.",
-                "Run scoring after both are available.",
-                "Use AI chat to explore the candidate pool.",
+                "Use AI chat to explore the candidate pool once data starts flowing in.",
               ].map((item) => (
                 <div key={item} className="flex items-start gap-3">
                   <CheckCircle2
@@ -490,7 +605,6 @@ function FirstRunDashboardState({
         <OnboardingChecklist
           hasCandidates={false}
           hasJDs={false}
-          hasScored={false}
           hasChatted={false}
         />
       </div>
@@ -501,18 +615,15 @@ function FirstRunDashboardState({
 function OnboardingChecklist({
   hasCandidates,
   hasJDs,
-  hasScored,
   hasChatted,
 }: {
   hasCandidates: boolean;
   hasJDs: boolean;
-  hasScored: boolean;
   hasChatted: boolean;
 }) {
   const statuses = {
     upload: hasCandidates,
     jd: hasJDs,
-    score: hasScored,
     chat: hasChatted,
   };
   const done = Object.values(statuses).filter(Boolean).length;
@@ -621,16 +732,19 @@ export default function DashboardRoute() {
     staleTime: 60_000,
   });
 
-  const { data: recentOutreachData } = useQuery({
-    queryKey: ["dashboard-outreach-recent"],
-    queryFn: () => api.outreach.list({ limit: 10 }),
-    staleTime: 60_000,
+  const { data: activityData, isLoading: activityLoading } = useQuery({
+    queryKey: ["dashboard-activities", selectedJobId],
+    queryFn: () =>
+      api.activities
+        .list({ job_id: selectedJobId ?? undefined, limit: 12 })
+        .catch(() => ({ items: [] as ActivityResponse[] })),
+    staleTime: 30_000,
   });
 
   const { data: collectionsData } = useQuery({
     queryKey: ["dashboard-collections"],
     queryFn: () =>
-      api.shortlist.collections.list({ user_id: user?.id ?? "", limit: 4 }).catch(() => ({
+      api.shortlist.collections.list({ limit: 4 }).catch(() => ({
         items: [] as CollectionResponse[],
         total: 0,
       })),
@@ -669,7 +783,9 @@ export default function DashboardRoute() {
   const jdDates = (jdsData?.items ?? []).filter((j) => j.is_active).map((j) => j.created_at);
   const jdSparkline = buildSparkline(jdDates, 7);
 
-  const outreachDates = (recentOutreachData?.items ?? []).map((o) => o.created_at);
+  const outreachDates = (activityData?.items ?? [])
+    .filter((item) => item.kind === "outreach_sent" || item.kind === "outreach_failed")
+    .map((item) => item.timestamp);
   const outreachSparkline = buildSparkline(outreachDates, 7);
 
   const todayUploads = buildSparkline(uploadDates, 7)[6] ?? 0;
@@ -696,46 +812,14 @@ export default function DashboardRoute() {
 
   // ── activity feed ─────────────────────────────────────────────────────────
 
-  const activityEntries: ActivityEntry[] = [];
-
-  for (const r of allUploads.slice(0, 8)) {
-    activityEntries.push({
-      id: `upload-${r.id}`,
-      kind: "upload",
-      label: `Resume uploaded: ${fileToName(r.original_file_name)}`,
-      sub:
-        r.upload_status === "processed"
-          ? (viUi ? "Đã phân tích hồ sơ thành công" : "Profile parsed successfully")
-          : (viUi ? `Trạng thái: ${r.upload_status}` : `Status: ${r.upload_status}`),
-      timestamp: r.uploaded_at,
-    });
-  }
-
-  for (const o of (recentOutreachData?.items ?? []).slice(0, 5)) {
-    activityEntries.push({
-      id: `outreach-${o.id}`,
-      kind: "outreach",
-      label: viUi ? `Đã tạo nháp liên hệ: ${o.subject}` : `Outreach drafted: ${o.subject}`,
-      sub: o.candidate_full_name ?? undefined,
-      timestamp: o.created_at,
-    });
-  }
-
-  activityEntries.sort((a, b) => {
-    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-    return tb - ta;
-  });
-
-  const recentActivity = activityEntries.slice(0, 12);
+  const recentActivity = (activityData?.items ?? []).map(formatActivityEntry);
 
   // ── onboarding tracking ─────────────────────────────────────────────────
 
   const hasCandidates = setupStatusData?.has_uploaded_resumes ?? totalCandidates > 0;
   const hasJDs = setupStatusData?.has_active_job_description ?? (jdsData?.items ?? []).length > 0;
-  const hasScored = setupStatusData?.has_completed_score_run ?? false;
   const hasChatted = setupStatusData?.has_chat_turn ?? false;
-  const onboardingDone = [hasCandidates, hasJDs, hasScored, hasChatted].filter(Boolean).length;
+  const onboardingDone = [hasCandidates, hasJDs, hasChatted].filter(Boolean).length;
   const onboardingComplete = onboardingDone === ONBOARDING_STEPS.length;
 
   // ── empty state detection ─────────────────────────────────────────────────
@@ -772,7 +856,6 @@ export default function DashboardRoute() {
               <OnboardingChecklist
                 hasCandidates={hasCandidates}
                 hasJDs={hasJDs}
-                hasScored={hasScored}
                 hasChatted={hasChatted}
               />
             </div>
@@ -836,7 +919,7 @@ export default function DashboardRoute() {
                   </Link>
                 </div>
                 <div className="px-5">
-                  {isMetricLoading ? (
+                  {activityLoading ? (
                     <div className="py-4 space-y-4">
                       {Array.from({ length: 6 }).map((_, i) => (
                         <div key={i} className="flex items-center gap-3">
@@ -851,9 +934,13 @@ export default function DashboardRoute() {
                     </div>
                   ) : recentActivity.length === 0 ? (
                     <div className="py-12 text-center">
-                      <p className="text-sm font-sans text-fg-muted">No activity yet.</p>
+                      <p className="text-sm font-sans text-fg-muted">
+                        {viUi ? "Chưa có hoạt động nào." : "No activity yet."}
+                      </p>
                       <p className="text-xs font-sans text-fg-subtle mt-1">
-                        Upload resumes or create outreach messages to see activity here.
+                        {viUi
+                          ? "Tải CV, gửi email liên hệ hoặc tạo link phỏng vấn để xem hoạt động tại đây."
+                          : "Upload CVs, send outreach, or create interview links to see activity here."}
                       </p>
                     </div>
                   ) : (

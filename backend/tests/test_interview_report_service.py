@@ -227,38 +227,27 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
     generated_json = """
     {
       "candidate_overview": "Candidate described ownership of backend ingestion and recovery workflows.",
-      "competencies": [
+      "questions": [
         {
-          "name": "System design",
-          "summary": "Explained queue-based ingestion architecture with retries and idempotency.",
-          "evidence": [
-            {
-              "transcript_turn_id": "__TURN_1__",
-              "turn_index": 1,
-              "question_key": "system_design",
-              "speaker_role": "candidate",
-              "transcript_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes."
-            }
-          ]
+          "question_key": "system_design",
+          "question_text": "Tell me about a backend system you built.",
+          "question_transcript_turn_id": "__TURN_0__",
+          "question_turn_index": 0,
+          "answer_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes.",
+          "answer_transcript_turn_id": "__TURN_1__",
+          "answer_turn_index": 1,
+          "evaluation": "Explained queue-based ingestion architecture with retries and idempotency."
         },
         {
-          "name": "Operational resilience",
-          "summary": "Covered failure handling with dead-letter queues, alerting, and replay tooling.",
-          "evidence": [
-            {
-              "transcript_turn_id": "__TURN_3__",
-              "turn_index": 3,
-              "question_key": "failures",
-              "speaker_role": "candidate",
-              "transcript_text": "I added dead-letter queues, alerting, and replay tooling to recover safely from downstream outages."
-            }
-          ]
+          "question_key": "failures",
+          "question_text": "How did you handle failures?",
+          "question_transcript_turn_id": "__TURN_2__",
+          "question_turn_index": 2,
+          "answer_text": "I added dead-letter queues, alerting, and replay tooling to recover safely from downstream outages.",
+          "answer_transcript_turn_id": "__TURN_3__",
+          "answer_turn_index": 3,
+          "evaluation": "Covered failure handling with dead-letter queues, alerting, and replay tooling."
         }
-      ],
-      "communication_summary": "Answers were concrete and tied to implementation details.",
-      "follow_up_topics": [
-        "Scale limits of the ingestion pipeline",
-        "Tradeoffs in replay tooling"
       ],
       "overall_summary": "Interview shows backend experience with reliability-focused examples."
     }
@@ -268,9 +257,10 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
         interview_report_service.LLMProvider,
         "generate",
         lambda self, prompt, system_prompt=None: LLMResponse(
-            text=generated_json.replace("__TURN_1__", str(session_record.transcript_turns[1].id)).replace(
-                "__TURN_3__", str(session_record.transcript_turns[3].id)
-            ),
+            text=generated_json.replace("__TURN_0__", str(session_record.transcript_turns[0].id))
+            .replace("__TURN_1__", str(session_record.transcript_turns[1].id))
+            .replace("__TURN_2__", str(session_record.transcript_turns[2].id))
+            .replace("__TURN_3__", str(session_record.transcript_turns[3].id)),
             provider="test",
             model="test-model",
         ),
@@ -286,12 +276,15 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
     assert persisted_report.interview_template_id == interview_invitation.interview_template_id
     assert persisted_report.report_payload["status"] == "completed"
     assert persisted_report.report_payload["summary"]["candidate_overview"].startswith("Candidate described ownership")
-    assert persisted_report.report_payload["summary"]["competencies"][0]["evidence"][0] == {
-        "transcript_turn_id": str(session_record.transcript_turns[1].id),
-        "turn_index": 1,
+    assert persisted_report.report_payload["summary"]["questions"][0] == {
         "question_key": "system_design",
-        "speaker_role": "candidate",
-        "transcript_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes.",
+        "question_text": "Tell me about a backend system you built.",
+        "question_transcript_turn_id": str(session_record.transcript_turns[0].id),
+        "question_turn_index": 0,
+        "answer_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes.",
+        "answer_transcript_turn_id": str(session_record.transcript_turns[1].id),
+        "answer_turn_index": 1,
+        "evaluation": "Explained queue-based ingestion architecture with retries and idempotency.",
     }
     assert "## Candidate Overview" in persisted_report.summary_text
     assert "## Recommendation" not in persisted_report.summary_text
@@ -312,23 +305,18 @@ def test_recruiter_can_fetch_interview_report_by_session_id(
     generated_json = """
     {
       "candidate_overview": "Candidate described ownership of backend ingestion and recovery workflows.",
-      "competencies": [
+      "questions": [
         {
-          "name": "System design",
-          "summary": "Explained queue-based ingestion architecture with retries and idempotency.",
-          "evidence": [
-            {
-              "transcript_turn_id": "__TURN_1__",
-              "turn_index": 1,
-              "question_key": "system_design",
-              "speaker_role": "candidate",
-              "transcript_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes."
-            }
-          ]
+          "question_key": "system_design",
+          "question_text": "Tell me about a backend system you built.",
+          "question_transcript_turn_id": "__TURN_0__",
+          "question_turn_index": 0,
+          "answer_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes.",
+          "answer_transcript_turn_id": "__TURN_1__",
+          "answer_turn_index": 1,
+          "evaluation": "Explained queue-based ingestion architecture with retries and idempotency."
         }
       ],
-      "communication_summary": "Answers were concrete and tied to implementation details.",
-      "follow_up_topics": ["Scale limits of the ingestion pipeline"],
       "overall_summary": "Interview shows backend experience with reliability-focused examples."
     }
     """
@@ -337,7 +325,9 @@ def test_recruiter_can_fetch_interview_report_by_session_id(
         interview_report_service.LLMProvider,
         "generate",
         lambda self, prompt, system_prompt=None: LLMResponse(
-            text=generated_json.replace("__TURN_1__", str(session_record.transcript_turns[1].id)),
+            text=generated_json.replace("__TURN_0__", str(session_record.transcript_turns[0].id)).replace(
+                "__TURN_1__", str(session_record.transcript_turns[1].id)
+            ),
             provider="test",
             model="test-model",
         ),
@@ -451,9 +441,7 @@ def test_generate_interview_report_rejects_incomplete_summary_payload(
     generated_json = """
     {
       "candidate_overview": "Candidate overview only.",
-      "competencies": [],
-      "communication_summary": "Clear communicator.",
-      "follow_up_topics": [],
+      "questions": [],
       "overall_summary": "Overall summary."
     }
     """
@@ -486,23 +474,18 @@ def test_generate_interview_report_rejects_mismatched_evidence_links(
     generated_json = f"""
     {{
       "candidate_overview": "Candidate discussed backend ingestion work.",
-      "competencies": [
+      "questions": [
         {{
-          "name": "System design",
-          "summary": "Discussed queue-based processing.",
-          "evidence": [
-            {{
-              "transcript_turn_id": "{session_record.transcript_turns[1].id}",
-              "turn_index": 1,
-              "question_key": "hallucinated_question",
-              "speaker_role": "candidate",
-              "transcript_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes."
-            }}
-          ]
+          "question_key": "hallucinated_question",
+          "question_text": "Tell me about a backend system you built.",
+          "question_transcript_turn_id": "{session_record.transcript_turns[0].id}",
+          "question_turn_index": 0,
+          "answer_text": "I built a queue-based ingestion service with retries, metrics, and idempotent processing for candidate resumes.",
+          "answer_transcript_turn_id": "{session_record.transcript_turns[1].id}",
+          "answer_turn_index": 1,
+          "evaluation": "Discussed queue-based processing."
         }}
       ],
-      "communication_summary": "Candidate answered directly.",
-      "follow_up_topics": ["Scaling details"],
       "overall_summary": "Candidate showed relevant backend experience."
     }}
     """
@@ -552,7 +535,7 @@ def test_generate_interview_report_task_marks_permanent_failure_without_retry(mo
 
     error = ValidationError.from_exception_data(
         "InterviewReportSummary",
-        [{"type": "missing", "loc": ("competencies",), "msg": "Field required", "input": {}}],
+        [{"type": "missing", "loc": ("questions",), "msg": "Field required", "input": {}}],
     )
     recorded_failures: list[tuple[uuid.UUID, str, bool]] = []
     retry_calls: list[str] = []

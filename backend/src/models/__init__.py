@@ -1,5 +1,6 @@
 from src.models.base import Base
 from src.models.enums import (
+    CandidateEvaluationStatus,
     ContentSource,
     MatchRunStatus,
     ProfileStatus,
@@ -10,6 +11,7 @@ from src.models.enums import (
 )
 from src.models.entities import (
     CandidateProfile,
+    CandidateEvaluation,
     ExtractionTrace,
     InterviewInvitation,
     InterviewQuestionSet,
@@ -30,6 +32,7 @@ from src.models.entities import (
     QueryTurn,
     ResumeDocument,
     RoleAssignment,
+    JobScoringPreference,
     ShortlistCollection,
     ShortlistItem,
     UserAccount,
@@ -39,6 +42,7 @@ __all__ = [
     "Base",
     "ResumeDocument",
     "CandidateProfile",
+    "CandidateEvaluation",
     "ExtractionTrace",
     "InterviewInvitation",
     "Job",
@@ -58,12 +62,14 @@ __all__ = [
     "OutreachMessage",
     "OutreachTemplate",
     "InterviewQuestionSet",
+    "JobScoringPreference",
     "UserAccount",
     "RoleAssignment",
     "OAuthIdentity",
     "UploadStatus",
     "ProfileStatus",
     "MatchRunStatus",
+    "CandidateEvaluationStatus",
     "ContentSource",
     "SentStatus",
     "UserStatus",

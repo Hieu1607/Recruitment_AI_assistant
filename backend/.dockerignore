@@ -1,0 +1,9 @@
+tmp
+.codex-tmp
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.coverage
+.mypy_cache

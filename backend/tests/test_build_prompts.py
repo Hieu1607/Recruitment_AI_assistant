@@ -107,6 +107,35 @@ def test_locked_rubric_semantic_prompt_includes_rubric_and_evidence_requirements
     assert "Do not return binary 0/1 scores or probabilities" in prompt
 
 
+def test_locked_rubric_semantic_prompt_requests_score_percent_and_no_total_score_fields():
+    prompt = BuildPrompts().build_locked_rubric_semantic_scoring_prompt(
+        candidates=[
+            {
+                "id": "cand-1",
+                "full_name": "Taylor",
+                "skills_text": "Python, FastAPI",
+                "projects_text": "Led backend rewrite",
+            }
+        ],
+        rubric={
+            "criteria": [
+                {
+                    "key": "skills.python",
+                    "section": "skills",
+                    "requirementText": "Strong Python proficiency",
+                    "type": "semantic",
+                }
+            ]
+        },
+    )
+
+    assert '"scorePercent"' in prompt
+    assert '"totalScore"' not in prompt
+    assert "Do not calculate totalScore" in prompt
+    assert "weightedScore" in prompt
+    assert "passedThreshold" in prompt
+
+
 def test_jd_rubric_prompt_restricts_measurable_fields_to_supported_candidateprofile_fields():
     prompt = BuildPrompts().build_jd_rubric_extraction_prompt(
         job_description_text="Need Python, Docker, and 5 years of experience.",
@@ -259,3 +288,15 @@ def test_compact_answer_prompt_uses_only_identity_fields():
     assert "experience_text" not in prompt
     assert "12" in prompt
     assert "11" in prompt
+
+
+def test_outreach_template_draft_prompt_forces_vietnamese_output():
+    prompt = BuildPrompts().build_outreach_template_draft_prompt(
+        brief="Chúc mừng ứng viên và yêu cầu phản hồi xác nhận.",
+        job_title="Backend Engineer",
+        company_name="EasyHR",
+        variables_allowed=["candidate_name", "job_title", "company_name"],
+    )
+
+    assert "Write the email in Vietnamese." in prompt
+    assert "Write the email in English." not in prompt

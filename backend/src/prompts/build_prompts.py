@@ -395,7 +395,7 @@ Rules:
                         "criteria": [
                             {
                                 "criterionKey": "skills.python",
-                                "score": 85,
+                                "scorePercent": 85,
                                 "evidenceSummary": "string",
                             }
                         ],
@@ -408,9 +408,11 @@ Rules:
             "Score only the listed criteria. "
             "Do not add, remove, or reinterpret criteria. "
             "Use only evidence from the provided candidate sections. "
-            "Scores must be numbers from 0 to 100, where 100 is a clear full match, 70 is a strong partial match, "
+            "Scores must be numbers from 0 to 100. "
+            "Return scorePercent as a number from 0 to 100, where 100 is a clear full match, 70 is a strong partial match, "
             "40 is weak or indirect evidence, and 0 is no evidence. "
             "Do not return binary 0/1 scores or probabilities. "
+            "Do not calculate totalScore, weightedScore, passedThreshold, or section totals. "
             f"Write rationale and evidenceSummary in {self._language_name()}. "
             "Return JSON only and include evidence for every scored criterion.\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
@@ -905,6 +907,40 @@ Answer:"""
             "with 3-5 questions each. Tailor questions to the candidate's background. "
             f"Write category names and question text in {self._language_name()}. "
             "Return valid JSON only matching the responseFormat shape exactly.\n\n"
+            f"{json.dumps(payload, ensure_ascii=True)}"
+        )
+
+    def build_outreach_template_draft_prompt(
+        self,
+        *,
+        brief: str,
+        job_title: str | None,
+        company_name: str | None,
+        variables_allowed: list[str],
+    ) -> str:
+        variable_lines = "\n".join(
+            f"- {{{{{name}}}}}" for name in variables_allowed
+        ) or "- No variables allowed"
+        payload = {
+            "jobTitle": job_title or "Unknown",
+            "companyName": company_name or "Unknown",
+            "brief": brief.strip(),
+            "allowedVariables": variables_allowed,
+            "responseFormat": {
+                "subject": "string",
+                "body_text": "string",
+                "body_html": "string",
+                "variables_used": ["string"],
+            },
+        }
+        return (
+            "You are a recruitment assistant writing reusable recruiter outreach email templates. "
+            "Return valid JSON only with the keys subject, body_text, body_html, and variables_used. "
+            "Write the email in Vietnamese. Keep the tone professional, concise, and recruiter-friendly. "
+            "Use only variables from the allowedVariables list when needed. "
+            "Do not mention or invent variables outside that whitelist. "
+            "body_html must be simple semantic HTML that matches body_text.\n\n"
+            f"Allowed variables:\n{variable_lines}\n\n"
             f"{json.dumps(payload, ensure_ascii=True)}"
         )
 

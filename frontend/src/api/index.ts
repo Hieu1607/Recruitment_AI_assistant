@@ -10,6 +10,7 @@ export {
 export { queryClient } from "./queryClient";
 
 // Import endpoint modules
+import { activitiesApi } from "./endpoints/activities";
 import { authApi } from "./endpoints/auth";
 import { chatApi } from "./endpoints/chat";
 import { interviewInvitationsApi } from "./endpoints/interviewInvitations";
@@ -32,10 +33,11 @@ import { uploadApi } from "./endpoints/upload";
  * Usage from any screen:
  *   import { api } from "@/api";
  *   const data = await api.upload.list({ limit: 50 });
- *   api.shortlist.sessions.list({ user_id: "..." });
+ *   api.shortlist.sessions.list({ limit: 20 });
  *   api.shortlist.collections.create({ ... });
  */
 export const api = {
+  activities: activitiesApi,
   auth: authApi,
   jobs: jobsApi,
   publicJobs: publicJobsApi,

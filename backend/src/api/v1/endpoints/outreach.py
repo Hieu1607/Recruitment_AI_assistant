@@ -9,25 +9,39 @@ Route map
   DELETE /outreach/{id}         delete
 """
 
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from src.models.candidate_profile import CandidateProfile
 from src.models.deps import get_current_user, get_db
 from src.models.enums import ContentSource, SentStatus
+from src.models.job import Job
 from src.models.oauth_identity import GMAIL_SEND_SCOPE, OAuthIdentity
 from src.models.outreach import OutreachMessage
 from src.models.outreach_template import OutreachTemplate
-from src.models.user_account import UserAccount
 from src.models.session import SessionLocal
+from src.models.user_account import UserAccount
 from src.services.outreach_service import normalize_rich_message
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Template variable rules
+#
+# Templates may declare a fixed set of "default variables" the recruiter fills
+# in once (job_title, company_name). candidate_name / candidate_email are
+# intentionally excluded here — they always auto-resolve from the candidate
+# selected in New message, never from a template default.
+# ---------------------------------------------------------------------------
+
+TEMPLATE_DEFAULT_VARIABLE_KEYS = {"job_title", "company_name"}
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +72,62 @@ def _get_gmail_capable_identity(db, user_id: uuid.UUID) -> OAuthIdentity | None:
     if not identity.has_scope(GMAIL_SEND_SCOPE):
         return None
     return identity
+
+
+def _generate_outreach_template_draft(
+    *,
+    brief: str,
+    job: Job,
+    variables_allowed: list[str],
+) -> dict:
+    from src.prompts.build_prompts import build_prompts
+    from src.services.llm_service import LLMProvider, LLMProviderError
+
+    prompt = build_prompts.build_outreach_template_draft_prompt(
+        brief=brief,
+        job_title=job.title,
+        company_name=None,
+        variables_allowed=variables_allowed,
+    )
+
+    try:
+        response = LLMProvider().generate(prompt)
+        text = response.text.strip()
+        if text.startswith("```"):
+            text = text.split("```", 2)[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.rsplit("```", 1)[0].strip()
+        return json.loads(text)
+    except (LLMProviderError, json.JSONDecodeError, Exception) as exc:
+        raise HTTPException(status_code=502, detail=f"LLM generation failed: {exc}") from exc
+
+
+def _missing_template_default_variables(template: OutreachTemplate) -> list[str]:
+    """Return which of the template's declared variables (job_title/company_name)
+    are used in its content but have no configured default value yet."""
+    used = set(template.variables_used or [])
+    defaults = template.default_variables or {}
+    return sorted(
+        key
+        for key in TEMPLATE_DEFAULT_VARIABLE_KEYS
+        if key in used and not (defaults.get(key) or "").strip()
+    )
+
+
+def _resolve_template_render_variables(
+    candidate: CandidateProfile,
+    template: OutreachTemplate,
+) -> dict[str, str]:
+    """Auto-resolve candidate_name/candidate_email from the candidate and merge
+    in the template's configured job_title/company_name defaults."""
+    defaults = template.default_variables or {}
+    return {
+        "candidate_name": candidate.full_name or "",
+        "candidate_email": candidate.email or "",
+        "job_title": defaults.get("job_title", ""),
+        "company_name": defaults.get("company_name", ""),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +173,18 @@ class OutreachListResponse(BaseModel):
     items: List[OutreachResponse]
 
 
+def _validate_default_variables(value: Optional[dict]) -> Optional[dict[str, str]]:
+    if value is None:
+        return None
+    invalid_keys = sorted(set(value.keys()) - TEMPLATE_DEFAULT_VARIABLE_KEYS)
+    if invalid_keys:
+        raise ValueError(
+            f"default_variables only supports {sorted(TEMPLATE_DEFAULT_VARIABLE_KEYS)}; "
+            f"unsupported keys: {invalid_keys}"
+        )
+    return {str(k): str(v) for k, v in value.items()}
+
+
 class OutreachTemplateCreateRequest(BaseModel):
     created_by_user_id: uuid.UUID
     job_id: Optional[uuid.UUID] = None
@@ -113,6 +195,12 @@ class OutreachTemplateCreateRequest(BaseModel):
     body_html_template: str = Field(..., min_length=1)
     editor_json: Optional[dict] = None
     variables_used: Optional[list[str]] = None
+    default_variables: Optional[dict[str, str]] = None
+
+    @field_validator("default_variables")
+    @classmethod
+    def _check_default_variables(cls, value: Optional[dict]) -> Optional[dict[str, str]]:
+        return _validate_default_variables(value)
 
 
 class OutreachTemplateUpdateRequest(BaseModel):
@@ -122,6 +210,18 @@ class OutreachTemplateUpdateRequest(BaseModel):
     body_html_template: Optional[str] = Field(None, min_length=1)
     editor_json: Optional[dict] = None
     variables_used: Optional[list[str]] = None
+    default_variables: Optional[dict[str, str]] = None
+
+    @field_validator("default_variables")
+    @classmethod
+    def _check_default_variables(cls, value: Optional[dict]) -> Optional[dict[str, str]]:
+        return _validate_default_variables(value)
+
+
+class OutreachTemplateGenerateRequest(BaseModel):
+    job_id: uuid.UUID
+    brief: str = Field(..., min_length=1)
+    variables_allowed: list[str] = Field(default_factory=list)
 
 
 class OutreachTemplateResponse(BaseModel):
@@ -135,6 +235,7 @@ class OutreachTemplateResponse(BaseModel):
     body_html_template: str
     editor_json: Optional[dict]
     variables_used: list[str]
+    default_variables: dict[str, str]
     created_at: datetime
     updated_at: datetime
 
@@ -142,6 +243,13 @@ class OutreachTemplateResponse(BaseModel):
 class OutreachTemplateListResponse(BaseModel):
     total: int
     items: list[OutreachTemplateResponse]
+
+
+class OutreachTemplateGenerateResponse(BaseModel):
+    subject: str
+    body_text: str
+    body_html: str
+    variables_used: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +286,7 @@ def _ser_template(template: OutreachTemplate) -> OutreachTemplateResponse:
         body_html_template=template.body_html_template,
         editor_json=template.editor_json,
         variables_used=template.variables_used or [],
+        default_variables=template.default_variables or {},
         created_at=template.created_at,
         updated_at=template.updated_at,
     )
@@ -191,7 +300,31 @@ def _ser_template(template: OutreachTemplate) -> OutreachTemplateResponse:
 def create_message(body: OutreachCreateRequest):
     db = SessionLocal()
     try:
-        _get_or_404(db, CandidateProfile, body.candidate_profile_id, "CandidateProfile")
+        candidate = _get_or_404(db, CandidateProfile, body.candidate_profile_id, "CandidateProfile")
+
+        # When composed from a template, candidate_name/candidate_email always
+        # auto-resolve from the selected candidate, and job_title/company_name
+        # come from the template's configured defaults — the server is
+        # authoritative here regardless of what the client sends.
+        render_variables = body.render_variables
+        if body.template_id is not None:
+            template = _get_or_404(db, OutreachTemplate, body.template_id, "OutreachTemplate")
+            missing = _missing_template_default_variables(template)
+            if missing:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "missing_default_variables",
+                        "missing": missing,
+                        "message": (
+                            "Template uses "
+                            + ", ".join(f"{{{{{key}}}}}" for key in missing)
+                            + " but no default value is configured yet. "
+                            "Configure it in the Templates workspace first."
+                        ),
+                    },
+                )
+            render_variables = _resolve_template_render_variables(candidate, template)
 
         msg = OutreachMessage(
             candidate_profile_id=body.candidate_profile_id,
@@ -201,7 +334,7 @@ def create_message(body: OutreachCreateRequest):
             body_text=normalize_rich_message(body_text=body.body_text, body_html=body.body_html)[0],
             body_html=normalize_rich_message(body_text=body.body_text, body_html=body.body_html)[1],
             template_id=body.template_id,
-            render_variables=body.render_variables,
+            render_variables=render_variables,
             sent_status=SentStatus.NOT_SENT,
         )
         db.add(msg)
@@ -257,11 +390,39 @@ def create_template(body: OutreachTemplateCreateRequest):
             body_html_template=body_html,
             editor_json=body.editor_json,
             variables_used=body.variables_used or [],
+            default_variables=body.default_variables or {},
         )
         db.add(template)
         db.commit()
         db.refresh(template)
         return _ser_template(template)
+    finally:
+        db.close()
+
+
+@router.post("/templates/generate-draft", response_model=OutreachTemplateGenerateResponse)
+def generate_template_draft(body: OutreachTemplateGenerateRequest):
+    if not body.brief.strip():
+        raise HTTPException(status_code=422, detail="brief must not be empty")
+
+    db = SessionLocal()
+    try:
+        job = _get_or_404(db, Job, body.job_id, "Job")
+        payload = _generate_outreach_template_draft(
+            brief=body.brief,
+            job=job,
+            variables_allowed=body.variables_allowed,
+        )
+        body_text, body_html = normalize_rich_message(
+            body_text=(payload.get("body_text") or "").strip(),
+            body_html=(payload.get("body_html") or "").strip(),
+        )
+        return OutreachTemplateGenerateResponse(
+            subject=(payload.get("subject") or "").strip(),
+            body_text=body_text,
+            body_html=body_html,
+            variables_used=list(payload.get("variables_used") or []),
+        )
     finally:
         db.close()
 
@@ -317,6 +478,8 @@ def update_template(template_id: uuid.UUID, body: OutreachTemplateUpdateRequest)
             template.editor_json = body.editor_json
         if body.variables_used is not None:
             template.variables_used = body.variables_used
+        if body.default_variables is not None:
+            template.default_variables = body.default_variables
         db.commit()
         db.refresh(template)
         return _ser_template(template)

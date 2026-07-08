@@ -10,7 +10,7 @@ export type ProfileStatus = "draft" | "reviewed" | "approved" | "archived";
 
 export type MatchRunStatus = "running" | "completed" | "failed";
 
-export type ContentSource = "ai_draft" | "template";
+export type ContentSource = "ai_draft" | "template" | "manual";
 
 export type SentStatus = "not_sent" | "sent" | "failed";
 
@@ -224,6 +224,53 @@ export interface ScoreResponse {
   scores: CandidateScore[];
 }
 
+export interface CandidateEvaluationComponentScore extends ComponentScore {
+  section?: string | null;
+  scorePercent: number;
+  effectiveWeight?: number | null;
+}
+
+export interface CandidateEvaluationResponse {
+  id: string;
+  job_id: string;
+  job_description_id: string;
+  candidate_profile_id: string;
+  candidateName?: string | null;
+  resumeFileName?: string | null;
+  candidateDisplayName?: string | null;
+  scoring_signature: string;
+  status: "pending" | "running" | "completed" | "failed" | "outdated";
+  totalScore: number;
+  passedThreshold: boolean;
+  rationale: string;
+  error_message?: string | null;
+  scored_at?: string | null;
+  componentScores: CandidateEvaluationComponentScore[];
+}
+
+export interface JobEvaluationListResponse {
+  job_id: string;
+  section_weights: Record<string, number>;
+  score_threshold: number;
+  scoring_preferences_applied: boolean;
+  total_candidates: number;
+  completed_count: number;
+  pending_count: number;
+  running_count: number;
+  failed_count: number;
+  outdated_count: number;
+  average_score: number;
+  highest_score: number;
+  items: CandidateEvaluationResponse[];
+}
+
+export interface JobScoringPreferenceResponse {
+  job_id: string;
+  section_weights: Record<string, number>;
+  score_threshold: number;
+  updated_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Chat / Recruiter Chatbot
 // ---------------------------------------------------------------------------
@@ -322,6 +369,34 @@ export interface JobSetupStatusResponse {
   latest_chat_turn_at: string | null;
 }
 
+export type ActivityKind =
+  | "resume_uploaded"
+  | "resume_processed"
+  | "resume_failed"
+  | "shortlist_added"
+  | "outreach_sent"
+  | "outreach_failed"
+  | "interview_link_created"
+  | "interview_invitation_sent"
+  | "interview_completed"
+  | "interview_cancelled"
+  | "scoring_completed";
+
+export interface ActivityResponse {
+  id: string;
+  kind: ActivityKind;
+  timestamp: string;
+  subject_name: string | null;
+  context_name: string | null;
+  status: string | null;
+  target_url: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ActivityListResponse {
+  items: ActivityResponse[];
+}
+
 export type NotificationType =
   | "candidate_applied"
   | "interview_completed"
@@ -379,7 +454,6 @@ export interface SessionListResponse {
 }
 
 export interface SessionCreateRequest {
-  user_id: string;                       // UUID
   session_title?: string;
 }
 
@@ -434,7 +508,6 @@ export interface CollectionListResponse {
 }
 
 export interface CollectionCreateRequest {
-  created_by_user_id: string;           // UUID
   name: string;
   source_query_turn_id?: string;        // UUID
 }
@@ -606,6 +679,10 @@ export interface OutreachTemplateResponse {
   body_html_template: string;
   editor_json: Record<string, unknown> | null;
   variables_used: string[];
+  /** Recruiter-configured default values for job_title / company_name.
+   * candidate_name / candidate_email are never configured here — they
+   * always auto-resolve from the candidate selected in New message. */
+  default_variables: Record<string, string>;
   created_at: string;
   updated_at: string;
 }
@@ -625,6 +702,7 @@ export interface OutreachTemplateCreateRequest {
   body_html_template: string;
   editor_json?: Record<string, unknown> | null;
   variables_used?: string[];
+  default_variables?: Record<string, string>;
 }
 
 export interface OutreachTemplateUpdateRequest {
@@ -634,6 +712,20 @@ export interface OutreachTemplateUpdateRequest {
   body_html_template?: string;
   editor_json?: Record<string, unknown> | null;
   variables_used?: string[];
+  default_variables?: Record<string, string>;
+}
+
+export interface OutreachTemplateGenerateRequest {
+  job_id: string;
+  brief: string;
+  variables_allowed: string[];
+}
+
+export interface OutreachTemplateGenerateResponse {
+  subject: string;
+  body_text: string;
+  body_html: string;
+  variables_used: string[];
 }
 
 export interface OutreachAssetUploadResponse {
@@ -760,12 +852,48 @@ export interface DeleteInterviewTemplateResponse {
   template_id: string;
 }
 
+export interface InterviewReportQuestionItem {
+  question_key: string | null;
+  question_text: string;
+  question_transcript_turn_id: string;
+  question_turn_index: number;
+  answer_text: string;
+  answer_transcript_turn_id: string;
+  answer_turn_index: number;
+  evaluation: string;
+}
+
+export interface InterviewReportSummary {
+  candidate_overview: string;
+  questions: InterviewReportQuestionItem[];
+  overall_summary: string;
+}
+
+export interface InterviewReportFailure {
+  stage: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface InterviewReportTaskState {
+  state: string;
+  task_id: string | null;
+  retry_count: number;
+}
+
+export interface InterviewReportPayload {
+  status: "pending" | "completed" | "failed";
+  summary?: InterviewReportSummary | null;
+  failure?: InterviewReportFailure | null;
+  task?: InterviewReportTaskState | null;
+}
+
 export interface InterviewReportResponse {
   id: string;
   interview_session_id: string;
   interview_template_id: string | null;
   summary_text: string | null;
-  report_payload: Record<string, unknown>;
+  report_payload: InterviewReportPayload;
   created_at: string;
   updated_at: string;
 }
@@ -869,3 +997,4 @@ export interface DeleteJobDescriptionResponse {
   deleted: boolean;
   job_description_id: string;
 }
+

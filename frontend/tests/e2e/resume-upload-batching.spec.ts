@@ -13,7 +13,7 @@ function buildPdf(name: string) {
   };
 }
 
-test("uploading multiple resumes splits uploads into separate requests", async ({ page, request, baseURL }) => {
+test("uploading multiple resumes sends one batch request", async ({ page, request, baseURL }) => {
   const setup = await seedWorkspace(request, "Resume Upload Batching", []);
   await authenticatePage(page, setup);
 
@@ -27,9 +27,9 @@ test("uploading multiple resumes splits uploads into separate requests", async (
     }
 
     const postData = route.request().postDataBuffer() ?? Buffer.alloc(0);
-    const matches = postData.toString("utf8").match(/filename=\"([^\"]+)\"/g) ?? [];
+    const matches = postData.toString("utf8").match(/filename="([^"]+)"/g) ?? [];
     uploadedFileNames = uploadedFileNames.concat(
-      matches.map((match) => match.replace(/^filename=\"/, "").replace(/\"$/, "")),
+      matches.map((match) => match.replace(/^filename="/, "").replace(/"$/, "")),
     );
     uploadRequestCount += 1;
 
@@ -37,16 +37,14 @@ test("uploading multiple resumes splits uploads into separate requests", async (
       status: 202,
       contentType: "application/json",
       body: JSON.stringify({
-        total_files: 1,
-        queued_files: 1,
-        items: [
-          {
-            file_name: `resume-${uploadRequestCount}.pdf`,
-            resume_document_id: `resume-${uploadRequestCount}`,
-            status: "queued",
-            task_id: `task-${uploadRequestCount}`,
-          },
-        ],
+        total_files: 5,
+        queued_files: 5,
+        items: Array.from({ length: 5 }, (_, index) => ({
+          file_name: `resume-${index + 1}.pdf`,
+          resume_document_id: `resume-${index + 1}`,
+          status: "queued",
+          task_id: `task-${index + 1}`,
+        })),
       }),
     });
   });
@@ -64,7 +62,7 @@ test("uploading multiple resumes splits uploads into separate requests", async (
   await page.getByRole("button", { name: "Upload 5 resumes" }).click();
 
   await expect(page.getByRole("heading", { name: "5 resumes queued" })).toBeVisible();
-  await expect.poll(() => uploadRequestCount).toBe(5);
+  await expect.poll(() => uploadRequestCount).toBe(1);
   await expect(uploadedFileNames).toEqual([
     "resume-1.pdf",
     "resume-2.pdf",

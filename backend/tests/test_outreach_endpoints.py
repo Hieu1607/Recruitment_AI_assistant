@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,11 +19,13 @@ from src.api.v1.endpoints import outreach as outreach_module  # noqa: E402
 from src.api.v1.endpoints.outreach import (  # noqa: E402
     OutreachCreateRequest,
     OutreachTemplateCreateRequest,
+    OutreachTemplateGenerateRequest,
     OutreachTemplateUpdateRequest,
     OutreachUpdateRequest,
     create_message,
     create_template,
     delete_message,
+    generate_template_draft,
     get_template,
     get_message,
     list_messages,
@@ -145,8 +148,9 @@ def seeded_data(db_session_factory):
         db.add(candidate)
         db.commit()
         db.refresh(user)
+        db.refresh(job)
         db.refresh(candidate)
-        return {"user": user, "candidate": candidate}
+        return {"user": user, "job": job, "candidate": candidate}
     finally:
         db.close()
 
@@ -295,3 +299,301 @@ def test_outreach_template_crud(db_session_factory, seeded_data):
     assert listed.items[0].id == created.id
     assert fetched.subject_template == "Opportunity at {{company_name}}"
     assert updated.name == "Warm intro v2"
+
+
+def test_create_message_allows_manual_content_source(db_session_factory, seeded_data):
+    user = seeded_data["user"]
+    candidate = seeded_data["candidate"]
+
+    created = create_message(
+        OutreachCreateRequest(
+            candidate_profile_id=candidate.id,
+            created_by_user_id=user.id,
+            content_source="manual",
+            subject="Checking in",
+            body_text="Hello there",
+            body_html="<p>Hello there</p>",
+        )
+    )
+
+    assert created.content_source == "manual"
+
+
+def test_generate_template_draft_returns_subject_and_body(db_session_factory, seeded_data, monkeypatch):
+    monkeypatch.setattr(
+        outreach_module,
+        "_generate_outreach_template_draft",
+        lambda **kwargs: {
+            "subject": "Opportunity at {{company_name}}",
+            "body_text": "Hi {{candidate_name}}",
+            "body_html": "<p>Hi {{candidate_name}}</p>",
+            "variables_used": ["candidate_name", "company_name"],
+        },
+    )
+
+    generated = generate_template_draft(
+        OutreachTemplateGenerateRequest(
+            job_id=seeded_data["job"].id,
+            brief="Write a short recruiter intro email",
+            variables_allowed=["candidate_name", "company_name", "job_title"],
+        )
+    )
+
+    assert generated.subject == "Opportunity at {{company_name}}"
+    assert generated.body_text == "Hi {{candidate_name}}"
+    assert generated.body_html == "<p>Hi {{candidate_name}}</p>"
+    assert generated.variables_used == ["candidate_name", "company_name"]
+
+
+def test_generate_template_draft_rejects_blank_brief(db_session_factory, seeded_data):
+    with pytest.raises(HTTPException) as exc_info:
+        generate_template_draft(
+            OutreachTemplateGenerateRequest(
+                job_id=seeded_data["job"].id,
+                brief="   ",
+                variables_allowed=["candidate_name"],
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_generate_template_draft_returns_404_for_missing_job(db_session_factory):
+    with pytest.raises(HTTPException) as exc_info:
+        generate_template_draft(
+            OutreachTemplateGenerateRequest(
+                job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                brief="Need an email",
+                variables_allowed=["candidate_name"],
+            )
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Template default variables (Configure Variables)
+# ---------------------------------------------------------------------------
+
+def test_template_save_and_load_roundtrips_default_variables(db_session_factory, seeded_data):
+    user = seeded_data["user"]
+
+    created = create_template(
+        OutreachTemplateCreateRequest(
+            created_by_user_id=user.id,
+            name="Warm intro",
+            content_source=ContentSource.TEMPLATE,
+            subject_template="Opportunity at {{company_name}}",
+            body_text_template="Hi {{candidate_name}}, let's discuss {{job_title}} at {{company_name}}.",
+            body_html_template="<p>Hi {{candidate_name}}, let's discuss {{job_title}} at {{company_name}}.</p>",
+            variables_used=["candidate_name", "company_name", "job_title"],
+            default_variables={"job_title": "Backend Engineer", "company_name": "Acme Corp"},
+        )
+    )
+
+    assert created.default_variables == {"job_title": "Backend Engineer", "company_name": "Acme Corp"}
+
+    fetched = get_template(uuid.UUID(created.id))
+    assert fetched.default_variables == {"job_title": "Backend Engineer", "company_name": "Acme Corp"}
+
+    updated = update_template(
+        uuid.UUID(created.id),
+        OutreachTemplateUpdateRequest(default_variables={"job_title": "Staff Engineer"}),
+    )
+    assert updated.default_variables == {"job_title": "Staff Engineer"}
+
+    refetched = get_template(uuid.UUID(created.id))
+    assert refetched.default_variables == {"job_title": "Staff Engineer"}
+
+
+def test_template_defaults_to_empty_dict_when_not_provided(db_session_factory, seeded_data):
+    user = seeded_data["user"]
+
+    created = create_template(
+        OutreachTemplateCreateRequest(
+            created_by_user_id=user.id,
+            name="No defaults yet",
+            content_source=ContentSource.TEMPLATE,
+            subject_template="Hi {{candidate_name}}",
+            body_text_template="Hi {{candidate_name}}",
+            body_html_template="<p>Hi {{candidate_name}}</p>",
+            variables_used=["candidate_name"],
+        )
+    )
+
+    assert created.default_variables == {}
+
+
+@pytest.mark.parametrize("disallowed_key", ["candidate_name", "candidate_email", "something_else"])
+def test_template_rejects_disallowed_default_variable_keys(disallowed_key):
+    with pytest.raises(ValidationError):
+        OutreachTemplateCreateRequest(
+            created_by_user_id=uuid.uuid4(),
+            name="Bad template",
+            subject_template="Hi",
+            body_text_template="Hi",
+            body_html_template="<p>Hi</p>",
+            default_variables={disallowed_key: "value"},
+        )
+
+    with pytest.raises(ValidationError):
+        OutreachTemplateUpdateRequest(default_variables={disallowed_key: "value"})
+
+
+# ---------------------------------------------------------------------------
+# Message creation from template: auto-resolve + merge render_variables
+# ---------------------------------------------------------------------------
+
+def _create_configured_template(user_id, *, default_variables):
+    return create_template(
+        OutreachTemplateCreateRequest(
+            created_by_user_id=user_id,
+            name="Warm intro",
+            content_source=ContentSource.TEMPLATE,
+            subject_template="Opportunity at {{company_name}}",
+            body_text_template="Hi {{candidate_name}}, let's discuss the {{job_title}} role at {{company_name}}.",
+            body_html_template=(
+                "<p>Hi {{candidate_name}}, let's discuss the {{job_title}} role at {{company_name}}.</p>"
+            ),
+            variables_used=["candidate_name", "company_name", "job_title"],
+            default_variables=default_variables,
+        )
+    )
+
+
+def test_create_message_from_template_merges_render_variables(db_session_factory, seeded_data):
+    user = seeded_data["user"]
+    candidate = seeded_data["candidate"]
+
+    template = _create_configured_template(
+        user.id,
+        default_variables={"job_title": "Backend Engineer", "company_name": "Acme Corp"},
+    )
+
+    created = create_message(
+        OutreachCreateRequest(
+            candidate_profile_id=candidate.id,
+            created_by_user_id=user.id,
+            content_source=ContentSource.TEMPLATE,
+            subject="Opportunity at Acme Corp",
+            body_text="Hi Candidate One, let's discuss the Backend Engineer role at Acme Corp.",
+            body_html="<p>Hi Candidate One, let's discuss the Backend Engineer role at Acme Corp.</p>",
+            template_id=uuid.UUID(template.id),
+        )
+    )
+
+    assert created.render_variables == {
+        "candidate_name": "Candidate One",
+        "candidate_email": "candidate@example.com",
+        "job_title": "Backend Engineer",
+        "company_name": "Acme Corp",
+    }
+
+
+def test_create_message_from_template_server_overrides_client_render_variables(db_session_factory, seeded_data):
+    """Server is authoritative: candidate_name/candidate_email always come from
+    the selected candidate, job_title/company_name always come from the
+    template defaults — never from whatever the client happens to send."""
+    user = seeded_data["user"]
+    candidate = seeded_data["candidate"]
+
+    template = _create_configured_template(
+        user.id,
+        default_variables={"job_title": "Backend Engineer", "company_name": "Acme Corp"},
+    )
+
+    created = create_message(
+        OutreachCreateRequest(
+            candidate_profile_id=candidate.id,
+            created_by_user_id=user.id,
+            content_source=ContentSource.TEMPLATE,
+            subject="Opportunity at Acme Corp",
+            body_text="Hi there",
+            body_html="<p>Hi there</p>",
+            template_id=uuid.UUID(template.id),
+            render_variables={
+                "candidate_name": "Someone Else",
+                "job_title": "Wrong Title",
+                "company_name": "Wrong Co",
+            },
+        )
+    )
+
+    assert created.render_variables == {
+        "candidate_name": "Candidate One",
+        "candidate_email": "candidate@example.com",
+        "job_title": "Backend Engineer",
+        "company_name": "Acme Corp",
+    }
+
+
+def test_create_message_from_template_blocks_when_default_variable_missing(db_session_factory, seeded_data):
+    user = seeded_data["user"]
+    candidate = seeded_data["candidate"]
+
+    template = _create_configured_template(
+        user.id,
+        default_variables={"company_name": "Acme Corp"},  # job_title left unconfigured
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_message(
+            OutreachCreateRequest(
+                candidate_profile_id=candidate.id,
+                created_by_user_id=user.id,
+                content_source=ContentSource.TEMPLATE,
+                subject="Opportunity at Acme Corp",
+                body_text="Hi Candidate One",
+                body_html="<p>Hi Candidate One</p>",
+                template_id=uuid.UUID(template.id),
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["missing"] == ["job_title"]
+
+    # No message should have been persisted.
+    listed = list_messages(
+        created_by_user_id=user.id,
+        candidate_profile_id=candidate.id,
+        sent_status=None,
+        offset=0,
+        limit=50,
+    )
+    assert listed.total == 0
+
+
+def test_create_message_from_template_allows_when_no_defaults_are_required(db_session_factory, seeded_data):
+    user = seeded_data["user"]
+    candidate = seeded_data["candidate"]
+
+    template = create_template(
+        OutreachTemplateCreateRequest(
+            created_by_user_id=user.id,
+            name="Candidate-only template",
+            content_source=ContentSource.TEMPLATE,
+            subject_template="Hi {{candidate_name}}",
+            body_text_template="Hi {{candidate_name}}",
+            body_html_template="<p>Hi {{candidate_name}}</p>",
+            variables_used=["candidate_name"],
+        )
+    )
+
+    created = create_message(
+        OutreachCreateRequest(
+            candidate_profile_id=candidate.id,
+            created_by_user_id=user.id,
+            content_source=ContentSource.TEMPLATE,
+            subject="Hi Candidate One",
+            body_text="Hi Candidate One",
+            body_html="<p>Hi Candidate One</p>",
+            template_id=uuid.UUID(template.id),
+        )
+    )
+
+    assert created.render_variables == {
+        "candidate_name": "Candidate One",
+        "candidate_email": "candidate@example.com",
+        "job_title": "",
+        "company_name": "",
+    }
