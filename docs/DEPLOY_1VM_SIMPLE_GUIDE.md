@@ -294,7 +294,6 @@ Bạn nên thấy các thư mục như:
 
 - `backend`
 - `frontend`
-- `docker`
 - `docs`
 - `docker-compose.yml`
 

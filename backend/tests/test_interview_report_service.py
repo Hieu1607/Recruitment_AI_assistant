@@ -1,4 +1,5 @@
 import importlib
+import logging
 import sys
 import types
 import uuid
@@ -49,7 +50,9 @@ def _make_engine():
 def _create_test_tables(engine):
     table_names = [
         "user_accounts",
+        "user_notifications",
         "jobs",
+        "resume_processing_batches",
         "resume_documents",
         "candidate_profiles",
         "interview_templates",
@@ -219,6 +222,7 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
     db_session: Session,
     interview_invitation: InterviewInvitation,
     monkeypatch,
+    caplog,
 ):
     from src.services import interview_report_service
     from src.services.llm_service import LLMResponse
@@ -265,6 +269,7 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
             model="test-model",
         ),
     )
+    caplog.set_level(logging.INFO, logger="src.services.interview_report_service")
 
     report = interview_report_service.generate_interview_report(
         db_session,
@@ -290,6 +295,18 @@ def test_generate_interview_report_from_completed_session_persists_structured_pa
     assert "## Recommendation" not in persisted_report.summary_text
     assert "accept" not in persisted_report.summary_text.lower()
     assert "reject" not in persisted_report.summary_text.lower()
+    timing_log = next(
+        record.getMessage()
+        for record in caplog.records
+        if "interview_report_llm_completed" in record.getMessage()
+    )
+    assert f"session_id={session_record.id}" in timing_log
+    assert "provider=test" in timing_log
+    assert "model=test-model" in timing_log
+    assert "prompt_chars=" in timing_log
+    assert "response_chars=" in timing_log
+    assert "request_ms=" in timing_log
+    assert generated_json.strip() not in timing_log
 
 
 def test_recruiter_can_fetch_interview_report_by_session_id(
@@ -425,6 +442,54 @@ def test_complete_public_interview_session_persists_failed_enqueue_state(
     assert persisted_report.report_payload["failure"]["stage"] == "enqueue"
     assert persisted_report.report_payload["failure"]["retryable"] is True
     assert "broker unavailable" in persisted_report.report_payload["failure"]["message"]
+
+
+def test_enqueue_interview_report_commits_pending_before_dispatch(
+    db_session: Session,
+    interview_invitation: InterviewInvitation,
+    monkeypatch,
+):
+    from src.services import interview_session_service
+    import worker.tasks as tasks_module
+
+    session_record = _create_completed_session(db_session, interview_invitation)
+    dispatches: list[tuple[list[str], str]] = []
+
+    def record_dispatch(*, args: list[str], task_id: str):
+        db_session.expire_all()
+        persisted_report = db_session.execute(
+            select(InterviewReport).where(
+                InterviewReport.interview_session_id == session_record.id
+            )
+        ).scalar_one_or_none()
+
+        assert persisted_report is not None
+        assert persisted_report.report_payload["status"] == "pending"
+        assert persisted_report.report_payload["task"]["task_id"] == task_id
+        dispatches.append((args, task_id))
+        return types.SimpleNamespace(id=task_id)
+
+    monkeypatch.setattr(
+        tasks_module,
+        "generate_interview_report",
+        types.SimpleNamespace(
+            delay=lambda interview_session_id: record_dispatch(
+                args=[interview_session_id],
+                task_id="delay-does-not-provide-task-id",
+            ),
+            apply_async=record_dispatch,
+        ),
+        raising=False,
+    )
+
+    interview_session_service.enqueue_interview_report_generation(
+        db_session,
+        session_record.id,
+    )
+
+    assert len(dispatches) == 1
+    assert dispatches[0][0] == [str(session_record.id)]
+    uuid.UUID(dispatches[0][1])
 
 
 def test_generate_interview_report_rejects_incomplete_summary_payload(
@@ -569,7 +634,7 @@ def test_generate_interview_report_task_marks_permanent_failure_without_retry(mo
     assert retry_calls == []
 
 
-def test_generate_interview_report_task_calls_service(monkeypatch):
+def test_generate_interview_report_task_calls_service_without_re_marking_pending(monkeypatch):
     if "celery" not in sys.modules:
         celery_stub = types.ModuleType("celery")
 
@@ -595,9 +660,12 @@ def test_generate_interview_report_task_calls_service(monkeypatch):
     tasks = importlib.import_module("worker.tasks")
 
     called_with: list[uuid.UUID] = []
+    pending_calls: list[uuid.UUID] = []
     monkeypatch.setattr(
         "src.services.interview_report_service.mark_interview_report_pending",
-        lambda interview_session_id, *, task_id, retry_count=0, state="queued": {"status": "pending"},
+        lambda interview_session_id, *, task_id, retry_count=0, state="queued": (
+            pending_calls.append(interview_session_id) or {"status": "pending"}
+        ),
     )
     monkeypatch.setattr(
         "src.services.interview_report_service.generate_interview_report_for_session",
@@ -608,3 +676,4 @@ def test_generate_interview_report_task_calls_service(monkeypatch):
 
     assert result == {"status": "completed"}
     assert len(called_with) == 1
+    assert pending_calls == []

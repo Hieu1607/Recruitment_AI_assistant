@@ -31,6 +31,8 @@ class PublicJobResponse(BaseModel):
     job_title: str
     candidate_message: str | None
     public_apply_enabled: bool
+    job_description_title: str | None = None
+    job_description_text: str | None = None
 
 
 class PublicResumeUploadResponse(BaseModel):
@@ -80,16 +82,38 @@ def _validate_pdf(file: UploadFile) -> str:
     return Path(file.filename).name
 
 
+def _get_latest_active_public_job_description(job) -> tuple[str | None, str | None]:
+    active_jds = [
+        jd
+        for jd in getattr(job, "job_descriptions", []) or []
+        if getattr(jd, "is_active", False) and (getattr(jd, "jd_text", "") or "").strip()
+    ]
+    if not active_jds:
+        return None, None
+    latest = sorted(
+        active_jds,
+        key=lambda jd: getattr(jd, "created_at", None) or "",
+        reverse=True,
+    )[0]
+    return (
+        (getattr(latest, "title", None) or None),
+        (getattr(latest, "jd_text", "") or "").strip(),
+    )
+
+
 @router.get("/jobs/{token}", response_model=PublicJobResponse)
 def get_public_job(
     token: str,
     db: Session = Depends(get_db),
 ):
     job = require_public_job_enabled(resolve_public_job_by_token(db, token))
+    jd_title, jd_text = _get_latest_active_public_job_description(job)
     return PublicJobResponse(
         job_title=job.title,
         candidate_message=job.candidate_message,
         public_apply_enabled=job.public_apply_enabled,
+        job_description_title=jd_title,
+        job_description_text=jd_text,
     )
 
 

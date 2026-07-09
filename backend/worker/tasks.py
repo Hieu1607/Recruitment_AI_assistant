@@ -213,7 +213,13 @@ def evaluate_candidate(self, candidate_profile_id: str):
     default_retry_delay=30,
     acks_late=True,
 )
-def generate_interview_report(self, interview_session_id: str):
+def generate_interview_report(self, maybe_interview_session_id, interview_session_id: str | None = None):
+    task_context = self
+    if interview_session_id is None:
+        interview_session_id = str(maybe_interview_session_id)
+    else:
+        task_context = maybe_interview_session_id
+
     logger.info("generate_interview_report started for %s", interview_session_id)
     interview_session_uuid = uuid.UUID(interview_session_id)
     try:
@@ -221,21 +227,14 @@ def generate_interview_report(self, interview_session_id: str):
             generate_interview_report_for_session,
             is_permanent_report_error,
             mark_interview_report_failure,
-            mark_interview_report_pending,
         )
 
-        mark_interview_report_pending(
-            interview_session_id=interview_session_uuid,
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            retry_count=getattr(getattr(self, "request", None), "retries", 0),
-            state="processing",
-        )
         result = generate_interview_report_for_session(interview_session_uuid)
         logger.info("generate_interview_report succeeded for %s", interview_session_id)
         return result
     except Exception as exc:
         logger.exception("generate_interview_report crashed for %s", interview_session_id)
-        retry_count = getattr(getattr(self, "request", None), "retries", 0)
+        retry_count = getattr(getattr(task_context, "request", None), "retries", 0)
         if "is_permanent_report_error" in locals() and is_permanent_report_error(exc):
             return mark_interview_report_failure(
                 interview_session_uuid,
@@ -244,7 +243,7 @@ def generate_interview_report(self, interview_session_id: str):
                 retryable=False,
                 retry_count=retry_count,
             )
-        if retry_count >= getattr(self, "max_retries", 0):
+        if retry_count >= getattr(task_context, "max_retries", 0):
             return mark_interview_report_failure(
                 interview_session_uuid,
                 stage="generation",
@@ -260,7 +259,7 @@ def generate_interview_report(self, interview_session_id: str):
                 retryable=True,
                 retry_count=retry_count,
             )
-        raise self.retry(exc=exc)
+        raise task_context.retry(exc=exc)
 
 
 @celery_app.task(

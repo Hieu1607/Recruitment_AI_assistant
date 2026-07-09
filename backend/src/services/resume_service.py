@@ -663,10 +663,11 @@ def _generate_resume_json_with_retries(
     last_error: Exception | None = None
     last_response_text = ""
 
-    for attempt_number, (provider_name, model_name) in enumerate(
-        _resume_text_parse_provider_specs(),
-        start=1,
-    ):
+    provider_specs = _resume_text_parse_provider_specs()
+    if len(provider_specs) == 1:
+        provider_specs = [provider_specs[0], provider_specs[0]]
+
+    for attempt_number, (provider_name, model_name) in enumerate(provider_specs, start=1):
         if _normalize_model_spec(provider_name, model_name) in _UNAVAILABLE_RESUME_PARSE_MODELS:
             continue
         if not last_response_text:

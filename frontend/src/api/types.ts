@@ -310,6 +310,8 @@ export interface PublicJobResponse {
   job_title: string;
   candidate_message: string | null;
   public_apply_enabled: boolean;
+  job_description_title: string | null;
+  job_description_text: string | null;
 }
 
 export interface PublicResumeUploadResponse {

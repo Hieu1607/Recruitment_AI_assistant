@@ -124,6 +124,60 @@ def test_shopaikey_adapter_uses_retry_after_with_exponential_backoff_cap(monkeyp
     assert sleep_calls == [2.5, 5.0, 10.0]
 
 
+def test_shopaikey_adapter_logs_each_attempt_timing_without_prompt_content(monkeypatch, caplog):
+    attempts = {"count": 0}
+
+    class FakeHTTPResponse:
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+                }
+            ).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise TimeoutError("upstream timed out")
+        return FakeHTTPResponse()
+
+    monkeypatch.setattr(llm_service, "urlopen", fake_urlopen)
+    monkeypatch.setattr(llm_service.time, "sleep", lambda seconds: None)
+    caplog.set_level(logging.INFO, logger="src.services.llm_service")
+    adapter = llm_service._ShopAIKeyAdapter(
+        api_key="secret-test-key",
+        base_url="https://api.shopaikey.com/v1",
+        model="gpt-test",
+        temperature=0,
+        max_tokens=128,
+        timeout_seconds=5,
+        max_retries=1,
+    )
+
+    response = adapter.chat([{"role": "user", "content": "private prompt"}])
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert response.text == "ok"
+    assert "shopaikey_request_attempt_started" in messages
+    assert "shopaikey_request_attempt_failed" in messages
+    assert "shopaikey_request_attempt_succeeded" in messages
+    assert "attempt=1/2" in messages
+    assert "attempt=2/2" in messages
+    assert "error_type=TimeoutError" in messages
+    assert "retrying=True" in messages
+    assert "backoff_seconds=1.000" in messages
+    assert "input_chars=14" in messages
+    assert "secret-test-key" not in messages
+    assert "private prompt" not in messages
+
+
 def test_shopaikey_adapter_retries_rate_limits_before_raising_limit_error(monkeypatch):
     sleep_calls = []
     attempts = {"count": 0}

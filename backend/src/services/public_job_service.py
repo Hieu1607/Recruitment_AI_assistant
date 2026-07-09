@@ -8,6 +8,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
+
 if TYPE_CHECKING:
     from src.models.job import Job
 
@@ -17,12 +19,11 @@ def generate_public_apply_token() -> str:
 
 
 def build_public_apply_url(token: str) -> str:
-    try:
-        from src.core.config import settings
-
-        base_url = settings.FRONTEND_BASE_URL.rstrip("/")
-    except Exception:
-        base_url = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
+    base_url = getattr(settings, "FRONTEND_BASE_URL", None) or os.getenv(
+        "FRONTEND_BASE_URL",
+        "http://localhost:5173",
+    )
+    base_url = base_url.rstrip("/")
     return f"{base_url}/apply/{token}"
 
 

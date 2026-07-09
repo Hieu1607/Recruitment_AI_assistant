@@ -135,12 +135,27 @@ def _build_client(db):
 
 
 def _job(*, enabled=True):
+    active_jd = SimpleNamespace(
+        title="Platform Engineer JD",
+        jd_text="Build reliable backend systems with Python, FastAPI, and PostgreSQL.",
+        hidden_text="Internal recruiter-only scoring criteria.",
+        is_active=True,
+        created_at="2026-07-09T08:00:00Z",
+    )
+    inactive_jd = SimpleNamespace(
+        title="Old Platform JD",
+        jd_text="This inactive JD should not be shown.",
+        hidden_text="Old internal notes.",
+        is_active=False,
+        created_at="2026-07-08T08:00:00Z",
+    )
     return SimpleNamespace(
         id=uuid.uuid4(),
         owner_user_id=uuid.uuid4(),
         title="Platform Engineer",
         candidate_message="Upload your latest PDF resume",
         public_apply_enabled=enabled,
+        job_descriptions=[inactive_jd, active_jd],
     )
 
 
@@ -177,7 +192,10 @@ def test_get_public_job_returns_safe_payload_for_enabled_token():
         "job_title": "Platform Engineer",
         "candidate_message": "Upload your latest PDF resume",
         "public_apply_enabled": True,
+        "job_description_title": "Platform Engineer JD",
+        "job_description_text": "Build reliable backend systems with Python, FastAPI, and PostgreSQL.",
     }
+    assert "Internal recruiter-only scoring criteria" not in response.text
     resolve_job.assert_called_once_with(db, "enabled-token")
     require_enabled.assert_called_once_with(job)
 

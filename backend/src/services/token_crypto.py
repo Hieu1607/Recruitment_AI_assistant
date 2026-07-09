@@ -5,16 +5,13 @@ from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from src.core.config import settings
-
-
 def generate_fernet_key() -> str:
     return Fernet.generate_key().decode("ascii")
 
 
 @lru_cache(maxsize=1)
 def get_fernet() -> Fernet:
-    key = os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY", settings.GOOGLE_TOKEN_ENCRYPTION_KEY)
+    key = os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY")
     if not key:
         raise RuntimeError("GOOGLE_TOKEN_ENCRYPTION_KEY is required to store Google OAuth tokens.")
     return Fernet(key.encode("ascii"))

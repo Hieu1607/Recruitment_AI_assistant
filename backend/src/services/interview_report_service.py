@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 import uuid
 from json import JSONDecodeError
 
@@ -22,6 +24,9 @@ from src.core.config import settings
 from src.services.llm_service import LLMProvider
 
 
+logger = logging.getLogger(__name__)
+
+
 def _ui_language() -> str:
     return "en" if str(settings.APP_UI_LANGUAGE or "").strip().lower().startswith("en") else "vi"
 
@@ -39,14 +44,20 @@ PERMANENT_REPORT_EXCEPTIONS = (HTTPException, ValidationError, JSONDecodeError, 
 
 
 def generate_interview_report(db: Session, *, interview_session_id: uuid.UUID) -> InterviewReport:
+    generation_started_at = time.perf_counter()
+    context_started_at = time.perf_counter()
     session_record = _get_session_with_context(db, interview_session_id)
+    context_load_ms = (time.perf_counter() - context_started_at) * 1000
     transcript_turns = sorted(session_record.transcript_turns, key=lambda turn: turn.turn_index)
     if not transcript_turns:
         raise HTTPException(status_code=409, detail="Interview session transcript is empty")
 
     report_summary = _generate_report_summary(session_record, transcript_turns)
+    validation_started_at = time.perf_counter()
     _validate_report_evidence_links(report_summary, transcript_turns)
     markdown_summary = _render_markdown_summary(report_summary)
+    validation_render_ms = (time.perf_counter() - validation_started_at) * 1000
+    persistence_started_at = time.perf_counter()
     report = _get_or_create_report(db, session_record)
     report.interview_template_id = session_record.invitation.interview_template_id
     report.summary_text = markdown_summary
@@ -56,6 +67,18 @@ def generate_interview_report(db: Session, *, interview_session_id: uuid.UUID) -
     ).to_payload()
     db.commit()
     db.refresh(report)
+    persistence_ms = (time.perf_counter() - persistence_started_at) * 1000
+    logger.info(
+        "interview_report_generation_completed session_id=%s total_ms=%.3f "
+        "context_load_ms=%.3f validation_render_ms=%.3f persistence_ms=%.3f "
+        "turn_count=%d",
+        interview_session_id,
+        (time.perf_counter() - generation_started_at) * 1000,
+        context_load_ms,
+        validation_render_ms,
+        persistence_ms,
+        len(transcript_turns),
+    )
     return report
 
 
@@ -168,12 +191,34 @@ def _generate_report_summary(
     session_record: InterviewSession,
     transcript_turns: list[InterviewTranscriptTurn],
 ) -> InterviewReportSummary:
+    prompt_started_at = time.perf_counter()
+    prompt = _build_report_prompt(session_record, transcript_turns)
+    prompt_build_ms = (time.perf_counter() - prompt_started_at) * 1000
     llm = LLMProvider()
+    request_started_at = time.perf_counter()
     response = llm.generate(
-        _build_report_prompt(session_record, transcript_turns),
+        prompt,
         system_prompt=REPORT_SYSTEM_PROMPT,
     )
-    return InterviewReportSummary.model_validate(_parse_json_response(response.text))
+    request_ms = (time.perf_counter() - request_started_at) * 1000
+    parse_started_at = time.perf_counter()
+    summary = InterviewReportSummary.model_validate(_parse_json_response(response.text))
+    parse_validate_ms = (time.perf_counter() - parse_started_at) * 1000
+    logger.info(
+        "interview_report_llm_completed session_id=%s provider=%s model=%s "
+        "prompt_build_ms=%.3f request_ms=%.3f parse_validate_ms=%.3f "
+        "prompt_chars=%d response_chars=%d turn_count=%d",
+        session_record.id,
+        response.provider,
+        response.model,
+        prompt_build_ms,
+        request_ms,
+        parse_validate_ms,
+        len(prompt),
+        len(response.text),
+        len(transcript_turns),
+    )
+    return summary
 
 
 def _build_report_prompt(

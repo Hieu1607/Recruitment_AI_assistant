@@ -207,7 +207,26 @@ class _ShopAIKeyAdapter(_BaseAdapter):
         }
 
         last_error: Optional[Exception] = None
+        total_attempts = self.max_retries + 1
+        input_chars = sum(
+            len(str(message.get("content") or ""))
+            for message in messages
+            if isinstance(message, dict)
+        )
         for attempt in range(self.max_retries + 1):
+            attempt_number = attempt + 1
+            attempt_started_at = time.perf_counter()
+            logger.info(
+                "shopaikey_request_attempt_started provider=%s model=%s "
+                "attempt=%d/%d timeout_seconds=%s input_chars=%d max_tokens=%d",
+                ProviderType.SHOPAIKEY.value,
+                self.model,
+                attempt_number,
+                total_attempts,
+                self.timeout_seconds,
+                input_chars,
+                self.max_tokens,
+            )
             try:
                 req = Request(
                     url=f"{self.base_url}/chat/completions",
@@ -234,6 +253,17 @@ class _ShopAIKeyAdapter(_BaseAdapter):
                     usage=usage,
                     raw=parsed,
                 )
+                logger.info(
+                    "shopaikey_request_attempt_succeeded provider=%s model=%s "
+                    "attempt=%d/%d duration_ms=%.3f prompt_tokens=%s completion_tokens=%s",
+                    ProviderType.SHOPAIKEY.value,
+                    self.model,
+                    attempt_number,
+                    total_attempts,
+                    (time.perf_counter() - attempt_started_at) * 1000,
+                    usage.get("prompt_tokens") if usage else None,
+                    usage.get("completion_tokens") if usage else None,
+                )
                 return LLMResponse(
                     text=content,
                     provider=ProviderType.SHOPAIKEY.value,
@@ -251,9 +281,30 @@ class _ShopAIKeyAdapter(_BaseAdapter):
                     f"ShopAIKey HTTP {exc.code}: {body or exc.reason or str(exc)}"
                 )
                 last_error = enriched_error
+                retrying = attempt < self.max_retries
+                backoff_seconds = (
+                    _retry_backoff_seconds(attempt, enriched_error)
+                    if retrying
+                    else 0.0
+                )
+                logger.warning(
+                    "shopaikey_request_attempt_failed provider=%s model=%s "
+                    "attempt=%d/%d duration_ms=%.3f error_type=%s http_status=%s "
+                    "retrying=%s backoff_seconds=%.3f error=%s",
+                    ProviderType.SHOPAIKEY.value,
+                    self.model,
+                    attempt_number,
+                    total_attempts,
+                    (time.perf_counter() - attempt_started_at) * 1000,
+                    type(enriched_error).__name__,
+                    exc.code,
+                    retrying,
+                    backoff_seconds,
+                    enriched_error,
+                )
                 if is_provider_limit_error(enriched_error):
-                    if attempt < self.max_retries:
-                        time.sleep(_retry_backoff_seconds(attempt, enriched_error))
+                    if retrying:
+                        time.sleep(backoff_seconds)
                         continue
                     _raise_provider_limit_error(
                         provider=ProviderType.SHOPAIKEY.value,
@@ -261,15 +312,36 @@ class _ShopAIKeyAdapter(_BaseAdapter):
                         operation="chat request",
                         exc=enriched_error,
                     )
-                if attempt < self.max_retries:
-                    time.sleep(_retry_backoff_seconds(attempt, enriched_error))
+                if retrying:
+                    time.sleep(backoff_seconds)
                     continue
                 break
             except (URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = exc
+                retrying = attempt < self.max_retries
+                backoff_seconds = (
+                    _retry_backoff_seconds(attempt, exc)
+                    if retrying
+                    else 0.0
+                )
+                logger.warning(
+                    "shopaikey_request_attempt_failed provider=%s model=%s "
+                    "attempt=%d/%d duration_ms=%.3f error_type=%s http_status=%s "
+                    "retrying=%s backoff_seconds=%.3f error=%s",
+                    ProviderType.SHOPAIKEY.value,
+                    self.model,
+                    attempt_number,
+                    total_attempts,
+                    (time.perf_counter() - attempt_started_at) * 1000,
+                    type(exc).__name__,
+                    None,
+                    retrying,
+                    backoff_seconds,
+                    exc,
+                )
                 if is_provider_limit_error(exc):
-                    if attempt < self.max_retries:
-                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                    if retrying:
+                        time.sleep(backoff_seconds)
                         continue
                     _raise_provider_limit_error(
                         provider=ProviderType.SHOPAIKEY.value,
@@ -277,15 +349,36 @@ class _ShopAIKeyAdapter(_BaseAdapter):
                         operation="chat request",
                         exc=exc,
                     )
-                if attempt < self.max_retries:
-                    time.sleep(_retry_backoff_seconds(attempt, exc))
+                if retrying:
+                    time.sleep(backoff_seconds)
                     continue
                 break
             except Exception as exc:
                 last_error = exc
+                retrying = attempt < self.max_retries
+                backoff_seconds = (
+                    _retry_backoff_seconds(attempt, exc)
+                    if retrying
+                    else 0.0
+                )
+                logger.warning(
+                    "shopaikey_request_attempt_failed provider=%s model=%s "
+                    "attempt=%d/%d duration_ms=%.3f error_type=%s http_status=%s "
+                    "retrying=%s backoff_seconds=%.3f error=%s",
+                    ProviderType.SHOPAIKEY.value,
+                    self.model,
+                    attempt_number,
+                    total_attempts,
+                    (time.perf_counter() - attempt_started_at) * 1000,
+                    type(exc).__name__,
+                    None,
+                    retrying,
+                    backoff_seconds,
+                    exc,
+                )
                 if is_provider_limit_error(exc):
-                    if attempt < self.max_retries:
-                        time.sleep(_retry_backoff_seconds(attempt, exc))
+                    if retrying:
+                        time.sleep(backoff_seconds)
                         continue
                     _raise_provider_limit_error(
                         provider=ProviderType.SHOPAIKEY.value,
@@ -293,8 +386,8 @@ class _ShopAIKeyAdapter(_BaseAdapter):
                         operation="chat request",
                         exc=exc,
                     )
-                if attempt < self.max_retries:
-                    time.sleep(_retry_backoff_seconds(attempt, exc))
+                if retrying:
+                    time.sleep(backoff_seconds)
                     continue
                 break
         raise LLMProviderError(f"ShopAIKey request failed: {last_error}") from last_error
