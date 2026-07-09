@@ -14,12 +14,14 @@ from src.models.outreach import OutreachMessage
 from src.models.outreach_template import OutreachTemplate
 from src.models.query_shortlist import QuerySession, QueryTurn, ShortlistCollection, ShortlistItem
 from src.models.resume_document import ExtractionTrace, ResumeDocument
+from src.models.resume_processing_batch import ResumeProcessingBatch
 from src.models.scoring_evaluation import CandidateEvaluation, JobScoringPreference
 from src.models.oauth_identity import OAuthIdentity
 from src.models.user_account import RoleAssignment, UserAccount
 
 __all__ = [
     "ResumeDocument",
+    "ResumeProcessingBatch",
     "ExtractionTrace",
     "CandidateProfile",
     "CandidateEvaluation",
