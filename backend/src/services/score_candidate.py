@@ -951,6 +951,7 @@ def evaluate_candidate_profiles_raw(
     if not candidates:
         return {}
 
+    started_at = time.perf_counter()
     llm = _scoring_llm_provider()
     rubric = _extract_locked_rubric(
         llm=llm,
@@ -992,9 +993,22 @@ def evaluate_candidate_profiles_raw(
         max_candidates_per_batch=settings.SCORING_MAX_CANDIDATES_PER_BATCH,
         max_criteria_per_call=settings.SCORING_MAX_SEMANTIC_CRITERIA_PER_CALL,
     )
+    if debug_logger is not None:
+        debug_logger.record_event(
+            "batch_raw_evaluation_planned",
+            {
+                "candidateCount": batch_plan.total_candidates,
+                "semanticCriteriaCount": batch_plan.total_criteria,
+                "candidateBatchCount": len(batch_plan.candidate_batches),
+                "criterionBatchCount": len(batch_plan.criterion_batches),
+                "rubricExtractionCount": 1,
+            },
+        )
     semantic_by_candidate: Dict[str, Dict[str, Any]] = {}
+    semantic_request_count = 0
     for candidate_batch in batch_plan.candidate_batches:
         for criterion_batch in batch_plan.criterion_batches:
+            semantic_request_count += 1
             semantic_update = _generate_semantic_scores_with_retries(
                 llm=llm,
                 prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
@@ -1005,7 +1019,7 @@ def evaluate_candidate_profiles_raw(
             )
             _merge_semantic_scores(semantic_by_candidate, semantic_update)
 
-    return {
+    results = {
         str(candidate.get("id") or ""): _raw_evaluation_payload(
             candidate=candidate,
             rubric=rubric,
@@ -1014,6 +1028,16 @@ def evaluate_candidate_profiles_raw(
         )
         for candidate in candidates
     }
+    if debug_logger is not None:
+        debug_logger.record_event(
+            "batch_raw_evaluation_completed",
+            {
+                "candidateCount": len(results),
+                "semanticRequestCount": semantic_request_count,
+                "durationMs": _duration_ms(started_at),
+            },
+        )
+    return results
 
 
 def evaluate_candidate_profile_raw(

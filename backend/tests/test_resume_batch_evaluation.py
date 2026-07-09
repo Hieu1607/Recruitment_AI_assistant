@@ -65,6 +65,11 @@ def _semantic_rubric() -> dict:
 def test_batch_raw_evaluation_extracts_rubric_once_for_ten_candidates(monkeypatch):
     candidates = _candidates(10)
     calls = {"rubric": 0, "semantic": 0}
+    events = []
+
+    class _DebugLogger:
+        def record_event(self, name, payload):
+            events.append((name, payload))
 
     monkeypatch.setattr(score_candidate, "_scoring_llm_provider", lambda: object())
 
@@ -100,6 +105,7 @@ def test_batch_raw_evaluation_extracts_rubric_once_for_ten_candidates(monkeypatc
     results = evaluate_candidate_profiles_raw(
         candidates=candidates,
         job_description_text="Need strong Python",
+        debug_logger=_DebugLogger(),
     )
 
     assert calls == {"rubric": 1, "semantic": 2}
@@ -108,6 +114,22 @@ def test_batch_raw_evaluation_extracts_rubric_once_for_ten_candidates(monkeypatc
         result["rawComponentScores"][0]["scorePercent"] == 80
         for result in results.values()
     )
+    planned = next(
+        payload for name, payload in events if name == "batch_raw_evaluation_planned"
+    )
+    completed = next(
+        payload for name, payload in events if name == "batch_raw_evaluation_completed"
+    )
+    assert planned == {
+        "candidateCount": 10,
+        "semanticCriteriaCount": 1,
+        "candidateBatchCount": 2,
+        "criterionBatchCount": 1,
+        "rubricExtractionCount": 1,
+    }
+    assert completed["candidateCount"] == 10
+    assert completed["semanticRequestCount"] == 2
+    assert completed["durationMs"] > 0
 
 
 def test_batch_raw_evaluation_skips_semantic_llm_for_measurable_only_rubric(monkeypatch):

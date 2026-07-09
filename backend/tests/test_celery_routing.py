@@ -1,14 +1,15 @@
-import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-sys.modules.pop("worker.tasks", None)
-sys.modules.pop("worker.celery_app", None)
-sys.modules.pop("worker", None)
-
-celery_app = importlib.import_module("worker.celery_app").celery_app
+module_path = Path(__file__).resolve().parents[1] / "worker" / "celery_app.py"
+spec = importlib.util.spec_from_file_location("isolated_worker_celery_app", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+celery_app = module.celery_app
 
 
 def _config_value(name: str):
