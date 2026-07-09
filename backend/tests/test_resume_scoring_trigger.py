@@ -15,6 +15,8 @@ sys.modules.pop("worker.tasks", None)
 sys.modules.pop("worker", None)
 
 worker_tasks = importlib.import_module("worker.tasks")  # noqa: E402
+resume_service = importlib.import_module("src.services.resume_service")  # noqa: E402
+setattr(sys.modules["src.services"], "resume_service", resume_service)
 
 from src.models.base import Base  # noqa: E402
 from src.models.candidate_profile import CandidateProfile  # noqa: E402
