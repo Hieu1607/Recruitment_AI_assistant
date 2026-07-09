@@ -135,12 +135,27 @@ def _build_client(db):
 
 
 def _job(*, enabled=True):
+    active_jd = SimpleNamespace(
+        title="Platform Engineer JD",
+        jd_text="Build reliable backend systems with Python, FastAPI, and PostgreSQL.",
+        hidden_text="Internal recruiter-only scoring criteria.",
+        is_active=True,
+        created_at="2026-07-09T08:00:00Z",
+    )
+    inactive_jd = SimpleNamespace(
+        title="Old Platform JD",
+        jd_text="This inactive JD should not be shown.",
+        hidden_text="Old internal notes.",
+        is_active=False,
+        created_at="2026-07-08T08:00:00Z",
+    )
     return SimpleNamespace(
         id=uuid.uuid4(),
         owner_user_id=uuid.uuid4(),
         title="Platform Engineer",
         candidate_message="Upload your latest PDF resume",
         public_apply_enabled=enabled,
+        job_descriptions=[inactive_jd, active_jd],
     )
 
 
@@ -177,7 +192,10 @@ def test_get_public_job_returns_safe_payload_for_enabled_token():
         "job_title": "Platform Engineer",
         "candidate_message": "Upload your latest PDF resume",
         "public_apply_enabled": True,
+        "job_description_title": "Platform Engineer JD",
+        "job_description_text": "Build reliable backend systems with Python, FastAPI, and PostgreSQL.",
     }
+    assert "Internal recruiter-only scoring criteria" not in response.text
     resolve_job.assert_called_once_with(db, "enabled-token")
     require_enabled.assert_called_once_with(job)
 
@@ -348,6 +366,7 @@ def test_upload_public_resume_succeeds_without_auth_and_returns_minimal_payload(
     storage.upload_bytes.return_value = "s3://resumes/resumes/job-id/object_resume.pdf"
     created_resume = SimpleNamespace(id=uuid.uuid4())
     task = SimpleNamespace(id="queued-task-id")
+    processing_batch = SimpleNamespace(id=uuid.uuid4())
 
     with (
         patch(
@@ -366,6 +385,10 @@ def test_upload_public_resume_succeeds_without_auth_and_returns_minimal_payload(
             "src.api.v1.endpoints.public_jobs.create_resume_document",
             return_value=created_resume,
         ) as create_resume,
+        patch(
+            "src.api.v1.endpoints.public_jobs.create_processing_batch",
+            return_value=processing_batch,
+        ) as create_batch,
         patch(
             "src.api.v1.endpoints.public_jobs.process_resume.delay",
             return_value=task,
@@ -397,17 +420,20 @@ def test_upload_public_resume_succeeds_without_auth_and_returns_minimal_payload(
     require_enabled.assert_called_once_with(job)
     get_storage.assert_called_once_with()
     storage.upload_bytes.assert_called_once()
+    create_batch.assert_called_once_with(db=db, job_id=job.id, total_count=1)
     create_resume.assert_called_once_with(
         db=db,
         storage_uri=storage.upload_bytes.return_value,
         original_file_name="resume.pdf",
         job_id=job.id,
         uploaded_by_user_id=job.owner_user_id,
+        processing_batch_id=processing_batch.id,
     )
     enqueue_resume.assert_called_once_with(
         str(created_resume.id),
         submitted_full_name="Candidate Name",
         submitted_email="candidate@example.com",
+        processing_batch_id=str(processing_batch.id),
     )
     create_notification.assert_called_once()
     assert create_notification.call_args.kwargs["db"] is db

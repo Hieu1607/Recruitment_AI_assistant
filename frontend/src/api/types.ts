@@ -47,6 +47,7 @@ export interface ResumeBatchParseItem {
 }
 
 export interface ResumeBatchParseResponse {
+  processing_batch_id?: string | null;
   total_files: number;
   queued_files: number;
   items: ResumeBatchParseItem[];
@@ -309,6 +310,8 @@ export interface PublicJobResponse {
   job_title: string;
   candidate_message: string | null;
   public_apply_enabled: boolean;
+  job_description_title: string | null;
+  job_description_text: string | null;
 }
 
 export interface PublicResumeUploadResponse {

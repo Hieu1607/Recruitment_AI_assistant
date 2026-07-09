@@ -8,7 +8,7 @@
 
 ## 2. Prepare Environment
 
-Create `.env` at repo root from `.env.example` and update the values you need:
+Create `.env` at repo root from the single canonical `.env.example` and update the values you need:
 
 ```powershell
 Copy-Item .env.example .env
@@ -19,6 +19,7 @@ Important variables:
 - `SHOPAIKEY_API_KEY`
 - `SHOPAIKEY_MODEL_NAME`
 - `APP_UI_LANGUAGE`
+- `VITE_API_BASE_URL`
 - `VITE_UI_LANGUAGE`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
@@ -28,6 +29,7 @@ Important variables:
 Notes:
 
 - `docker-compose.yml` already loads `./.env` for `backend` and `worker`.
+- Use this same root `.env` as the source of truth for shared, backend, and frontend env values.
 - Frontend language is also read from `.env` via `VITE_UI_LANGUAGE`.
 
 ## 3. Start In Dev Mode
@@ -87,6 +89,12 @@ If you started with the prod override, use the same override when executing comm
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend alembic -c alembic.ini upgrade head
 ```
 
+Database bootstrap note:
+
+- This repository does not use `docker-entrypoint-initdb.d` or checked-in Postgres init SQL files.
+- Schema setup is handled by Alembic migrations.
+- User accounts are created through the authentication flows after the stack is up.
+
 ## 6. Access The App
 
 Dev mode:
@@ -112,25 +120,14 @@ Minimum related settings:
 - `GOOGLE_TOKEN_ENCRYPTION_KEY`
 - Google OAuth consent screen with `https://www.googleapis.com/auth/gmail.send`
 
-## 8. Seed Initial User And Roles
+## 8. Create Your First User
 
-Run this after the first successful migration:
+After the first successful migration, create the first account through one of the supported auth flows:
 
-```powershell
-docker compose exec -T backend python seeds/seed_initial_user_and_roles.py
-```
+- Register with `POST /api/v1/auth/register`
+- Sign in with Google OAuth if it is configured
 
-If you started with the prod override:
-
-```powershell
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python seeds/seed_initial_user_and_roles.py
-```
-
-Default seeded user:
-
-- email: `admin@recruitment.local`
-- display_name: `Initial Admin`
-- roles: `admin,recruiter,viewer`
+The backend no longer ships a checked-in seed script for initial users.
 
 ## 9. Test Batch Resume Parsing
 

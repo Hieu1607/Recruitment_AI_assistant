@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -9,9 +10,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from src.models.candidate_profile import CandidateProfile
 
-from src.models.enums import CandidateEvaluationStatus
+from src.models.enums import CandidateEvaluationStatus, ResumeProcessingBatchStatus, UploadStatus
 from src.models.job_matching import JobDescription
 from src.models.resume_document import ResumeDocument
+from src.models.resume_processing_batch import ResumeProcessingBatch
 from src.models.scoring_evaluation import CandidateEvaluation, JobScoringPreference
 from src.services import score_candidate
 from src.services.scoring_preferences import calculate_weighted_score
@@ -388,3 +390,153 @@ def evaluate_candidate_for_current_jd(
         db.commit()
         db.refresh(evaluation)
         return evaluation
+
+
+@dataclass(frozen=True)
+class ProcessingBatchEvaluationResult:
+    batch_id: uuid.UUID
+    completed: int
+    failed: int
+    skipped: int
+
+
+def evaluate_processing_batch(
+    *,
+    db: Session,
+    processing_batch_id: uuid.UUID,
+    worker_task_id: str,
+) -> ProcessingBatchEvaluationResult:
+    batch = (
+        db.query(ResumeProcessingBatch)
+        .filter(ResumeProcessingBatch.id == processing_batch_id)
+        .with_for_update()
+        .one()
+    )
+    batch_status = _status_value(batch.status)
+    if batch_status == ResumeProcessingBatchStatus.EVALUATION_PENDING.value:
+        batch.status = ResumeProcessingBatchStatus.EVALUATING
+        batch.evaluation_task_id = worker_task_id
+        db.commit()
+    elif (
+        batch_status == ResumeProcessingBatchStatus.EVALUATING.value
+        and batch.evaluation_task_id == worker_task_id
+    ):
+        db.rollback()
+    else:
+        db.rollback()
+        return ProcessingBatchEvaluationResult(
+            batch_id=batch.id,
+            completed=0,
+            failed=0,
+            skipped=batch.processed_count,
+        )
+
+    jd = (
+        db.query(JobDescription)
+        .filter(
+            JobDescription.job_id == batch.job_id,
+            JobDescription.is_active.is_(True),
+        )
+        .order_by(JobDescription.created_at.desc())
+        .first()
+    )
+    if jd is None:
+        raise ValueError(f"Active job description not found for job '{batch.job_id}'")
+
+    profiles = (
+        db.query(CandidateProfile)
+        .options(joinedload(CandidateProfile.resume_document))
+        .join(ResumeDocument, ResumeDocument.id == CandidateProfile.resume_document_id)
+        .filter(
+            ResumeDocument.processing_batch_id == batch.id,
+            ResumeDocument.upload_status == UploadStatus.PROCESSED,
+        )
+        .all()
+    )
+    signature = current_signature_for_jd(jd)
+    existing = {
+        evaluation.candidate_profile_id: evaluation
+        for evaluation in (
+            db.query(CandidateEvaluation)
+            .filter(
+                CandidateEvaluation.job_description_id == jd.id,
+                CandidateEvaluation.scoring_signature == signature,
+                CandidateEvaluation.candidate_profile_id.in_(
+                    [profile.id for profile in profiles]
+                ),
+            )
+            .all()
+        )
+    }
+    skipped = 0
+    profiles_to_evaluate: list[CandidateProfile] = []
+    for profile in profiles:
+        evaluation = existing.get(profile.id)
+        if (
+            evaluation is not None
+            and _status_value(evaluation.status) == CandidateEvaluationStatus.COMPLETED.value
+        ):
+            skipped += 1
+            continue
+        if evaluation is None:
+            evaluation = CandidateEvaluation(
+                job_id=batch.job_id,
+                job_description_id=jd.id,
+                candidate_profile_id=profile.id,
+                scoring_signature=signature,
+                rubric_payload={},
+                raw_component_scores=[],
+                rationale_summary="",
+                status=CandidateEvaluationStatus.RUNNING,
+            )
+            db.add(evaluation)
+            existing[profile.id] = evaluation
+        else:
+            evaluation.status = CandidateEvaluationStatus.RUNNING
+            evaluation.error_message = None
+        profiles_to_evaluate.append(profile)
+    db.commit()
+
+    raw_results = score_candidate.evaluate_candidate_profiles_raw(
+        candidates=[
+            score_candidate._profile_to_candidate_dict(profile)
+            for profile in profiles_to_evaluate
+        ],
+        job_description_text=score_candidate._build_scoring_job_description_text(
+            public_job_description=jd.jd_text,
+            hidden_text=jd.hidden_text,
+        ),
+    )
+
+    completed = 0
+    failed = 0
+    scored_at = datetime.now(timezone.utc)
+    for profile in profiles_to_evaluate:
+        evaluation = existing[profile.id]
+        raw_result = raw_results.get(str(profile.id))
+        if raw_result is None:
+            evaluation.status = CandidateEvaluationStatus.FAILED
+            evaluation.error_message = "Batch scoring returned no result for candidate"
+            failed += 1
+            continue
+        evaluation.rubric_payload = raw_result.get("rubricPayload") or {}
+        evaluation.raw_component_scores = raw_result.get("rawComponentScores") or []
+        evaluation.rationale_summary = str(raw_result.get("rationaleSummary") or "").strip()
+        evaluation.status = CandidateEvaluationStatus.COMPLETED
+        evaluation.error_message = None
+        evaluation.scored_at = scored_at
+        completed += 1
+
+    batch.status = (
+        ResumeProcessingBatchStatus.COMPLETED_WITH_ERRORS
+        if batch.failed_count or failed
+        else ResumeProcessingBatchStatus.COMPLETED
+    )
+    batch.completed_at = scored_at
+    db.commit()
+    return ProcessingBatchEvaluationResult(
+        batch_id=batch.id,
+        completed=completed,
+        failed=failed,
+        skipped=skipped,
+    )

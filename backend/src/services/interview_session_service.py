@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast
@@ -439,11 +440,15 @@ def enqueue_interview_report_generation(db: Session, interview_session_id) -> No
     from src.services.interview_report_service import mark_interview_report_pending_in_db
     from worker.tasks import generate_interview_report
 
-    task_result = generate_interview_report.delay(str(interview_session_id))
+    task_id = str(uuid.uuid4())
     mark_interview_report_pending_in_db(
         db,
         interview_session_id=interview_session_id,
-        task_id=getattr(task_result, "id", None),
+        task_id=task_id,
         retry_count=0,
         state="queued",
+    )
+    generate_interview_report.apply_async(
+        args=[str(interview_session_id)],
+        task_id=task_id,
     )

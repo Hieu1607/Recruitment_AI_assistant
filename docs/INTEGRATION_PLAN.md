@@ -16,7 +16,7 @@ auth wiring.
 | B1 | `backend/src/models/deps.py:1` | Wrong import: `from backend.src.models.session import SessionLocal` → should be `from src.models.session import SessionLocal` |
 | B2 | `backend/.env` | File does not exist — backend will crash on start without DB/CORS/LLM vars |
 | B3 | `frontend/.env` | File does not exist — Vite falls back to hardcoded `http://localhost:8000/api/v1`; fine for dev but must be explicit |
-| B4 | `docker-compose.yml:12` | References `./docker/db` init directory which does not exist |
+| B4 | `docker-compose.yml:12` | Referenced an unused `./docker/db` init directory even though this repo bootstraps the database through Alembic migrations and runtime auth flows |
 
 ---
 
@@ -41,12 +41,12 @@ auth wiring.
   VITE_API_BASE_URL=http://localhost:8000/api/v1
   ```
 
-- [x] **1.3** Create `docker/db/` directory (empty is fine — removes docker-compose volume mount error).
+- [x] **1.3** Remove the unused `docker/db` mount from `docker-compose.yml`.
 
 ### Checkpoint ✓
 - `backend/.env` exists with all required keys
 - `frontend/.env` exists
-- `docker/db/` directory exists
+- `docker-compose.yml` no longer depends on a placeholder `docker/db/` directory
 
 ---
 
@@ -87,10 +87,7 @@ auth wiring.
   alembic upgrade head
   ```
 
-- [x] **3.3** (Optional) Run seed script to create initial user + roles:
-  ```bash
-  python -m seeds.seed_initial_user_and_roles
-  ```
+- [x] **3.3** (Optional) Create the first user through the live auth flow after migrations complete.
 
 ### Checkpoint ✓
 - `alembic upgrade head` exits 0
@@ -260,7 +257,7 @@ auth wiring.
 
 ### Tasks
 
-- [x] **8.1** Create `docker/db/` directory (resolves volume mount error from Phase 1.3)
+- [x] **8.1** Keep Docker Compose aligned with the actual bootstrap path: Alembic migrations plus runtime user creation, not `docker/db` init mounts.
 
 - [x] **8.2** Add `VITE_API_BASE_URL` build arg to `frontend` service in `docker-compose.yml`:
   ```yaml
@@ -297,3 +294,4 @@ Phase 1 (env files) → Phase 2 (import bug) → Phase 3 (DB migrations)
 Phases 1–5 are **blockers** — nothing in Phase 6+ will work without them.
 Phase 7 (auth) can be deferred until all features are verified.
 Phase 8 should be the last step once everything works locally.
+

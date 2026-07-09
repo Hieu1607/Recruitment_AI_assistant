@@ -29,6 +29,7 @@ def _create_test_tables(engine):
         Base.metadata.tables["user_accounts"],
         Base.metadata.tables["jobs"],
         Base.metadata.tables["job_descriptions"],
+        Base.metadata.tables["resume_processing_batches"],
         Base.metadata.tables["resume_documents"],
         Base.metadata.tables["candidate_profiles"],
         Base.metadata.tables["match_runs"],

@@ -663,10 +663,11 @@ def _generate_resume_json_with_retries(
     last_error: Exception | None = None
     last_response_text = ""
 
-    for attempt_number, (provider_name, model_name) in enumerate(
-        _resume_text_parse_provider_specs(),
-        start=1,
-    ):
+    provider_specs = _resume_text_parse_provider_specs()
+    if len(provider_specs) == 1:
+        provider_specs = [provider_specs[0], provider_specs[0]]
+
+    for attempt_number, (provider_name, model_name) in enumerate(provider_specs, start=1):
         if _normalize_model_spec(provider_name, model_name) in _UNAVAILABLE_RESUME_PARSE_MODELS:
             continue
         if not last_response_text:
@@ -1152,6 +1153,7 @@ def create_resume_document(
     job_id: uuid.UUID,
     uploaded_by_user_id: uuid.UUID,
     retention_days: int = 365,
+    processing_batch_id: uuid.UUID | None = None,
 ) -> ResumeDocument:
     """Create a ResumeDocument row with status=uploaded (no parsing)."""
     resume = ResumeDocument(
@@ -1162,6 +1164,7 @@ def create_resume_document(
         uploaded_by_user_id=uploaded_by_user_id,
         retention_expires_at=datetime.now(timezone.utc)
         + timedelta(days=retention_days),
+        processing_batch_id=processing_batch_id,
     )
     db.add(resume)
     db.commit()

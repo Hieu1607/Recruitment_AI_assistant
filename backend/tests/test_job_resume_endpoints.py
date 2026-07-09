@@ -72,6 +72,7 @@ from src.models.deps import get_current_user, get_db  # noqa: E402
 from src.models.enums import ProfileStatus, UploadStatus, UserStatus  # noqa: E402
 from src.models.job import Job  # noqa: E402
 from src.models.resume_document import ResumeDocument  # noqa: E402
+from src.models.resume_processing_batch import ResumeProcessingBatch  # noqa: E402
 from src.models.user_account import UserAccount  # noqa: E402
 
 
@@ -79,6 +80,7 @@ def _create_test_tables(engine):
     tables = [
         Base.metadata.tables["user_accounts"],
         Base.metadata.tables["jobs"],
+        Base.metadata.tables["resume_processing_batches"],
         Base.metadata.tables["resume_documents"],
         Base.metadata.tables["candidate_profiles"],
     ]
@@ -227,7 +229,15 @@ def test_upload_job_resumes_accepts_multiple_files_in_one_request():
             "s3://bucket/resumes/bob.pdf",
         ]
 
-        def _create_resume_document(*, db, storage_uri, original_file_name, job_id, uploaded_by_user_id):
+        def _create_resume_document(
+            *,
+            db,
+            storage_uri,
+            original_file_name,
+            job_id,
+            uploaded_by_user_id,
+            processing_batch_id,
+        ):
             resume = ResumeDocument(
                 original_file_name=original_file_name,
                 storage_uri=storage_uri,
@@ -235,6 +245,7 @@ def test_upload_job_resumes_accepts_multiple_files_in_one_request():
                 job_id=job_id,
                 uploaded_by_user_id=uploaded_by_user_id,
                 retention_expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+                processing_batch_id=processing_batch_id,
             )
             db.add(resume)
             db.commit()
@@ -269,6 +280,7 @@ def test_upload_job_resumes_accepts_multiple_files_in_one_request():
 
         assert payload["total_files"] == 2
         assert payload["queued_files"] == 2
+        processing_batch_id = uuid.UUID(payload["processing_batch_id"])
         assert [item["file_name"] for item in payload["items"]] == ["alice.pdf", "bob.pdf"]
         assert [item["status"] for item in payload["items"]] == ["queued", "queued"]
         assert [item["task_id"] for item in payload["items"]] == ["task-1", "task-2"]
@@ -280,6 +292,7 @@ def test_upload_job_resumes_accepts_multiple_files_in_one_request():
             .all()
         )
         assert len(resumes) == 2
+        assert {resume.processing_batch_id for resume in resumes} == {processing_batch_id}
         assert [resume.original_file_name for resume in resumes] == ["alice.pdf", "bob.pdf"]
         assert [resume.upload_status for resume in resumes] == [
             UploadStatus.UPLOADED.value,
@@ -288,8 +301,8 @@ def test_upload_job_resumes_accepts_multiple_files_in_one_request():
 
         assert enqueue_resume.call_count == 2
         assert enqueue_resume.call_args_list == [
-            call(str(resumes[0].id)),
-            call(str(resumes[1].id)),
+            call(str(resumes[0].id), processing_batch_id=str(processing_batch_id)),
+            call(str(resumes[1].id), processing_batch_id=str(processing_batch_id)),
         ]
     finally:
         db.close()

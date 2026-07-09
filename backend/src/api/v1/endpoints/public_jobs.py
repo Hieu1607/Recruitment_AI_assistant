@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from src.models.deps import get_db
+from src.core.config import settings
 from src.services.object_storage import build_object_key, get_object_storage
 from src.services.public_job_service import (
     require_public_job_enabled,
     resolve_public_job_by_token,
 )
 from src.services.notification_service import create_notification
+from src.services.resume_batch_service import create_processing_batch
 from src.services.resume_service import create_resume_document
 from worker.tasks import process_resume
 
@@ -29,6 +31,8 @@ class PublicJobResponse(BaseModel):
     job_title: str
     candidate_message: str | None
     public_apply_enabled: bool
+    job_description_title: str | None = None
+    job_description_text: str | None = None
 
 
 class PublicResumeUploadResponse(BaseModel):
@@ -78,16 +82,38 @@ def _validate_pdf(file: UploadFile) -> str:
     return Path(file.filename).name
 
 
+def _get_latest_active_public_job_description(job) -> tuple[str | None, str | None]:
+    active_jds = [
+        jd
+        for jd in getattr(job, "job_descriptions", []) or []
+        if getattr(jd, "is_active", False) and (getattr(jd, "jd_text", "") or "").strip()
+    ]
+    if not active_jds:
+        return None, None
+    latest = sorted(
+        active_jds,
+        key=lambda jd: getattr(jd, "created_at", None) or "",
+        reverse=True,
+    )[0]
+    return (
+        (getattr(latest, "title", None) or None),
+        (getattr(latest, "jd_text", "") or "").strip(),
+    )
+
+
 @router.get("/jobs/{token}", response_model=PublicJobResponse)
 def get_public_job(
     token: str,
     db: Session = Depends(get_db),
 ):
     job = require_public_job_enabled(resolve_public_job_by_token(db, token))
+    jd_title, jd_text = _get_latest_active_public_job_description(job)
     return PublicJobResponse(
         job_title=job.title,
         candidate_message=job.candidate_message,
         public_apply_enabled=job.public_apply_enabled,
+        job_description_title=jd_title,
+        job_description_text=jd_text,
     )
 
 
@@ -115,17 +141,28 @@ async def upload_public_resume(
         content_type=file.content_type or "application/pdf",
     )
 
+    processing_batch = (
+        create_processing_batch(db=db, job_id=job.id, total_count=1)
+        if settings.BATCH_RESUME_PIPELINE_ENABLED
+        else None
+    )
     resume = create_resume_document(
         db=db,
         storage_uri=storage_uri,
         original_file_name=original_name,
         job_id=job.id,
         uploaded_by_user_id=job.owner_user_id,
+        processing_batch_id=processing_batch.id if processing_batch is not None else None,
     )
     task = process_resume.delay(
         str(resume.id),
         submitted_full_name=normalized_full_name,
         submitted_email=normalized_email,
+        **(
+            {"processing_batch_id": str(processing_batch.id)}
+            if processing_batch is not None
+            else {}
+        ),
     )
     create_notification(
         db=db,

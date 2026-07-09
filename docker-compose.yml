@@ -9,7 +9,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/db:/docker-entrypoint-initdb.d
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}" ]
       interval: 5s
@@ -86,12 +85,12 @@ services:
       - ./backend:/app
       - ./logs:/logs
 
-  worker:
+  worker: &worker-service
     build:
       context: ./backend
     env_file:
       - ./.env
-    command: celery -A worker.celery_app worker --loglevel=info
+    command: celery -A worker.celery_app worker -Q default --concurrency=2 --loglevel=info
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-recruitment_db}
       - REDIS_URL=redis://redis:6379/0
@@ -134,6 +133,18 @@ services:
     volumes:
       - ./backend:/app
       - ./logs:/logs
+
+  resume-worker:
+    <<: *worker-service
+    command: celery -A worker.celery_app worker -Q resume_parse --concurrency=${RESUME_PARSE_WORKER_CONCURRENCY:-5} --loglevel=info
+
+  evaluation-worker:
+    <<: *worker-service
+    command: celery -A worker.celery_app worker -Q candidate_evaluation --concurrency=${CANDIDATE_EVALUATION_WORKER_CONCURRENCY:-1} --loglevel=info
+
+  beat:
+    <<: *worker-service
+    command: celery -A worker.celery_app beat --schedule=/tmp/celerybeat-schedule --loglevel=info
 
   frontend:
     build:

@@ -1,4 +1,5 @@
 services:
+  # Production override only for the frontend runtime; other services still inherit from docker-compose.yml.
   frontend:
     build:
       context: ./frontend

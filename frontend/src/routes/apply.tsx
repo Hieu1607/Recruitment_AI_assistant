@@ -1,4 +1,5 @@
 import { ApiError, api } from "@/api";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { Button, Skeleton } from "@/components/ui";
 import { fieldClasses } from "@/components/jobs/job-utils";
 import { cn } from "@/lib/cn";
@@ -46,6 +47,8 @@ export default function PublicApplyRoute() {
     return uploadResume.error instanceof Error ? uploadResume.error.message : "Unable to submit your resume.";
   }, [uploadResume.error]);
 
+  const publicJobDescription = jobQuery.data?.job_description_text?.trim();
+
   const canSubmit =
     fullName.trim().length > 0 &&
     email.trim().length > 0 &&
@@ -81,99 +84,113 @@ export default function PublicApplyRoute() {
         </div>
 
         {!errorMessage && (
-          <section className="mt-8 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8">
-            {submitted ? (
-              <div className="flex flex-col items-start gap-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-md)] bg-[rgba(47,111,78,0.10)] text-success">
-                  <CheckCircle2 size={24} strokeWidth={1.75} />
+          <>
+            {publicJobDescription && (
+              <section className="mt-8 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8">
+                <p className="text-xs uppercase tracking-[0.2em] text-fg-subtle">
+                  {jobQuery.data?.job_description_title || "Role details"}
+                </p>
+                <h2 className="mt-3 font-display text-3xl leading-tight text-fg">Job description</h2>
+                <div className="mt-4 max-h-[28rem] overflow-y-auto pr-2">
+                  <MarkdownRenderer text={publicJobDescription} />
                 </div>
-                <div>
-                  <h2 className="font-display text-3xl leading-tight text-fg">Resume submitted</h2>
-                  <p className="mt-3 max-w-xl text-sm leading-6 text-fg-muted">
-                    Your resume was received. The hiring team will review it inside this job workspace.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <form
-                className="space-y-5"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (canSubmit) uploadResume.mutate();
-                }}
-              >
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="full-name" className="text-sm font-medium text-fg-muted">
-                      Full name
-                    </label>
-                    <input
-                      id="full-name"
-                      value={fullName}
-                      onChange={(event) => setFullName(event.target.value)}
-                      autoComplete="name"
-                      className={cn(fieldClasses, "mt-2")}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="email" className="text-sm font-medium text-fg-muted">
-                      Email
-                    </label>
-                    <input
-                      id="email"
-                      type="email"
-                      value={email}
-                      onChange={(event) => setEmail(event.target.value)}
-                      autoComplete="email"
-                      className={cn(fieldClasses, "mt-2")}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label htmlFor="resume-file" className="text-sm font-medium text-fg-muted">
-                    Resume PDF
-                  </label>
-                  <label
-                    htmlFor="resume-file"
-                    className="mt-2 flex cursor-pointer flex-col items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-[color:var(--hairline-strong)] bg-bg px-6 py-8 text-center transition-colors hover:bg-bg-sidebar"
-                  >
-                    <UploadCloud size={28} strokeWidth={1.5} className="text-fg-subtle" />
-                    <span className="mt-3 text-sm font-medium text-fg">
-                      {file ? file.name : "Choose a PDF resume"}
-                    </span>
-                    <span className="mt-1 text-xs text-fg-muted">PDF only</span>
-                    <input
-                      id="resume-file"
-                      type="file"
-                      accept="application/pdf,.pdf"
-                      className="sr-only"
-                      onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                      required
-                    />
-                  </label>
-                </div>
-
-                {uploadError && (
-                  <div className="rounded-[var(--radius-md)] border border-[rgba(184,68,46,0.24)] bg-[rgba(184,68,46,0.06)] p-4 text-sm text-danger">
-                    {uploadError}
-                  </div>
-                )}
-
-                <div className="flex flex-col gap-3 border-t border-[color:var(--hairline)] pt-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-2 text-sm text-fg-muted">
-                    <FileText size={15} strokeWidth={1.75} />
-                    {file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : "No file selected"}
-                  </div>
-                  <Button loading={uploadResume.isPending} disabled={!canSubmit}>
-                    Submit resume
-                  </Button>
-                </div>
-              </form>
+              </section>
             )}
-          </section>
+
+            <section className="mt-8 rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-6 sm:p-8">
+              {submitted ? (
+                <div className="flex flex-col items-start gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-md)] bg-[rgba(47,111,78,0.10)] text-success">
+                    <CheckCircle2 size={24} strokeWidth={1.75} />
+                  </div>
+                  <div>
+                    <h2 className="font-display text-3xl leading-tight text-fg">Resume submitted</h2>
+                    <p className="mt-3 max-w-xl text-sm leading-6 text-fg-muted">
+                      Your resume was received. The hiring team will review it inside this job workspace.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <form
+                  className="space-y-5"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (canSubmit) uploadResume.mutate();
+                  }}
+                >
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="full-name" className="text-sm font-medium text-fg-muted">
+                        Full name
+                      </label>
+                      <input
+                        id="full-name"
+                        value={fullName}
+                        onChange={(event) => setFullName(event.target.value)}
+                        autoComplete="name"
+                        className={cn(fieldClasses, "mt-2")}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="email" className="text-sm font-medium text-fg-muted">
+                        Email
+                      </label>
+                      <input
+                        id="email"
+                        type="email"
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                        autoComplete="email"
+                        className={cn(fieldClasses, "mt-2")}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="resume-file" className="text-sm font-medium text-fg-muted">
+                      Resume PDF
+                    </label>
+                    <label
+                      htmlFor="resume-file"
+                      className="mt-2 flex cursor-pointer flex-col items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-[color:var(--hairline-strong)] bg-bg px-6 py-8 text-center transition-colors hover:bg-bg-sidebar"
+                    >
+                      <UploadCloud size={28} strokeWidth={1.5} className="text-fg-subtle" />
+                      <span className="mt-3 text-sm font-medium text-fg">
+                        {file ? file.name : "Choose a PDF resume"}
+                      </span>
+                      <span className="mt-1 text-xs text-fg-muted">PDF only</span>
+                      <input
+                        id="resume-file"
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        className="sr-only"
+                        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                        required
+                      />
+                    </label>
+                  </div>
+
+                  {uploadError && (
+                    <div className="rounded-[var(--radius-md)] border border-[rgba(184,68,46,0.24)] bg-[rgba(184,68,46,0.06)] p-4 text-sm text-danger">
+                      {uploadError}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-3 border-t border-[color:var(--hairline)] pt-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2 text-sm text-fg-muted">
+                      <FileText size={15} strokeWidth={1.75} />
+                      {file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : "No file selected"}
+                    </div>
+                    <Button loading={uploadResume.isPending} disabled={!canSubmit}>
+                      Submit resume
+                    </Button>
+                  </div>
+                </form>
+              )}
+            </section>
+          </>
         )}
       </div>
     </main>

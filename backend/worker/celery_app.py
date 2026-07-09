@@ -65,7 +65,17 @@ celery_app.conf.update(
     enable_utc=True,
     task_default_queue="default",
     task_routes={
+        "worker.tasks.process_resume": {"queue": "resume_parse"},
+        "worker.tasks.evaluate_resume_batch": {"queue": "candidate_evaluation"},
+        "worker.tasks.evaluate_candidate": {"queue": "candidate_evaluation"},
+        "worker.tasks.send_outreach_email": {"queue": "default"},
         "worker.tasks.*": {"queue": "default"},
+    },
+    beat_schedule={
+        "recover-pending-resume-batches": {
+            "task": "worker.tasks.recover_pending_resume_batches",
+            "schedule": 15.0,
+        },
     },
     task_track_started=True,
 )

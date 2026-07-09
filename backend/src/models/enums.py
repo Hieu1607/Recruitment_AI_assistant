@@ -8,6 +8,15 @@ class UploadStatus(str, Enum):
     FAILED = "failed"
 
 
+class ResumeProcessingBatchStatus(str, Enum):
+    PARSING = "parsing"
+    EVALUATION_PENDING = "evaluation_pending"
+    EVALUATING = "evaluating"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+
+
 class ProfileStatus(str, Enum):
     DRAFT = "draft"
     REVIEWED = "reviewed"

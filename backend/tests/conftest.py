@@ -1,7 +1,9 @@
 import base64
 import json
+import os
 import sys
 import types
+import uuid
 from pathlib import Path
 
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
@@ -10,6 +12,12 @@ from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
+
+pytest_temp_root = BACKEND_ROOT / ".pytest_tmp"
+pytest_temp_root.mkdir(exist_ok=True)
+pytest_session_temp_root = pytest_temp_root / f"session-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+pytest_session_temp_root.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", str(pytest_session_temp_root))
 
 
 if not hasattr(SQLiteTypeCompiler, "visit_JSONB"):
@@ -123,6 +131,9 @@ if "worker.tasks" not in sys.modules:
     )
     tasks_stub.evaluate_candidate = types.SimpleNamespace(
         delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-evaluation-task-id")
+    )
+    tasks_stub.evaluate_resume_batch = types.SimpleNamespace(
+        delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-batch-evaluation-task-id")
     )
     tasks_stub.send_interview_invitation_email = types.SimpleNamespace(
         delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-interview-email-task-id")

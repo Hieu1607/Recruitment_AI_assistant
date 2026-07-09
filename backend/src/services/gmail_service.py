@@ -28,14 +28,16 @@ def build_raw_message(
     sender: str,
     to_email: str,
     subject: str,
-    body_text: str,
+    body: str | None = None,
+    body_text: str | None = None,
     body_html: str | None = None,
 ) -> str:
+    plain_body = body_text if body_text is not None else (body or "")
     message = EmailMessage()
     message["From"] = sender
     message["To"] = to_email
     message["Subject"] = subject
-    message.set_content(body_text)
+    message.set_content(plain_body)
     if body_html:
         message.add_alternative(body_html, subtype="html")
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
@@ -91,7 +93,8 @@ def send_gmail_message(
     sender: str,
     to_email: str,
     subject: str,
-    body_text: str,
+    body: str | None = None,
+    body_text: str | None = None,
     body_html: str | None = None,
 ) -> dict[str, Any]:
     if not settings.GMAIL_SEND_ENABLED:
@@ -102,6 +105,7 @@ def send_gmail_message(
         sender=sender,
         to_email=to_email,
         subject=subject,
+        body=body,
         body_text=body_text,
         body_html=body_html,
     )

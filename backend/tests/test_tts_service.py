@@ -54,6 +54,7 @@ def _create_test_tables(engine):
     table_names = [
         "user_accounts",
         "jobs",
+        "resume_processing_batches",
         "resume_documents",
         "candidate_profiles",
         "interview_templates",

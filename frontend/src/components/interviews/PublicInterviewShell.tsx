@@ -287,12 +287,45 @@ export function PublicInterviewShell({ token }: { token: string }) {
     const audio = new Audio(url);
     audioRef.current = audio;
     audioUrlRef.current = url;
+
+    const resetAudio = () => {
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+      }
+      if (audioUrlRef.current === url) {
+        URL.revokeObjectURL(url);
+        audioUrlRef.current = null;
+      }
+    };
+
+    let cleanupListeners = () => {};
+    const waitForPlaybackToFinish = new Promise<void>((resolve, reject) => {
+      const handleEnded = () => {
+        cleanupListeners();
+        resetAudio();
+        resolve();
+      };
+      const handleError = () => {
+        cleanupListeners();
+        resetAudio();
+        reject(new Error("Unable to play interview audio."));
+      };
+
+      cleanupListeners = () => {
+        audio.removeEventListener("ended", handleEnded);
+        audio.removeEventListener("error", handleError);
+      };
+
+      audio.addEventListener("ended", handleEnded);
+      audio.addEventListener("error", handleError);
+    });
+
     try {
       await audio.play();
+      await waitForPlaybackToFinish;
     } catch {
-      URL.revokeObjectURL(url);
-      audioRef.current = null;
-      audioUrlRef.current = null;
+      cleanupListeners();
+      resetAudio();
       throw new Error("Unable to play interview audio.");
     }
   }

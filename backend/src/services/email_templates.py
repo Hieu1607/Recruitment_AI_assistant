@@ -28,11 +28,14 @@ def build_interview_invitation_email(
 def build_outreach_email(
     *,
     subject: str,
-    body_text: str | None,
-    body_html: str | None,
-) -> tuple[str, str, str]:
+    body: str | None = None,
+    body_text: str | None = None,
+    body_html: str | None = None,
+) -> tuple[str, str] | tuple[str, str, str]:
+    if body is not None and body_text is None and body_html is None:
+        return subject.strip(), body.strip()
     normalized_text, normalized_html = normalize_rich_message(
-        body_text=body_text,
+        body_text=body_text if body_text is not None else body,
         body_html=body_html,
     )
     return subject.strip(), normalized_text, normalized_html

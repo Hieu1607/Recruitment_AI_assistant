@@ -17,6 +17,7 @@ _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
 if TYPE_CHECKING:
     from src.models.candidate_profile import CandidateProfile
     from src.models.job import Job
+    from src.models.resume_processing_batch import ResumeProcessingBatch
 
 
 class ResumeDocument(Base):
@@ -42,6 +43,12 @@ class ResumeDocument(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    processing_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("resume_processing_batches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     candidate_profile: Mapped["CandidateProfile"] = relationship(
         back_populates="resume_document",
@@ -49,6 +56,9 @@ class ResumeDocument(Base):
         cascade="all, delete-orphan",
     )
     job: Mapped["Job"] = relationship(back_populates="resumes")
+    processing_batch: Mapped["ResumeProcessingBatch | None"] = relationship(
+        back_populates="resume_documents"
+    )
     extraction_traces: Mapped[list["ExtractionTrace"]] = relationship(
         back_populates="resume_document",
         cascade="all, delete-orphan",

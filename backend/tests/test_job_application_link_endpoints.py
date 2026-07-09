@@ -106,6 +106,7 @@ def _create_test_tables(engine):
         Base.metadata.tables["interview_question_sets"],
         Base.metadata.tables["interview_templates"],
         Base.metadata.tables["interview_invitations"],
+        Base.metadata.tables["resume_processing_batches"],
         Base.metadata.tables["resume_documents"],
         Base.metadata.tables["candidate_profiles"],
         Base.metadata.tables["extraction_traces"],

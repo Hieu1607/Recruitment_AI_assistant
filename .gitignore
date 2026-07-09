@@ -59,6 +59,7 @@ pdfs/
 .playwright-mcp/
 logs/
 .pytest_cache/
+*pytest_tmp/
 
 #DATN
 EasyHR_DATN_LaTeX_Report/

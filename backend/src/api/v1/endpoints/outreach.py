@@ -9,7 +9,9 @@ Route map
   DELETE /outreach/{id}         delete
 """
 
+import importlib
 import json
+import sys
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -543,9 +545,11 @@ def send_message(
         db.refresh(msg)
         return _ser(msg)
 
-    from worker.tasks import send_outreach_email
-
-    send_outreach_email.delay(str(msg.id))
+    worker_package = sys.modules.get("worker")
+    tasks_module = getattr(worker_package, "tasks", None) if worker_package is not None else None
+    if tasks_module is None:
+        tasks_module = importlib.import_module("worker.tasks")
+    tasks_module.send_outreach_email.delay(str(msg.id))
     return _ser(msg)
 
 
