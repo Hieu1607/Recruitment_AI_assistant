@@ -1,1203 +1,537 @@
-import { api, type ScoreResponse } from "@/api";
 import {
-    Avatar,
-    Badge,
-    Button,
-    ScoreRadar,
-    Skeleton,
-} from "@/components/ui";
+  api,
+  type CandidateEvaluationComponentScore,
+  type CandidateEvaluationResponse,
+} from "@/api";
+import { Avatar, Badge, Button, EmptyState, Skeleton } from "@/components/ui";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
-import { useScoringStore } from "@/lib/scoring-store";
-import { useQuery } from "@tanstack/react-query";
-import {
-    BarChart2,
-    Check,
-    ChevronDown,
-    ChevronUp,
-    ClipboardCopy,
-    Plus,
-    RefreshCw,
-    Search,
-    X,
-} from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw, Save } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-// ── constants ────────────────────────────────────────────────────────────────
+const DEFAULT_THRESHOLD = 50;
+const SECTION_ORDER = ["skills", "experience", "education", "projects", "summary", "languages", "achievements", "certifications", "publications", "other"];
+type SortOrder = "natural" | "score_desc" | "score_asc";
+const SECTION_LABELS: Record<string, string> = {
+  skills: "Skills",
+  experience: "Experience",
+  education: "Education",
+  projects: "Projects",
+  summary: "Summary",
+  languages: "Languages",
+  achievements: "Achievements",
+  certifications: "Certifications",
+  publications: "Publications",
+  other: "Other",
+};
 
-const PROCESSING_MESSAGES = [
-  "Reading job description…",
-  "Evaluating candidate profiles…",
-  "Applying section weights…",
-  "Calibrating match scores…",
-  "Generating rationales…",
-  "Finalising results…",
-];
-
-const SEG_COLORS = ["#1F3A2E", "#2A5A78", "#5A3A7E", "#7A3A3A", "#3A5A3A", "#5A4A2A"];
-
-const EXTRA_SECTIONS = [
-  { key: "languages", label: "Languages" },
-  { key: "achievements", label: "Achievements" },
-  { key: "certifications", label: "Certifications" },
-  { key: "publications", label: "Publications" },
-  { key: "other", label: "Other" },
-];
-
-// ── types ────────────────────────────────────────────────────────────────────
-
-type Step = 1 | 2 | 3;
-type WeightSection = { key: string; label: string; value: number };
-
-const DEFAULT_SECTIONS: WeightSection[] = [
-  { key: "skills", label: "Skills", value: 25 },
-  { key: "experience", label: "Experience", value: 25 },
-  { key: "education", label: "Education", value: 20 },
-  { key: "projects", label: "Projects", value: 20 },
-  { key: "summary", label: "Summary", value: 10 },
-];
-
-const DEFAULT_KEYS = new Set(DEFAULT_SECTIONS.map((s) => s.key));
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function truncateId(id: string) {
-  return `#${id.slice(0, 4)}…${id.slice(-4)}`;
-}
-
-function fileToName(f: string) {
-  return (
-    f
-      .replace(/\.pdf$/i, "")
-      .replace(/[_-]+/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase())
-      .trim() || f
+function normalizeSectionWeights(sectionWeights: Record<string, number>) {
+  const cleaned = Object.entries(sectionWeights).reduce<Record<string, number>>((acc, [key, value]) => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      acc[key] = numeric;
+    }
+    return acc;
+  }, {});
+  const total = Object.values(cleaned).reduce((sum, value) => sum + value, 0);
+  if (total <= 0) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(cleaned).map(([key, value]) => [key, value / total]),
   );
 }
 
-function scoreColor(n: number) {
-  if (n >= 80) return "var(--success)";
-  if (n >= 60) return "var(--warning)";
-  return "var(--danger)";
+function positiveWeight(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function formatCriterionLabel(
-  criterionKey: string,
-  requirementText?: string | null,
-) {
-  if (requirementText && requirementText.trim()) return requirementText.trim();
+function recalculateEvaluation(
+  evaluation: CandidateEvaluationResponse,
+  sectionWeights: Record<string, number>,
+  scoreThreshold: number,
+): CandidateEvaluationResponse {
+  const normalizedWeights = normalizeSectionWeights(sectionWeights);
+  const componentScores = evaluation.componentScores;
+  const sectionCounts = componentScores.reduce<Record<string, number>>((acc, component) => {
+    const section = component.section ?? "";
+    if (!section) return acc;
+    acc[section] = (acc[section] ?? 0) + 1;
+    return acc;
+  }, {});
+  const rawWeightTotals = componentScores.reduce<Record<string, number>>((acc, component) => {
+    const section = component.section ?? "";
+    const weight = positiveWeight(component.weight);
+    if (!section || weight === null) return acc;
+    acc[section] = (acc[section] ?? 0) + weight;
+    return acc;
+  }, {});
+  const totalRawWeight = componentScores.reduce((sum, component) => sum + (positiveWeight(component.weight) ?? 0), 0);
 
-  return criterionKey
-    .replace(/[._]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-    .trim();
+  let totalScore = 0;
+  const recalculatedScores = componentScores.map((component) => {
+    const section = component.section ?? "";
+    const rawWeight = positiveWeight(component.weight);
+    let effectiveWeight = 0;
+
+    if (normalizedWeights) {
+      const sectionWeight = normalizedWeights[section] ?? 0;
+      const sectionTotal = rawWeightTotals[section] ?? 0;
+      if (rawWeight !== null && sectionTotal > 0) {
+        effectiveWeight = sectionWeight * (rawWeight / sectionTotal);
+      } else {
+        const sectionCount = sectionCounts[section] ?? 0;
+        effectiveWeight = sectionWeight > 0 && sectionCount > 0 ? sectionWeight / sectionCount : 0;
+      }
+    } else if (rawWeight !== null && totalRawWeight > 0) {
+      effectiveWeight = rawWeight / totalRawWeight;
+    }
+
+    const weightedScore = Number((component.scorePercent * effectiveWeight).toFixed(2));
+    totalScore += weightedScore;
+    return {
+      ...component,
+      effectiveWeight,
+      weightedScore,
+    };
+  });
+
+  totalScore = Number(totalScore.toFixed(2));
+  return {
+    ...evaluation,
+    totalScore,
+    passedThreshold: totalScore >= scoreThreshold,
+    componentScores: recalculatedScores,
+  };
 }
 
-function formatRadarCriterionLabel(
-  criterionKey: string,
-  requirementText?: string | null,
-) {
-  const fullLabel = formatCriterionLabel(criterionKey, requirementText);
-  const normalized = fullLabel.toLowerCase();
-
-  const keywordLabels: Array<[RegExp, string]> = [
-    [/\b(bachelor|master|degree|phd|final-year student)\b/, "Degree"],
-    [/\b(machine learning|deep learning|ml|dl)\b/, "ML / DL"],
-    [/\bpython\b/, "Python"],
-    [/\b(llms?|rag|embedding|semantic search)\b/, "LLMs / RAG"],
-    [/\b(pytorch|tensorflow|scikit-learn|frameworks?)\b/, "AI frameworks"],
-    [/\b(rest api|rest apis|backend)\b/, "REST / backend"],
-    [/\bgit\b/, "Git"],
-    [/\b(problem-solving|analytical thinking|analytical)\b/, "Problem-solving"],
-    [/\b(chatbots?|assistants?)\b/, "AI chatbots"],
-    [/\b(vector databases?|weaviate|pinecone|chromadb|faiss)\b/, "Vector DBs"],
-    [/\b(fastapi|docker|microservice)\b/, "FastAPI / Docker"],
-    [/\b(mlops|monitoring|observability)\b/, "MLOps"],
-    [/\b(aws|gcp|azure|cloud)\b/, "Cloud platforms"],
-    [/\b(research papers?|technical documentation)\b/, "Research implementation"],
-  ];
-
-  const keywordMatch = keywordLabels.find(([pattern]) => pattern.test(normalized));
-  if (keywordMatch) return keywordMatch[1];
-
-  const compact = fullLabel
-    .replace(/^[A-Za-z'()-]+\s+degree.*?\bin\b\s*/i, "")
-    .replace(/^(good knowledge of|strong|familiarity with|experience with|experience using|experience building|understanding of|knowledge of|ability to)\s+/i, "")
-    .replace(/\s+such as.*$/i, "")
-    .replace(/[.,;:()]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const words = compact.split(" ").filter(Boolean).slice(0, 3);
-  return words.join(" ");
+function scoreVariant(status: CandidateEvaluationResponse["status"]) {
+  if (status === "completed") return "success";
+  if (status === "failed") return "danger";
+  if (status === "outdated") return "warning";
+  return "neutral";
 }
 
-function candidateDisplayLabel(score: ScoreResponse["scores"][number]) {
-  const candidateName = score.candidateName?.trim();
-  if (candidateName) return candidateName;
-
-  const resumeFileName = score.resumeFileName?.trim();
-  if (resumeFileName) return fileToName(resumeFileName);
-
-  return score.candidateDisplayName?.trim() || truncateId(score.candidateId);
+function formatCriterionLabel(component: CandidateEvaluationComponentScore) {
+  if (component.requirementText?.trim()) return component.requirementText.trim();
+  return component.criterionKey
+    .split(".")
+    .join(" ")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-// ── main component ───────────────────────────────────────────────────────────
+function candidateDisplayLabel(evaluation: CandidateEvaluationResponse) {
+  return (
+    evaluation.candidateDisplayName?.trim()
+    || evaluation.candidateName?.trim()
+    || evaluation.resumeFileName?.trim()
+    || evaluation.candidate_profile_id
+  );
+}
 
 export default function ScoringSetupRoute() {
+  const queryClient = useQueryClient();
   const selectedJobId = useSelectedJobId();
-  const scoringRun = useScoringStore((state) =>
-    selectedJobId ? state.runs[selectedJobId] ?? null : null
-  );
-  const startRun = useScoringStore((state) => state.startRun);
-  const clearRunError = useScoringStore((state) => state.clearError);
+  const [draftWeights, setDraftWeights] = useState<Record<string, number>>({});
+  const [thresholdDraft, setThresholdDraft] = useState(DEFAULT_THRESHOLD);
+  const [prefsDirty, setPrefsDirty] = useState(false);
+  const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<SortOrder>("natural");
 
-  // ── step state ────────────────────────────────────────────────────────────
-  const [step, setStep] = useState<Step>(1);
-
-  // ── step-1 state ──────────────────────────────────────────────────────────
-  const [hiddenText, setHiddenText] = useState("");
-  const [hiddenDirty, setHiddenDirty] = useState(false);
-  const [savingHidden, setSavingHidden] = useState(false);
-  const [candidateMode, setCandidateMode] = useState<"all" | "specific">("all");
-  const [candSearch, setCandSearch] = useState("");
-  const [selectedCandIds, setSelectedCandIds] = useState<Set<string>>(new Set());
-  const [sections, setSections] = useState<WeightSection[]>(DEFAULT_SECTIONS);
-  const [threshold, setThreshold] = useState(50);
-  const [batchSize, setBatchSize] = useState(10);
-  const [addSectionOpen, setAddSectionOpen] = useState(false);
-
-  // ── step-2 state ──────────────────────────────────────────────────────────
-  const [msgIdx, setMsgIdx] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-
-  // ── step-3 state ──────────────────────────────────────────────────────────
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [selIds, setSelIds] = useState<Set<string>>(new Set());
-  const [resultSort, setResultSort] = useState<{
-    key: "totalScore" | "passed";
-    dir: "asc" | "desc";
-  }>({ key: "totalScore", dir: "desc" });
-  const [copiedId, setCopiedId] = useState(false);
-
-  // ── data ──────────────────────────────────────────────────────────────────
-
-  const { data: workspaceJd, isLoading: jdLoading } = useQuery({
-    queryKey: ["jobs", selectedJobId, "job-description", "scoring"],
-    queryFn: async () => {
-      if (!selectedJobId) return null;
-      try {
-        return await api.jobs.jobDescription.get(selectedJobId);
-      } catch {
-        return null;
-      }
+  const { data: evaluations, isLoading } = useQuery({
+    queryKey: ["jobs", selectedJobId, "evaluations"],
+    queryFn: () => selectedJobId ? api.jobs.evaluations.list(selectedJobId) : Promise.resolve(null),
+    enabled: !!selectedJobId,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && (data.pending_count > 0 || data.running_count > 0) ? 3000 : false;
     },
   });
 
-  const { data: resumeData, isLoading: resumesLoading } = useQuery({
-    queryKey: ["resumes", selectedJobId, 200],
-    queryFn: () => (selectedJobId ? api.jobs.resumes.list(selectedJobId, { limit: 200 }) : Promise.resolve({ items: [], total: 0 })),
-    enabled: candidateMode === "specific" && !!selectedJobId,
+  useEffect(() => {
+    if (!evaluations || prefsDirty) return;
+    setDraftWeights(evaluations.section_weights);
+    setThresholdDraft(evaluations.score_threshold);
+  }, [evaluations, prefsDirty]);
+
+  const savePreferences = useMutation({
+    mutationFn: (body: { section_weights: Record<string, number>; score_threshold: number }) =>
+      api.jobs.scoringPreferences.update(selectedJobId!, body),
+    onSuccess: () => {
+      setPrefsDirty(false);
+      void queryClient.invalidateQueries({ queryKey: ["jobs", selectedJobId, "evaluations"] });
+      toast.success("Scoring preferences saved");
+    },
+    onError: () => {
+      toast.error("Failed to save scoring preferences");
+    },
   });
 
-  const resumes = useMemo(() => resumeData?.items ?? [], [resumeData?.items]);
+  const scoreAgain = useMutation({
+    mutationFn: () => api.jobs.evaluations.scoreAgain(selectedJobId!),
+    onSuccess: () => {
+      toast.success("Scoring queued");
+      void queryClient.invalidateQueries({ queryKey: ["jobs", selectedJobId, "evaluations"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs", selectedJobId, "setup-status"] });
+    },
+    onError: () => {
+      toast.error("Failed to queue scoring");
+    },
+  });
 
-  useEffect(() => {
-    if (!workspaceJd) {
-      setHiddenText("");
-      setHiddenDirty(false);
-      return;
+  const orderedWeightEntries = useMemo(() => {
+    const keys = new Set<string>([
+      ...SECTION_ORDER,
+      ...Object.keys(draftWeights),
+      ...(evaluations ? evaluations.items.flatMap((item) => item.componentScores.map((component) => component.section ?? "")) : []),
+    ]);
+    return [...keys]
+      .filter(Boolean)
+      .map((key) => ({
+        key,
+        label: SECTION_LABELS[key] ?? key.replace(/\b\w/g, (char) => char.toUpperCase()),
+        value: draftWeights[key] ?? 0,
+      }));
+  }, [draftWeights, evaluations]);
+
+  const previewItems = useMemo(() => {
+    if (!evaluations) return [];
+    if (!prefsDirty && !evaluations.scoring_preferences_applied) {
+      return evaluations.items;
     }
-    setHiddenText(workspaceJd.hidden_text ?? "");
-    setHiddenDirty(false);
-  }, [workspaceJd]);
+    return evaluations.items.map((item) => recalculateEvaluation(item, draftWeights, thresholdDraft));
+  }, [draftWeights, evaluations, prefsDirty, thresholdDraft]);
 
-  useEffect(() => {
-    if (workspaceJd && !hiddenDirty) {
-      setHiddenText(workspaceJd.hidden_text ?? "");
+  const displayedItems = useMemo(() => {
+    if (sortOrder === "natural") {
+      return previewItems;
     }
-  }, [workspaceJd, hiddenDirty]);
+    return previewItems
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => {
+        const leftScore = left.item.status === "completed" || left.item.status === "outdated" ? left.item.totalScore : null;
+        const rightScore = right.item.status === "completed" || right.item.status === "outdated" ? right.item.totalScore : null;
 
-  useEffect(() => {
-    if (!selectedJobId) {
-      setStep(1);
-      return;
-    }
+        if (leftScore === null && rightScore === null) return left.index - right.index;
+        if (leftScore === null) return 1;
+        if (rightScore === null) return -1;
+        if (leftScore === rightScore) return left.index - right.index;
 
-    if (scoringRun?.status === "running") {
-      setStep(2);
-      return;
-    }
-
-    if (scoringRun?.latestResult) {
-      setStep(3);
-      return;
-    }
-
-    setStep(1);
-  }, [selectedJobId, scoringRun?.latestResult, scoringRun?.status]);
-
-  useEffect(() => {
-    if (!selectedJobId || !scoringRun?.lastError) return;
-    toast.error(scoringRun.lastError);
-    clearRunError(selectedJobId);
-  }, [clearRunError, scoringRun?.lastError, selectedJobId]);
-
-  // ── processing timers ─────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (step !== 2) return;
-    setMsgIdx(0);
-    setElapsed(0);
-    const t1 = setInterval(
-      () => setMsgIdx((i) => (i + 1) % PROCESSING_MESSAGES.length),
-      2500
-    );
-    const t2 = setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => {
-      clearInterval(t1);
-      clearInterval(t2);
-    };
-  }, [step]);
-
-  // ── mutation ──────────────────────────────────────────────────────────────
-
-  // ── weight helpers ────────────────────────────────────────────────────────
-
-  const availableToAdd = EXTRA_SECTIONS.filter(
-    (es) => !sections.find((s) => s.key === es.key)
-  );
-
-  // ── candidate helpers ─────────────────────────────────────────────────────
-
-  const filteredResumes = useMemo(() => {
-    const q = candSearch.toLowerCase().trim();
-    if (!q) return resumes;
-    return resumes.filter(
-      (r) =>
-        fileToName(r.original_file_name).toLowerCase().includes(q) ||
-        r.original_file_name.toLowerCase().includes(q)
-    );
-  }, [resumes, candSearch]);
-
-  async function saveHiddenInformation() {
-    if (!selectedJobId || !workspaceJd || !hiddenDirty) return;
-    setSavingHidden(true);
-    try {
-      await api.jobs.jobDescription.patch(selectedJobId, {
-        hidden_text: hiddenText,
-      });
-      setHiddenDirty(false);
-    } catch (error) {
-      toast.error("Hidden information could not be saved");
-      throw error;
-    } finally {
-      setSavingHidden(false);
-    }
-  }
-
-  // ── result helpers ────────────────────────────────────────────────────────
-
-  const sortedScores = useMemo(() => {
-    const scoreResult = scoringRun?.latestResult;
-    if (!scoreResult) return [];
-    return [...scoreResult.scores].sort((a, b) => {
-      const av =
-        resultSort.key === "totalScore" ? a.totalScore : a.passedThreshold ? 1 : 0;
-      const bv =
-        resultSort.key === "totalScore" ? b.totalScore : b.passedThreshold ? 1 : 0;
-      return resultSort.dir === "desc" ? bv - av : av - bv;
-    });
-  }, [resultSort, scoringRun?.latestResult]);
-
-  const scoreResult = scoringRun?.latestResult ?? null;
-
-  const avgScore =
-    scoreResult && scoreResult.scores.length > 0
-      ? Math.round(
-          scoreResult.scores.reduce((s, c) => s + c.totalScore, 0) /
-            scoreResult.scores.length
-        )
-      : 0;
-
-  const highScore =
-    scoreResult && scoreResult.scores.length > 0
-      ? Math.max(...scoreResult.scores.map((c) => c.totalScore))
-      : 0;
-
-  function toggleResultSort(key: typeof resultSort.key) {
-    setResultSort((prev) =>
-      prev.key === key
-        ? { ...prev, dir: prev.dir === "asc" ? "desc" : "asc" }
-        : { key, dir: "desc" }
-    );
-  }
-
-  function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  }
-
-  function toggleSel(id: string) {
-    setSelIds((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  }
-
-  function copyRunId() {
-    if (!scoreResult) return;
-    navigator.clipboard.writeText(scoreResult.match_run_id).then(() => {
-      setCopiedId(true);
-      setTimeout(() => setCopiedId(false), 2000);
-    });
-  }
-
-  function startScoring() {
-    if (!selectedJobId || !workspaceJd) {
-      toast.error("Please create or select the current workspace job description");
-      return;
-    }
-    setStep(2);
-    void saveHiddenInformation()
-      .then(() => {
-        const sectionWeights: Record<string, number> = {};
-        sections.forEach((s) => {
-          sectionWeights[s.key] = s.value;
-        });
-
-        return startRun(selectedJobId, {
-          scoreThreshold: threshold,
-          batchSize,
-          sectionWeights,
-          candidateProfileIds:
-            candidateMode === "specific" && selectedCandIds.size > 0
-              ? [...selectedCandIds]
-              : undefined,
-          hiddenTextSnapshot: hiddenText,
-        });
+        return sortOrder === "score_desc" ? rightScore - leftScore : leftScore - rightScore;
       })
-      .catch(() => {
-        setStep(scoreResult ? 3 : 1);
-      });
+      .map(({ item }) => item);
+  }, [previewItems, sortOrder]);
+
+  const scoreSummary = useMemo(() => {
+    const scored = previewItems.filter((item) => item.status === "completed" || item.status === "outdated");
+    const average = scored.length > 0
+      ? Number((scored.reduce((sum, item) => sum + item.totalScore, 0) / scored.length).toFixed(2))
+      : 0;
+    const highest = scored.length > 0 ? Math.max(...scored.map((item) => item.totalScore)) : 0;
+    return { average, highest };
+  }, [previewItems]);
+
+  if (!selectedJobId) {
+    return (
+      <div className="px-8 py-8 min-h-full">
+        <EmptyState
+          heading="No workspace selected"
+          body="Select a job workspace first to review scoring results."
+        />
+      </div>
+    );
   }
 
-  function resetToSetup() {
-    setStep(1);
-    setExpandedIds(new Set());
-    setSelIds(new Set());
+  if (isLoading) {
+    return (
+      <div className="px-8 py-8 space-y-6">
+        <Skeleton className="h-10 w-72" />
+        <div className="grid gap-4 md:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-28 rounded-[var(--radius-lg)]" />
+          ))}
+        </div>
+        <Skeleton className="h-[420px] rounded-[var(--radius-lg)]" />
+      </div>
+    );
   }
 
-  const estSeconds = (() => {
-    const n =
-      candidateMode === "all" ? (resumeData?.total ?? 0) : selectedCandIds.size;
-    return n > 0 ? Math.max(15, Math.ceil(n / batchSize) * 15) : null;
-  })();
+  if (!evaluations || evaluations.total_candidates === 0) {
+    return (
+      <div className="px-8 py-8 min-h-full">
+        <EmptyState
+          heading="No evaluations yet"
+          body="Upload and parse candidates first, then queue scoring for the current job description."
+          action={{
+            label: scoreAgain.isPending ? "Queueing…" : "Score again",
+            onClick: () => void scoreAgain.mutate(),
+          }}
+        />
+      </div>
+    );
+  }
 
-  // ── render ────────────────────────────────────────────────────────────────
+  const showScoreAgain = evaluations.outdated_count > 0 || evaluations.failed_count > 0 || evaluations.total_candidates === 0;
 
   return (
-    <div className="px-8 py-6 min-h-full">
-
-      {/* Stepper */}
-      <div className="flex items-center gap-0 mb-6">
-        {[
-          { n: 1, label: "Setup" },
-          { n: 2, label: "Processing" },
-          { n: 3, label: "Results" },
-        ].map(({ n, label }, i) => (
-          <div key={n} className="flex items-center">
-            {i > 0 && (
-              <div
-                className={cn(
-                  "h-px w-14 mx-3",
-                  step > i ? "bg-accent" : "bg-[color:var(--hairline-strong)]"
-                )}
-              />
-            )}
-            <div className="flex items-center gap-2">
-              <div
-                className={cn(
-                  "h-7 w-7 rounded-full flex items-center justify-center text-xs font-medium font-sans transition-colors",
-                  step >= n
-                    ? "bg-accent text-accent-fg"
-                    : "bg-[color:var(--hairline)] text-fg-muted"
-                )}
-              >
-                {step > n ? <Check size={12} strokeWidth={2.5} /> : n}
-              </div>
-              <span
-                className={cn(
-                  "text-sm font-sans",
-                  step === n ? "text-fg font-medium" : "text-fg-muted"
-                )}
-              >
-                {label}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* ── STEP 1: Setup ── */}
-      {step === 1 && (
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(260px,320px)] gap-8 items-start">
-
-          {/* Left: JD + Candidates */}
-          <div className="space-y-7">
-
-            {/* Hidden information */}
-            <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-4">
-                Hidden Information
-              </h2>
-              {jdLoading ? (
-                <Skeleton className="h-32 w-full" />
-              ) : !workspaceJd ? (
-                <div
-                  className={cn(
-                    "rounded-[var(--radius-md)] border border-[color:var(--hairline)]",
-                    "bg-bg-elevated p-4 text-sm text-fg-muted font-sans",
-                  )}
-                >
-                  Create a workspace job description before scoring.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <textarea
-                    aria-label="Hidden Information"
-                    value={hiddenText}
-                    onChange={(e) => {
-                      setHiddenText(e.target.value);
-                      setHiddenDirty(true);
-                    }}
-                    onBlur={() => {
-                      if (hiddenDirty) void saveHiddenInformation();
-                    }}
-                    placeholder="Internal criteria, preferred signals, red flags, compensation constraints..."
-                    className={cn(
-                      "w-full min-h-32 resize-y px-3 py-2.5 text-sm font-sans leading-relaxed rounded-[var(--radius-md)]",
-                      "border border-[color:var(--hairline-strong)] bg-bg text-fg",
-                      "placeholder:text-fg-subtle",
-                      "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
-                    )}
-                  />
-                  <div className="h-4 text-[11px] font-sans text-fg-subtle">
-                    {savingHidden ? "Saving..." : hiddenDirty ? "Unsaved" : ""}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Candidate Selector */}
-            <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-4">
-                Candidates
-              </h2>
-              <div className="flex items-center gap-5 mb-4">
-                {(["all", "specific"] as const).map((mode) => (
-                  <label key={mode} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="candidateMode"
-                      checked={candidateMode === mode}
-                      onChange={() => setCandidateMode(mode)}
-                      className="accent-accent"
-                    />
-                    <span className="text-sm font-sans text-fg">
-                      {mode === "all" ? "All candidates" : "Specific candidates"}
-                    </span>
-                  </label>
-                ))}
-              </div>
-
-              {candidateMode === "specific" && (
-                <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] overflow-hidden">
-                  <div className="relative border-b border-[color:var(--hairline)]">
-                    <Search
-                      size={13}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted pointer-events-none"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Search candidates…"
-                      value={candSearch}
-                      onChange={(e) => setCandSearch(e.target.value)}
-                      className="w-full h-9 pl-8 pr-3 text-sm font-sans bg-bg-elevated text-fg placeholder:text-fg-subtle outline-none"
-                    />
-                  </div>
-                  <div className="max-h-52 overflow-y-auto">
-                    {resumesLoading ? (
-                      Array.from({ length: 4 }).map((_, i) => (
-                        <div
-                          key={i}
-                          className="px-3 py-2.5 flex items-center gap-3 hairline-b"
-                        >
-                          <Skeleton className="h-4 w-4 shrink-0" />
-                          <Skeleton className="h-4 flex-1" />
-                        </div>
-                      ))
-                    ) : filteredResumes.length === 0 ? (
-                      <p className="px-3 py-4 text-sm text-fg-muted text-center font-sans">
-                        No candidates found
-                      </p>
-                    ) : (
-                      filteredResumes.map((r) => (
-                        <label
-                          key={r.id}
-                          className="flex items-center gap-3 px-3 py-2.5 hairline-b cursor-pointer hover:bg-[color:var(--hairline)] transition-colors"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedCandIds.has(r.id)}
-                            onChange={() =>
-                              setSelectedCandIds((prev) => {
-                                const n = new Set(prev);
-                                if (n.has(r.id)) n.delete(r.id);
-                                else n.add(r.id);
-                                return n;
-                              })
-                            }
-                            className="h-4 w-4 rounded-[var(--radius-sm)] accent-accent shrink-0"
-                          />
-                          <span className="text-sm font-sans text-fg">
-                            {fileToName(r.original_file_name)}
-                          </span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                  {selectedCandIds.size > 0 && (
-                    <div className="px-3 py-2 border-t border-[color:var(--hairline)] bg-bg text-xs text-fg-muted font-sans">
-                      {selectedCandIds.size} selected
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right: Weights + Config */}
-          <div className="space-y-4">
-
-            {/* Section Weights */}
-            <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-3">
-                Section Weights
-              </h2>
-              <div className="space-y-2">
-                {sections.map((s, i) => (
-                  <div key={s.key} className="flex items-center gap-2.5">
-                    <div
-                      className="h-2 w-2 rounded-full shrink-0"
-                      style={{ backgroundColor: SEG_COLORS[i % SEG_COLORS.length] }}
-                    />
-                    <span className="text-xs font-sans text-fg-muted w-[72px] shrink-0">
-                      {s.label}
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={s.value}
-                      onChange={(e) =>
-                        setSections((prev) =>
-                          prev.map((sec) =>
-                            sec.key === s.key ? { ...sec, value: +e.target.value } : sec
-                          )
-                        )
-                      }
-                      className="flex-1 accent-accent h-1"
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={s.value}
-                      onChange={(e) =>
-                        setSections((prev) =>
-                          prev.map((sec) =>
-                            sec.key === s.key
-                              ? { ...sec, value: Math.min(100, Math.max(0, +e.target.value)) }
-                              : sec
-                          )
-                        )
-                      }
-                      className={cn(
-                        "w-11 h-7 px-1 text-xs font-mono text-center tabular-nums",
-                        "rounded-[var(--radius-sm)] border border-[color:var(--hairline-strong)]",
-                        "bg-bg text-fg outline-none",
-                        "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
-                      )}
-                    />
-                    {!DEFAULT_KEYS.has(s.key) && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSections((prev) => prev.filter((sec) => sec.key !== s.key))
-                        }
-                        className="text-fg-muted hover:text-danger transition-colors"
-                        aria-label={`Remove ${s.label}`}
-                      >
-                        <X size={12} strokeWidth={2} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {availableToAdd.length > 0 && (
-                <div className="relative mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setAddSectionOpen((v) => !v)}
-                    className="inline-flex items-center gap-1.5 text-xs text-fg-muted hover:text-fg transition-colors font-sans"
-                  >
-                    <Plus size={11} strokeWidth={2} />
-                    Add section
-                  </button>
-                  {addSectionOpen && (
-                    <div
-                      className={cn(
-                        "absolute left-0 top-full mt-1 z-10 w-44 py-1",
-                        "rounded-[var(--radius-md)] bg-bg-elevated",
-                        "border border-[color:var(--hairline)] shadow-[var(--shadow-md)]"
-                      )}
-                    >
-                      {availableToAdd.map((es) => (
-                        <button
-                          key={es.key}
-                          type="button"
-                          onClick={() => {
-                            setSections((prev) => [
-                              ...prev,
-                              { key: es.key, label: es.label, value: 10 },
-                            ]);
-                            setAddSectionOpen(false);
-                          }}
-                          className="w-full px-3 py-2 text-left text-sm font-sans text-fg hover:bg-[color:var(--hairline)] transition-colors"
-                        >
-                          {es.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Config */}
-            <div>
-              <h2 className="font-display text-xl font-medium text-fg mb-3">
-                Configuration
-              </h2>
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-sans font-medium text-fg-muted">
-                      Pass threshold
-                    </label>
-                    <span className="font-mono text-sm tabular-nums text-fg">
-                      {threshold}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={threshold}
-                    onChange={(e) => setThreshold(+e.target.value)}
-                    className="w-full accent-accent h-1"
-                  />
-                  <div className="flex justify-between text-[10px] text-fg-subtle mt-1 font-sans">
-                    <span>0 — score all</span>
-                    <span>100 — perfect only</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs font-sans font-medium text-fg-muted block mb-1.5">
-                    Batch size
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={batchSize}
-                    onChange={(e) =>
-                      setBatchSize(Math.min(50, Math.max(1, +e.target.value)))
-                    }
-                    className={cn(
-                      "w-24 h-9 px-3 text-sm font-mono tabular-nums rounded-[var(--radius-md)]",
-                      "border border-[color:var(--hairline-strong)] bg-bg text-fg outline-none",
-                      "focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent"
-                    )}
-                  />
-                  <p className="text-[11px] text-fg-subtle font-sans mt-1">
-                    candidates per LLM batch (1–50)
-                  </p>
-                </div>
-
-                {estSeconds !== null && (
-                  <p className="text-xs text-fg-muted font-sans">
-                    Estimated time:{" "}
-                    <span className="text-fg font-medium tabular-nums">
-                      {estSeconds < 60 ? `~${estSeconds}s` : `~${Math.round(estSeconds / 60)}m`}
-                    </span>
-                    {" "}for{" "}
-                    <span className="text-fg font-medium tabular-nums">
-                      {candidateMode === "all" ? resumeData?.total ?? "all" : selectedCandIds.size}
-                    </span>{" "}
-                    candidates
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <Button
-              variant="primary"
-              size="lg"
-              className="w-full justify-center"
-              icon={<BarChart2 size={16} strokeWidth={2} />}
-              loading={scoringRun?.status === "running" || savingHidden}
-              disabled={!selectedJobId || !workspaceJd}
-              onClick={startScoring}
-            >
-              Start scoring
-            </Button>
-          </div>
+    <div className="px-8 py-8 min-h-full space-y-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="max-w-3xl">
+          <h1 className="font-display text-[2rem] font-medium text-fg">Scoring dashboard</h1>
+          <p className="mt-2 text-sm leading-6 text-fg-muted">
+            Review evaluation status, adjust job-level weights, and requeue outdated results without reopening the scoring wizard.
+          </p>
         </div>
-      )}
-
-      {/* ── STEP 2: Processing ── */}
-      {step === 2 && (
-        <div className="flex flex-col items-center justify-center min-h-[420px] gap-7">
-          <div className="relative w-28 h-28">
-            <div className="absolute inset-0 rounded-full bg-accent/5 animate-ping [animation-duration:2000ms]" />
-            <div className="absolute inset-4 rounded-full bg-accent/10 animate-pulse" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <BarChart2 size={36} strokeWidth={1.25} className="text-accent" />
-            </div>
-          </div>
-
-          <div className="text-center max-w-sm">
-            <h2 className="font-display text-2xl font-medium text-fg mb-2">
-              Scoring candidates
-            </h2>
-            <p className="text-sm text-fg-muted font-sans min-h-[20px] transition-all duration-500">
-              {PROCESSING_MESSAGES[msgIdx]}
-            </p>
-          </div>
-
-          <div className="w-72 h-1 rounded-full bg-[color:var(--hairline)] overflow-hidden">
-            <div
-              className="h-full w-1/3 rounded-full bg-accent"
-              style={{ animation: "indeterminate 1.5s ease-in-out infinite" }}
-            />
-          </div>
-
-          <p className="font-mono text-xs text-fg-subtle tabular-nums">
-            {elapsed}s elapsed
-          </p>
-
-          <p className="text-xs text-fg-muted font-sans text-center max-w-xs">
-            Scoring keeps running in the background, so you can switch tabs and
-            come back when the results are ready.
-          </p>
-
-          <Button variant="secondary" size="sm" disabled className="opacity-40 cursor-not-allowed">
-            Cancel
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            icon={<RefreshCw size={14} strokeWidth={1.75} />}
+            loading={scoreAgain.isPending}
+            onClick={() => void scoreAgain.mutate()}
+          >
+            Score again
+          </Button>
+          <Button
+            variant="primary"
+            icon={<Save size={14} strokeWidth={1.75} />}
+            loading={savePreferences.isPending}
+            disabled={!prefsDirty}
+            onClick={() => void savePreferences.mutate({ section_weights: draftWeights, score_threshold: thresholdDraft })}
+          >
+            Save weights
           </Button>
         </div>
+      </div>
+
+      {showScoreAgain && (
+        <div className="rounded-[var(--radius-lg)] border border-[rgba(184,68,46,0.24)] bg-[rgba(184,68,46,0.06)] px-4 py-3 text-sm text-fg">
+          {evaluations.outdated_count > 0
+            ? `${evaluations.outdated_count} evaluation${evaluations.outdated_count === 1 ? "" : "s"} are outdated because the JD scoring input changed.`
+            : "Some evaluations are missing or failed. Queue scoring again to refresh them."}
+        </div>
       )}
 
-      {/* ── STEP 3: Results ── */}
-      {step === 3 && scoreResult && (
-        <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-4">
+        <SummaryCard label="Candidates" value={String(evaluations.total_candidates)} />
+        <SummaryCard label="Completed" value={String(evaluations.completed_count)} />
+        <SummaryCard label="Average score" value={scoreSummary.average.toFixed(1)} />
+        <SummaryCard label="Highest score" value={scoreSummary.highest.toFixed(1)} />
+      </div>
 
-          {/* Summary strip */}
-          <div className="grid grid-cols-4 gap-4">
-            {[
-              { label: "Total candidates", value: scoreResult.total_candidates },
-              { label: "Passed threshold", value: scoreResult.total_passed_candidates },
-              { label: "Average score", value: avgScore },
-              { label: "Highest score", value: highScore },
-            ].map(({ label, value }) => (
-              <div
-                key={label}
-                className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5"
-              >
-                <p className="text-xs text-fg-muted font-sans mb-1">{label}</p>
-                <p className="font-display text-4xl font-medium text-fg tabular-nums">
-                  {value}
-                </p>
-              </div>
+      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-xl font-medium text-fg">Job weights</h2>
+              <p className="mt-1 text-sm text-fg-muted">
+                Changing weights recalculates displayed totals from stored criterion percentages.
+              </p>
+            </div>
+            {prefsDirty && (
+              <Badge variant="warning" size="sm">
+                Unsaved
+              </Badge>
+            )}
+          </div>
+
+          <div className="mt-5 space-y-4">
+            {orderedWeightEntries.map((entry) => (
+              <label key={entry.key} className="block space-y-2">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-fg">{entry.label}</span>
+                  <span className="font-mono text-fg-muted">{Number(entry.value || 0).toFixed(0)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={entry.value}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    setDraftWeights((current) => ({ ...current, [entry.key]: nextValue }));
+                    setPrefsDirty(true);
+                  }}
+                  className="w-full accent-accent"
+                />
+              </label>
             ))}
           </div>
 
-          {/* Run info bar */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-fg-muted font-sans">Match run:</span>
-              <button
-                type="button"
-                onClick={copyRunId}
-                className="inline-flex items-center gap-1.5 font-mono text-sm text-fg hover:text-accent transition-colors"
-                title="Copy match run ID"
+          <div className="mt-5 border-t border-[color:var(--hairline)] pt-4">
+            <label className="block space-y-2">
+              <span className="text-sm text-fg">Score threshold</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={thresholdDraft}
+                onChange={(event) => {
+                  setThresholdDraft(Number(event.target.value));
+                  setPrefsDirty(true);
+                }}
+                className="w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2 text-sm text-fg"
+              />
+            </label>
+          </div>
+        </section>
+
+        <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated overflow-hidden">
+          <div className="flex items-center justify-between gap-4 border-b border-[color:var(--hairline)] px-5 py-3">
+            <p className="text-sm text-fg-muted">Review candidate results and expand a row for criterion-level detail.</p>
+            <label className="flex items-center gap-3 text-sm text-fg">
+              <span>Sort candidates</span>
+              <select
+                aria-label="Sort candidates"
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value as SortOrder)}
+                className="rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2 text-sm text-fg"
               >
-                {truncateId(scoreResult.match_run_id)}
-                {copiedId ? (
-                  <Check size={13} strokeWidth={2.5} className="text-success" />
-                ) : (
-                  <ClipboardCopy size={13} strokeWidth={1.75} />
-                )}
-              </button>
-              {workspaceJd && (
-                <span className="text-sm text-fg-muted font-sans">
-                  vs{" "}
-                  <span className="text-fg font-medium">
-                    {workspaceJd.title ?? "Untitled position"}
-                  </span>
-                </span>
-              )}
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<RefreshCw size={13} strokeWidth={1.75} />}
-              onClick={resetToSetup}
-            >
-              Score again
-            </Button>
+                <option value="natural">Natural</option>
+                <option value="score_desc">Highest score</option>
+                <option value="score_asc">Lowest score</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid grid-cols-[minmax(220px,1.5fr)_110px_120px_100px] gap-4 border-b border-[color:var(--hairline)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+            <span>Candidate</span>
+            <span>Score</span>
+            <span>Status</span>
+            <span>Passed</span>
           </div>
 
-          {(scoringRun?.hiddenTextSnapshot || hiddenText.trim()) && (
-            <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
-              <div className="flex items-center justify-between gap-4 mb-2">
-                <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted font-sans">
-                  Recruiter-only hidden information
-                </p>
-                <span className="text-[11px] text-fg-subtle font-sans">
-                  Snapshot used for this run
-                </span>
-              </div>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg font-sans">
-                {scoringRun?.hiddenTextSnapshot || hiddenText.trim()}
-              </p>
-            </div>
-          )}
-
-          {/* Results table */}
-          <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] overflow-hidden">
-            <table className="w-full border-collapse font-sans text-sm">
-              <thead className="sticky top-0 z-10 bg-bg">
-                <tr className="hairline-b">
-                  <th className="w-10 px-4 py-2.5">
-                    <input
-                      type="checkbox"
-                      aria-label="Select all"
-                      checked={
-                        scoreResult.scores.length > 0 &&
-                        selIds.size === scoreResult.scores.length
-                      }
-                      onChange={(e) =>
-                        setSelIds(
-                          e.target.checked
-                            ? new Set(scoreResult.scores.map((s) => s.candidateId))
-                            : new Set()
-                        )
-                      }
-                      className="h-4 w-4 rounded-[var(--radius-sm)] accent-accent cursor-pointer"
-                    />
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-fg-subtle w-10">
-                    #
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-fg-subtle">
-                    Candidate
-                  </th>
-                  <th
-                    className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-fg-subtle cursor-pointer hover:text-fg transition-colors select-none"
-                    onClick={() => toggleResultSort("totalScore")}
+          <div className="divide-y divide-[color:var(--hairline)]">
+            {displayedItems.map((item) => {
+              const isExpanded = expandedCandidateId === item.candidate_profile_id;
+              return (
+                <div key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedCandidateId(isExpanded ? null : item.candidate_profile_id)}
+                    className="grid w-full grid-cols-[minmax(220px,1.5fr)_110px_120px_100px] gap-4 px-5 py-4 text-left transition-colors hover:bg-[color:var(--hairline)]"
                   >
-                    <span className="inline-flex items-center gap-1">
-                      Score
-                      {resultSort.key === "totalScore" &&
-                        (resultSort.dir === "asc" ? (
-                          <ChevronUp size={12} strokeWidth={2} />
-                        ) : (
-                          <ChevronDown size={12} strokeWidth={2} />
-                        ))}
-                    </span>
-                  </th>
-                  <th
-                    className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-fg-subtle cursor-pointer hover:text-fg transition-colors select-none"
-                    onClick={() => toggleResultSort("passed")}
-                  >
-                    <span className="inline-flex items-center gap-1">
-                      Result
-                      {resultSort.key === "passed" &&
-                        (resultSort.dir === "asc" ? (
-                          <ChevronUp size={12} strokeWidth={2} />
-                        ) : (
-                          <ChevronDown size={12} strokeWidth={2} />
-                        ))}
-                    </span>
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-fg-subtle">
-                    Breakdown
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-fg-subtle">
-                    Rationale
-                  </th>
-                  <th className="w-10 px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {sortedScores.map((score, idx) => (
-                  <Fragment key={score.candidateId}>
-                    <tr
-                      className={cn(
-                        "hairline-b transition-colors hover:bg-[color:var(--hairline)]",
-                        selIds.has(score.candidateId) && "bg-[rgba(31,58,46,0.04)]"
-                      )}
-                    >
-                      <td className="w-10 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selIds.has(score.candidateId)}
-                          onChange={() => toggleSel(score.candidateId)}
-                          className="h-4 w-4 rounded-[var(--radius-sm)] accent-accent cursor-pointer"
-                        />
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-fg-muted tabular-nums">
-                        {idx + 1}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar name={candidateDisplayLabel(score)} size="sm" />
-                          <span
-                            className="max-w-[220px] truncate text-sm font-medium text-fg"
-                            title={score.resumeFileName || score.candidateId}
-                          >
-                            {candidateDisplayLabel(score)}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className="font-display text-2xl font-medium tabular-nums"
-                          style={{ color: scoreColor(score.totalScore) }}
-                        >
-                          {score.totalScore}
+                    <span className="flex items-center gap-3">
+                      <Avatar name={candidateDisplayLabel(item)} size="sm" />
+                      <span className="min-w-0">
+                        <span data-testid="scoring-candidate-name" className="block truncate text-sm font-medium text-fg">
+                          {candidateDisplayLabel(item)}
                         </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge
-                          variant={score.passedThreshold ? "success" : "neutral"}
-                          size="sm"
-                          dot
-                        >
-                          {score.passedThreshold ? "Passed" : "Failed"}
+                        <span className="block truncate text-xs text-fg-muted">{item.resumeFileName ?? item.candidate_profile_id}</span>
+                      </span>
+                    </span>
+                    <span className="font-display text-2xl font-medium text-fg tabular-nums">
+                      {item.status === "completed" || item.status === "outdated" ? item.totalScore.toFixed(1) : "—"}
+                    </span>
+                    <span>
+                      <Badge variant={scoreVariant(item.status)} size="sm">
+                        {item.status}
+                      </Badge>
+                    </span>
+                    <span>
+                      {item.status === "completed" || item.status === "outdated" ? (
+                        <Badge variant={item.passedThreshold ? "success" : "danger"} size="sm">
+                          {item.passedThreshold ? "Passed" : "Failed"}
                         </Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-end gap-0.5 h-6">
-                          {score.componentScores.map((cs, ci) => (
-                            <div
-                              key={cs.criterionKey}
-                              title={`${cs.criterionKey}: ${cs.score}`}
-                              className="w-3 rounded-sm"
-                              style={{
-                                height: `${Math.max(4, (cs.score / 100) * 24)}px`,
-                                backgroundColor: SEG_COLORS[ci % SEG_COLORS.length],
-                                opacity: 0.85,
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 max-w-[240px]">
-                        <p className="text-xs text-fg-muted line-clamp-2 leading-relaxed">
-                          {score.rationale}
-                        </p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => toggleExpand(score.candidateId)}
-                          className="inline-flex items-center justify-center h-6 w-6 rounded-[var(--radius-sm)] text-fg-muted hover:text-fg hover:bg-[color:var(--hairline)] transition-colors"
-                        >
-                          {expandedIds.has(score.candidateId) ? (
-                            <ChevronUp size={13} strokeWidth={2} />
-                          ) : (
-                            <ChevronDown size={13} strokeWidth={2} />
-                          )}
-                        </button>
-                      </td>
-                    </tr>
+                      ) : (
+                        <span className="text-sm text-fg-muted">—</span>
+                      )}
+                    </span>
+                  </button>
 
-                    {expandedIds.has(score.candidateId) && (
-                      <tr className="bg-bg-elevated">
-                        <td colSpan={8} className="px-8 py-6">
-                          <div className="grid gap-8 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
-                            <div className="space-y-5">
-                              <div>
-                                <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
-                                  Full Rationale
-                                </p>
-                                <p className="text-sm text-fg font-sans leading-relaxed">
-                                  {score.rationale}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
-                                  Component Scores
-                                </p>
-                                <table className="w-full text-xs font-sans border-collapse">
-                                  <thead>
-                                    <tr className="hairline-b">
-                                      <th className="py-1.5 pr-3 text-left text-fg-subtle font-medium">
-                                        Criterion
-                                      </th>
-                                      <th className="py-1.5 pr-3 text-right text-fg-subtle font-medium tabular-nums">
-                                        Wt
-                                      </th>
-                                      <th className="py-1.5 pr-3 text-right text-fg-subtle font-medium tabular-nums">
-                                        Score
-                                      </th>
-                                      <th className="py-1.5 pr-3 text-right text-fg-subtle font-medium tabular-nums">
-                                        Weighted
-                                      </th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {score.componentScores.map((cs) => (
-                                      <tr key={cs.criterionKey} className="hairline-b">
-                                        <td className="py-2 pr-3 text-fg">
-                                          <div className="flex items-center gap-2">
-                                            <span className="font-medium">
-                                              {formatCriterionLabel(cs.criterionKey, cs.requirementText)}
-                                            </span>
-                                            {cs.evaluationMode && (
-                                              <Badge
-                                                variant={cs.evaluationMode === "semantic" ? "neutral" : "success"}
-                                                size="sm"
-                                              >
-                                                {cs.evaluationMode === "semantic" ? "Semantic" : "Rule-based"}
-                                              </Badge>
-                                            )}
-                                          </div>
-                                        </td>
-                                        <td className="py-2 pr-3 text-right text-fg-muted tabular-nums">
-                                          {cs.weight}
-                                        </td>
-                                        <td className="py-2 pr-3 text-right text-fg tabular-nums">
-                                          {cs.score}
-                                        </td>
-                                        <td className="py-2 pr-3 text-right text-fg tabular-nums">
-                                          {cs.weightedScore}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                                {score.componentScores.some((cs) => cs.evidenceSummary) && (
-                                  <div className="mt-3 space-y-1.5">
-                                    {score.componentScores
-                                      .filter((cs) => cs.evidenceSummary)
-                                      .map((cs) => (
-                                        <p
-                                          key={cs.criterionKey}
-                                          className="text-[11px] text-fg-muted italic font-sans"
-                                        >
-                                          <span className="not-italic font-medium text-fg-subtle">
-                                            {formatCriterionLabel(cs.criterionKey, cs.requirementText)}:
-                                          </span>{" "}
-                                          {cs.evidenceSummary}
-                                        </p>
-                                      ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-2 font-sans">
-                                Score Radar
-                              </p>
-                              <p className="mb-4 max-w-[42rem] text-[11px] leading-relaxed text-fg-subtle font-sans">
-                                Radar labels are shortened for readability. The full requirement text stays in
-                                Component Scores.
-                              </p>
-                              <ScoreRadar
-                                data={score.componentScores.map((cs) => ({
-                                  subject: formatRadarCriterionLabel(cs.criterionKey, cs.requirementText),
-                                  value: cs.score,
-                                  fullMark: 100,
-                                }))}
-                                size={420}
-                              />
-                            </div>
+                  {isExpanded && (
+                    <div className="bg-bg px-5 pb-5">
+                      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+                        <div className="space-y-4 rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated p-4">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-fg-muted">Rationale</p>
+                            <p className="mt-2 text-sm leading-6 text-fg">{item.rationale || "No rationale available yet."}</p>
                           </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
-      {/* Bulk action bar */}
-      {step === 3 && selIds.size > 0 && (
-        <div
-          className={cn(
-            "fixed bottom-6 left-1/2 -translate-x-1/2 z-30",
-            "flex items-center gap-3 px-5 py-3 rounded-[var(--radius-lg)]",
-            "bg-fg text-bg shadow-[var(--shadow-lg)]",
-          )}
-        >
-          <span className="font-sans text-sm font-medium tabular-nums">
-            {selIds.size} selected
-          </span>
-          <div className="w-px h-4 bg-current opacity-20" />
-          <button
-            type="button"
-            className="text-sm font-sans font-medium text-bg/80 hover:text-bg transition-colors"
-          >
-            Add {selIds.size} to shortlist
-          </button>
-          <button
-            type="button"
-            className="text-sm font-sans font-medium text-bg/80 hover:text-bg transition-colors"
-          >
-            Export
-          </button>
-          <button
-            type="button"
-            className="text-sm font-sans font-medium text-bg/80 hover:text-bg transition-colors"
-          >
-            Draft outreach
-          </button>
-          <div className="w-px h-4 bg-current opacity-20" />
-          <button
-            type="button"
-            onClick={() => setSelIds(new Set())}
-            className="text-sm font-sans font-medium text-bg/40 hover:text-bg transition-colors"
-          >
-            Clear
-          </button>
-        </div>
-      )}
+                          <div className="space-y-3">
+                            {item.componentScores.length === 0 ? (
+                              <p className="text-sm text-fg-muted">No component scores available yet.</p>
+                            ) : (
+                              item.componentScores.map((component) => (
+                                <div
+                                  key={`${item.id}-${component.criterionKey}`}
+                                  className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg p-3"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-medium text-fg">{formatCriterionLabel(component)}</p>
+                                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                                        <Badge
+                                          variant={component.evaluationMode === "measurable" ? "success" : "neutral"}
+                                          size="sm"
+                                        >
+                                          {component.evaluationMode === "measurable" ? "Rule-based" : "Semantic"}
+                                        </Badge>
+                                        {component.section && (
+                                          <span className="text-xs text-fg-muted">{SECTION_LABELS[component.section] ?? component.section}</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="font-mono text-lg text-fg tabular-nums">{component.scorePercent.toFixed(1)}%</p>
+                                      <p className="text-xs text-fg-muted">
+                                        {(component.effectiveWeight ?? 0).toFixed(2)} × {component.weightedScore.toFixed(1)}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {component.evidenceSummary && (
+                                    <p className="mt-3 text-sm leading-6 text-fg-muted">{component.evidenceSummary}</p>
+                                  )}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-bg-elevated p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-fg-muted">Evaluation state</p>
+                          <dl className="mt-4 space-y-3 text-sm">
+                            <div className="flex items-center justify-between gap-4">
+                              <dt className="text-fg-muted">Status</dt>
+                              <dd><Badge variant={scoreVariant(item.status)} size="sm">{item.status}</Badge></dd>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <dt className="text-fg-muted">Threshold</dt>
+                              <dd className="font-mono text-fg">{thresholdDraft.toFixed(1)}</dd>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <dt className="text-fg-muted">Passed</dt>
+                              <dd className={cn("font-medium", item.passedThreshold ? "text-success" : "text-danger")}>
+                                {item.passedThreshold ? "Yes" : "No"}
+                              </dd>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <dt className="text-fg-muted">Components</dt>
+                              <dd className="font-mono text-fg">{item.componentScores.length}</dd>
+                            </div>
+                          </dl>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-fg-muted">{label}</p>
+      <p className="mt-3 font-display text-3xl font-medium text-fg tabular-nums">{value}</p>
     </div>
   );
 }

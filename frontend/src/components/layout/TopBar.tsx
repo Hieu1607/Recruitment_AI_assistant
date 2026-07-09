@@ -1,8 +1,9 @@
 import { api } from "@/api";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Bell, Command, ChevronRight, BriefcaseBusiness, ChevronDown, PanelLeftOpen } from "lucide-react";
+import { Search, Command, ChevronRight, BriefcaseBusiness, ChevronDown, PanelLeftOpen } from "lucide-react";
 import { Link, useMatches, useLocation } from "react-router";
 import { UserMenu } from "./UserMenu";
 import { routes } from "@/routes";
@@ -133,6 +134,7 @@ export function TopBar({
       <div className="flex-1 max-w-xl ml-auto">
         <button
           type="button"
+          onClick={() => window.dispatchEvent(new Event("easyhr:open-command-palette"))}
           className="flex items-center gap-3 w-full px-3 py-2 rounded-md hairline text-fg-subtle hover:text-fg-muted transition-colors text-left"
           aria-label="Search (Cmd K)"
         >
@@ -146,20 +148,7 @@ export function TopBar({
 
       {/* Right actions */}
       <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          aria-label="Notifications"
-          className="size-9 rounded-md flex items-center justify-center text-fg-muted hover:text-fg hover:bg-[color:var(--hairline)] transition-colors"
-        >
-          <Bell size={16} strokeWidth={1.5} />
-        </button>
-        <button
-          type="button"
-          aria-label="Command palette"
-          className="size-9 rounded-md flex items-center justify-center text-fg-muted hover:text-fg hover:bg-[color:var(--hairline)] transition-colors"
-        >
-          <Command size={16} strokeWidth={1.5} />
-        </button>
+        <NotificationCenter />
         <UserMenu />
       </div>
     </header>

@@ -51,9 +51,57 @@ def process_resume(
                 resume_document_id,
                 result.get("extraction_mode", "unknown"),
             )
+            candidate_profile_id = result.get("candidate_profile_id")
+            if candidate_profile_id:
+                from src.models.session import SessionLocal
+                from src.services.candidate_evaluation_service import queue_candidate_evaluation_for_current_jd
+
+                with SessionLocal() as db:
+                    queued = queue_candidate_evaluation_for_current_jd(
+                        db=db,
+                        candidate_profile_id=uuid.UUID(str(candidate_profile_id)),
+                    )
+                if not queued:
+                    logger.info(
+                        "candidate evaluation not queued for %s because no active JD or current evaluation already exists",
+                        candidate_profile_id,
+                    )
         return result
     except Exception as exc:
         logger.exception("process_resume crashed for %s", resume_document_id)
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="worker.tasks.evaluate_candidate",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    acks_late=True,
+)
+def evaluate_candidate(self, candidate_profile_id: str):
+    logger.info("evaluate_candidate started for %s", candidate_profile_id)
+    try:
+        from src.models.session import SessionLocal
+        from src.services.candidate_evaluation_service import evaluate_candidate_for_current_jd
+
+        with SessionLocal() as db:
+            evaluation = evaluate_candidate_for_current_jd(
+                db=db,
+                candidate_profile_id=uuid.UUID(candidate_profile_id),
+            )
+            logger.info(
+                "evaluate_candidate finished for %s with status %s",
+                candidate_profile_id,
+                evaluation.status,
+            )
+            return {
+                "candidate_profile_id": candidate_profile_id,
+                "evaluation_id": str(evaluation.id),
+                "status": str(evaluation.status),
+            }
+    except Exception as exc:
+        logger.exception("evaluate_candidate crashed for %s", candidate_profile_id)
         raise self.retry(exc=exc)
 
 

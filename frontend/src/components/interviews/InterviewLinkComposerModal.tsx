@@ -2,7 +2,7 @@ import {
   api,
   type CandidateProfileResponse,
   type DispatchCandidateResponse,
-  type QuestionSetResponse,
+  type InterviewTemplateResponse,
 } from "@/api";
 import {
   Button,
@@ -14,11 +14,12 @@ import {
   ModalHeader,
   ModalTitle,
 } from "@/components/ui";
-import { useUserId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Layers, UserRound, Users } from "lucide-react";
+import { Check, ChevronDown, Layers, UserRound, Users } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 type SourceMode = "individual" | "shortlist";
@@ -35,13 +36,6 @@ type CreateSummary = {
   skippedCount: number;
   failedCount: number;
 };
-
-function formatQuestionSetLabel(questionSet: QuestionSetResponse) {
-  const createdAt = new Date(questionSet.created_at).toLocaleDateString();
-  return questionSet.candidate_full_name
-    ? `${questionSet.candidate_full_name} · ${createdAt}`
-    : `${questionSet.job_description_title || "Question set"} · ${createdAt}`;
-}
 
 function toPreviewCandidate(candidate: CandidateProfileResponse | DispatchCandidateResponse): PreviewCandidate {
   if ("candidate_profile_id" in candidate) {
@@ -114,10 +108,10 @@ export function InterviewLinkComposerModal({
   onOpenChange: (open: boolean) => void;
   jobId: string | null;
 }) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const userId = useUserId();
   const [sourceMode, setSourceMode] = useState<SourceMode>("individual");
-  const [questionSetId, setQuestionSetId] = useState("");
+  const [templateId, setTemplateId] = useState("");
   const [expiresInHours, setExpiresInHours] = useState("72");
   const [shortlistId, setShortlistId] = useState("");
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
@@ -125,7 +119,7 @@ export function InterviewLinkComposerModal({
   useEffect(() => {
     if (!open) return;
     setSourceMode("individual");
-    setQuestionSetId("");
+    setTemplateId("");
     setExpiresInHours("72");
     setShortlistId("");
     setSelectedCandidateIds(new Set());
@@ -138,16 +132,10 @@ export function InterviewLinkComposerModal({
     }
   }, [sourceMode]);
 
-  const { data: jobDescription, isLoading: jobDescriptionLoading } = useQuery({
-    queryKey: ["job-description", jobId],
-    queryFn: () => api.jobs.jobDescription.get(jobId!).catch(() => null),
+  const { data: templatesData, isLoading: templatesLoading } = useQuery({
+    queryKey: ["interview-templates", jobId],
+    queryFn: () => api.interviewTemplates.list(jobId!),
     enabled: open && !!jobId,
-  });
-
-  const { data: questionSetsData, isLoading: questionSetsLoading } = useQuery({
-    queryKey: ["interview-question-sets", jobDescription?.id],
-    queryFn: () => api.interviewQuestions.list({ job_description_id: jobDescription!.id, limit: 200 }),
-    enabled: open && !!jobDescription?.id,
   });
 
   const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
@@ -157,9 +145,9 @@ export function InterviewLinkComposerModal({
   });
 
   const { data: shortlistsData, isLoading: shortlistsLoading } = useQuery({
-    queryKey: ["shortlist-collections", userId],
-    queryFn: () => api.shortlist.collections.list({ user_id: userId!, limit: 200 }),
-    enabled: open && sourceMode === "shortlist" && !!userId,
+    queryKey: ["collections"],
+    queryFn: () => api.shortlist.collections.list({ limit: 200 }),
+    enabled: open && sourceMode === "shortlist",
   });
 
   const { data: shortlistSummary, isLoading: shortlistSummaryLoading } = useQuery({
@@ -195,7 +183,10 @@ export function InterviewLinkComposerModal({
 
   const selectedPreviewCandidates = previewCandidates.filter((candidate) => selectedCandidateIds.has(candidate.id));
   const allSelected = previewCandidates.length > 0 && selectedCandidateIds.size === previewCandidates.length;
-  const questionSets = questionSetsData?.items ?? [];
+  const templates = (templatesData?.items ?? []).filter(
+    (template: InterviewTemplateResponse) => template.status === "active",
+  );
+  const hasNoActiveTemplates = !!jobId && !templatesLoading && templates.length === 0;
 
   const createMutation = useMutation({
     mutationFn: async (): Promise<CreateSummary> => {
@@ -204,7 +195,7 @@ export function InterviewLinkComposerModal({
         const result = await api.shortlist.dispatch.createInterviewInvitations(shortlistId, {
           candidate_profile_ids: [...selectedCandidateIds],
           job_id: jobId!,
-          interview_question_set_id: questionSetId,
+          interview_template_id: templateId,
           expires_in_hours: expires,
           send_email: false,
         });
@@ -220,7 +211,7 @@ export function InterviewLinkComposerModal({
           api.interviewInvitations.create({
             job_id: jobId!,
             candidate_profile_id: candidateId,
-            interview_question_set_id: questionSetId,
+            interview_template_id: templateId,
             expires_in_hours: expires,
             send_email: false,
           }),
@@ -277,9 +268,17 @@ export function InterviewLinkComposerModal({
 
   const createDisabled =
     !jobId ||
-    !questionSetId ||
+    !templateId ||
     selectedCandidateIds.size === 0 ||
     (sourceMode === "shortlist" && (!shortlistId || !shortlistMatchesJob));
+
+  function goToTemplateCreation() {
+    onOpenChange(false);
+    navigate({
+      pathname: routes.interviewTemplates,
+      search: "?create=1",
+    });
+  }
 
   return (
     <Modal open={open} onOpenChange={onOpenChange}>
@@ -287,7 +286,7 @@ export function InterviewLinkComposerModal({
         <ModalHeader>
           <ModalTitle>Create interview links</ModalTitle>
           <ModalDescription>
-            Choose a source, pick an interview question set, then review who should receive a draft link. Links are created now and not sent yet.
+            Choose a source, pick an interview template, then review who should receive a draft link. Links are created now and not sent yet.
           </ModalDescription>
         </ModalHeader>
 
@@ -296,14 +295,14 @@ export function InterviewLinkComposerModal({
             heading="Select a job first"
             body="Pick the active job in the top bar before creating interview links."
           />
-        ) : jobDescriptionLoading ? (
-          <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] px-4 py-6 text-sm text-fg-muted">
-            Loading job context...
-          </div>
-        ) : !jobDescription ? (
+        ) : hasNoActiveTemplates ? (
           <EmptyState
-            heading="No active job description"
-            body="Interview question sets depend on the active job description for the selected job."
+            heading="No active interview templates"
+            body="Create an active interview template for this job first. We will take you to the template editor before you create links."
+            action={{
+              label: "Create interview template",
+              onClick: goToTemplateCreation,
+            }}
           />
         ) : (
           <div className="space-y-5">
@@ -327,54 +326,70 @@ export function InterviewLinkComposerModal({
               </div>
             </section>
 
-            <section className="space-y-4">
-              <label className="space-y-1.5">
-                <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Interview question set</span>
-                <select
-                  aria-label="Interview question set"
-                  value={questionSetId}
-                  onChange={(event) => setQuestionSetId(event.target.value)}
-                  className={cn(
-                    "h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3",
-                    "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
-                  )}
-                >
-                  <option value="">
-                    {questionSetsLoading ? "Loading question sets..." : "Select question set..."}
-                  </option>
-                  {questionSets.map((questionSet) => (
-                    <option key={questionSet.id} value={questionSet.id}>
-                      {formatQuestionSetLabel(questionSet)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {sourceMode === "shortlist" && (
-                <label className="space-y-1.5">
-                  <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Shortlist</span>
+            <section className="space-y-5">
+              <label className="space-y-2">
+                <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Interview template</span>
+                <div className="relative">
                   <select
-                    aria-label="Shortlist"
-                    value={shortlistId}
-                    onChange={(event) => setShortlistId(event.target.value)}
+                    aria-label="Interview template"
+                    value={templateId}
+                    onChange={(event) => setTemplateId(event.target.value)}
                     className={cn(
-                      "h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3",
+                      "h-11 w-full appearance-none rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3.5 pr-10",
                       "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
                     )}
                   >
                     <option value="">
-                      {shortlistsLoading ? "Loading shortlists..." : "Select shortlist..."}
+                      {templatesLoading ? "Loading templates..." : "Select template..."}
                     </option>
-                    {(shortlistsData?.items ?? []).map((collection) => (
-                      <option key={collection.id} value={collection.id}>
-                        {collection.name} ({collection.item_count})
+                    {templates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
                       </option>
                     ))}
                   </select>
+                  <ChevronDown
+                    size={16}
+                    strokeWidth={1.75}
+                    className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+                    aria-hidden="true"
+                  />
+                </div>
+              </label>
+
+              {sourceMode === "shortlist" && (
+                <label className="space-y-2">
+                  <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Shortlist</span>
+                  <div className="relative">
+                    <select
+                      aria-label="Shortlist"
+                      value={shortlistId}
+                      onChange={(event) => setShortlistId(event.target.value)}
+                      className={cn(
+                        "h-11 w-full appearance-none rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3.5 pr-10",
+                        "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
+                      )}
+                    >
+                      <option value="">
+                        {shortlistsLoading ? "Loading shortlists..." : "Select shortlist..."}
+                      </option>
+                      {(shortlistsData?.items ?? []).map((collection) => (
+                        <option key={collection.id} value={collection.id}>
+                          {collection.name} ({collection.item_count})
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown
+                      size={16}
+                      strokeWidth={1.75}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+                      aria-hidden="true"
+                    />
+                  </div>
                 </label>
               )}
 
-              <label className="space-y-1.5">
+              <label className="space-y-2">
                 <span className="block text-xs font-medium uppercase tracking-wide text-fg-muted">Expires in hours</span>
                 <input
                   aria-label="Expires in hours"
@@ -382,19 +397,14 @@ export function InterviewLinkComposerModal({
                   value={expiresInHours}
                   onChange={(event) => setExpiresInHours(event.target.value)}
                   className={cn(
-                    "h-10 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3",
+                    "h-11 w-full rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3.5",
                     "text-sm text-fg outline-none focus:outline focus:outline-2 focus:outline-offset-1 focus:outline-accent",
                   )}
                 />
               </label>
             </section>
 
-            {questionSets.length === 0 && !questionSetsLoading ? (
-              <EmptyState
-                heading="No interview question sets"
-                body="Generate at least one interview question set for this job before creating links here."
-              />
-            ) : sourceMode === "shortlist" && shortlistId && !shortlistMatchesJob ? (
+            {sourceMode === "shortlist" && shortlistId && !shortlistMatchesJob ? (
               <div className="rounded-[var(--radius-md)] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
                 This shortlist belongs to a different job. Choose a shortlist for the active job.
               </div>
@@ -478,14 +488,16 @@ export function InterviewLinkComposerModal({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            loading={createMutation.isPending}
-            disabled={createDisabled}
-            icon={<Users size={14} strokeWidth={1.75} />}
-            onClick={() => createMutation.mutate()}
-          >
-            Create links
-          </Button>
+          {!hasNoActiveTemplates && (
+            <Button
+              loading={createMutation.isPending}
+              disabled={createDisabled}
+              icon={<Users size={14} strokeWidth={1.75} />}
+              onClick={() => createMutation.mutate()}
+            >
+              Create links
+            </Button>
+          )}
         </ModalFooter>
       </ModalContent>
     </Modal>

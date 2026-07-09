@@ -207,32 +207,29 @@ def _build_report_prompt(
         "Required JSON shape:\n"
         "{\n"
         '  "candidate_overview": "string",\n'
-        '  "competencies": [\n'
+        '  "questions": [\n'
         '    {\n'
-        '      "name": "string",\n'
-        '      "summary": "string",\n'
-        '      "evidence": [\n'
-        '        {\n'
-        '          "transcript_turn_id": "uuid",\n'
-        '          "turn_index": 0,\n'
-        '          "question_key": "string or null",\n'
-        '          "speaker_role": "string",\n'
-        '          "transcript_text": "string"\n'
-        "        }\n"
-        "      ]\n"
+        '      "question_key": "string or null",\n'
+        '      "question_text": "string (the interviewer question, copied from the assistant turn transcript_text)",\n'
+        '      "question_transcript_turn_id": "uuid (the assistant turn that asked this question)",\n'
+        '      "question_turn_index": 0,\n'
+        '      "answer_text": "string (the candidate answer, copied from the candidate turn transcript_text)",\n'
+        '      "answer_transcript_turn_id": "uuid (the candidate turn that answered this question)",\n'
+        '      "answer_turn_index": 0,\n'
+        '      "evaluation": "string (a descriptive, evidence-based assessment of this specific answer)"\n'
         "    }\n"
         "  ],\n"
-        '  "communication_summary": "string",\n'
-        '  "follow_up_topics": ["string"],\n'
         '  "overall_summary": "string"\n'
         "}\n"
         "Constraints:\n"
-        "- Be descriptive and evidence-based.\n"
-        "- At least one competency is required.\n"
-        "- Every competency must include at least one evidence item copied from the transcript metadata above.\n"
-        "- Do not provide hiring recommendations or accept/reject language.\n"
+        "- Include one entry in \"questions\" for every assistant question that received a candidate answer, in transcript order.\n"
+        "- question_text and answer_text must be copied verbatim from the transcript metadata above.\n"
+        "- question_transcript_turn_id/question_turn_index must reference the assistant turn; "
+        "answer_transcript_turn_id/answer_turn_index must reference the candidate turn.\n"
+        "- The evaluation must be descriptive and grounded strictly in that answer's content.\n"
+        "- Do not provide hiring recommendations or accept/reject language anywhere.\n"
         "- Use only details supported by the transcript.\n"
-        f"- Write every summary field in {language_name}.\n"
+        f"- Write every text field in {language_name}.\n"
         f"Candidate: {candidate_name}\n"
         f"Template rubric: {json.dumps(rubric, ensure_ascii=True)}\n"
         f"Template questions: {json.dumps(question_payload, ensure_ascii=True)}\n"
@@ -263,35 +260,20 @@ def _render_markdown_summary(report_summary: InterviewReportSummary) -> str:
         "## Tổng quan ứng viên" if vi else "## Candidate Overview",
         report_summary.candidate_overview,
         "",
-        "## Năng lực" if vi else "## Competencies",
+        "## Câu hỏi & Đánh giá" if vi else "## Questions & Answers",
     ]
-    for competency in report_summary.competencies:
-        lines.extend([f"### {competency.name}", competency.summary, "Bằng chứng:" if vi else "Evidence:"])
-        for evidence_item in competency.evidence:
-            context_parts = [
-                f"lượt {evidence_item.turn_index}" if vi else f"turn {evidence_item.turn_index}",
-                evidence_item.speaker_role,
+    for index, question_item in enumerate(report_summary.questions, start=1):
+        heading = f"### {vi and 'Câu hỏi' or 'Question'} {index}: {question_item.question_text}"
+        lines.extend(
+            [
+                heading,
+                f"**{'Trả lời' if vi else 'Answer'}:** {question_item.answer_text}",
+                f"**{'Đánh giá' if vi else 'Evaluation'}:** {question_item.evaluation}",
+                "",
             ]
-            if evidence_item.question_key:
-                context_parts.append(
-                    f"câu hỏi {evidence_item.question_key}" if vi else f"question {evidence_item.question_key}"
-                )
-            lines.append(f"- ({', '.join(context_parts)}) {evidence_item.transcript_text}")
-        lines.append("")
+        )
 
-    lines.extend(
-        [
-            "## Đánh giá giao tiếp" if vi else "## Communication Summary",
-            report_summary.communication_summary,
-            "",
-            "## Các chủ đề cần theo dõi" if vi else "## Follow-Up Topics",
-        ]
-    )
-    if report_summary.follow_up_topics:
-        lines.extend(f"- {topic}" for topic in report_summary.follow_up_topics)
-    else:
-        lines.append("- Không có" if vi else "- None noted")
-    lines.extend(["", "## Tổng kết chung" if vi else "## Overall Summary", report_summary.overall_summary])
+    lines.extend(["## Tổng kết chung" if vi else "## Overall Summary", report_summary.overall_summary])
     return "\n".join(lines).strip()
 
 
@@ -300,28 +282,46 @@ def _validate_report_evidence_links(
     transcript_turns: list[InterviewTranscriptTurn],
 ) -> None:
     transcript_lookup = {str(turn.id): turn for turn in transcript_turns}
-    for competency in report_summary.competencies:
-        for evidence_item in competency.evidence:
-            transcript_turn = transcript_lookup.get(evidence_item.transcript_turn_id)
-            if transcript_turn is None:
-                raise ValueError(f"Evidence references unknown transcript turn: {evidence_item.transcript_turn_id}")
-            expected_question_key = (transcript_turn.payload or {}).get("question_key")
-            if transcript_turn.turn_index != evidence_item.turn_index:
-                raise ValueError(
-                    f"Evidence turn_index mismatch for transcript turn {evidence_item.transcript_turn_id}"
-                )
-            if expected_question_key != evidence_item.question_key:
-                raise ValueError(
-                    f"Evidence question_key mismatch for transcript turn {evidence_item.transcript_turn_id}"
-                )
-            if transcript_turn.speaker_role != evidence_item.speaker_role:
-                raise ValueError(
-                    f"Evidence speaker_role mismatch for transcript turn {evidence_item.transcript_turn_id}"
-                )
-            if transcript_turn.transcript_text != evidence_item.transcript_text:
-                raise ValueError(
-                    f"Evidence transcript_text mismatch for transcript turn {evidence_item.transcript_turn_id}"
-                )
+    for question_item in report_summary.questions:
+        _validate_report_turn_link(
+            transcript_lookup,
+            transcript_turn_id=question_item.question_transcript_turn_id,
+            turn_index=question_item.question_turn_index,
+            expected_speaker_role="assistant",
+            transcript_text=question_item.question_text,
+            question_key=question_item.question_key,
+        )
+        _validate_report_turn_link(
+            transcript_lookup,
+            transcript_turn_id=question_item.answer_transcript_turn_id,
+            turn_index=question_item.answer_turn_index,
+            expected_speaker_role="candidate",
+            transcript_text=question_item.answer_text,
+            question_key=question_item.question_key,
+        )
+
+
+def _validate_report_turn_link(
+    transcript_lookup: dict[str, InterviewTranscriptTurn],
+    *,
+    transcript_turn_id: str,
+    turn_index: int,
+    expected_speaker_role: str,
+    transcript_text: str,
+    question_key: str | None,
+) -> None:
+    transcript_turn = transcript_lookup.get(transcript_turn_id)
+    if transcript_turn is None:
+        raise ValueError(f"Evidence references unknown transcript turn: {transcript_turn_id}")
+    expected_question_key = (transcript_turn.payload or {}).get("question_key")
+    if transcript_turn.turn_index != turn_index:
+        raise ValueError(f"Evidence turn_index mismatch for transcript turn {transcript_turn_id}")
+    if expected_question_key != question_key:
+        raise ValueError(f"Evidence question_key mismatch for transcript turn {transcript_turn_id}")
+    if transcript_turn.speaker_role != expected_speaker_role:
+        raise ValueError(f"Evidence speaker_role mismatch for transcript turn {transcript_turn_id}")
+    if transcript_turn.transcript_text != transcript_text:
+        raise ValueError(f"Evidence transcript_text mismatch for transcript turn {transcript_turn_id}")
 
 
 def _get_session_with_context(db: Session, interview_session_id: uuid.UUID) -> InterviewSession:

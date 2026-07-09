@@ -28,9 +28,18 @@ class MatchRunStatus(str, Enum):
     FAILED = "failed"
 
 
+class CandidateEvaluationStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    OUTDATED = "outdated"
+
+
 class ContentSource(str, Enum):
     AI_DRAFT = "ai_draft"
     TEMPLATE = "template"
+    MANUAL = "manual"
 
 
 class SentStatus(str, Enum):

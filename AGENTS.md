@@ -18,3 +18,7 @@ This repo is configured as single-context. See `docs/agents/domain.md`.
 
 ### MCP
 Use `code-review-graph` mcp to explore codebase first before use grep, find .etc
+
+Use logs in logs/ folder to debug about scoring, parsing PDF, chatting
+
+If you work with latex files or folders, compile it after finishing working.

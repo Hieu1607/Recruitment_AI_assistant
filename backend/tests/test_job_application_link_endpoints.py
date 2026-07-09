@@ -1,5 +1,6 @@
 import sys
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 
@@ -63,6 +64,7 @@ if "src.services.job_description_service" not in sys.modules:
 
 if "src.services.resume_service" not in sys.modules:
     resume_stub = types.ModuleType("src.services.resume_service")
+    resume_stub._normalize_location_name = lambda value: value
     resume_stub._resume_to_dict = lambda resume: {}
     resume_stub.create_resume_document = lambda **kwargs: types.SimpleNamespace(
         id=uuid.uuid4()
@@ -79,6 +81,7 @@ from src.api.v1.endpoints.jobs import (  # noqa: E402
     JobCreateRequest,
     JobUpdateRequest,
     create_job,
+    delete_job,
     get_job,
     get_job_application_link,
     list_jobs,
@@ -87,15 +90,25 @@ from src.api.v1.endpoints.jobs import (  # noqa: E402
 )
 from src.core.config import settings  # noqa: E402
 from src.models.base import Base  # noqa: E402
+from src.models.enums import UploadStatus, UserStatus  # noqa: E402
 from src.models.job import Job  # noqa: E402
+from src.models.job_matching import JobDescription  # noqa: E402
+from src.models.resume_document import ResumeDocument  # noqa: E402
 from src.models.user_account import UserAccount  # noqa: E402
-from src.models.enums import UserStatus  # noqa: E402
 
 
 def _create_test_tables(engine):
     tables = [
         Base.metadata.tables["user_accounts"],
         Base.metadata.tables["jobs"],
+        Base.metadata.tables["job_descriptions"],
+        Base.metadata.tables["match_runs"],
+        Base.metadata.tables["interview_question_sets"],
+        Base.metadata.tables["interview_templates"],
+        Base.metadata.tables["interview_invitations"],
+        Base.metadata.tables["resume_documents"],
+        Base.metadata.tables["candidate_profiles"],
+        Base.metadata.tables["extraction_traces"],
     ]
     Base.metadata.create_all(engine, tables=tables)
 
@@ -303,3 +316,58 @@ def test_non_owner_cannot_access_application_settings(db, owner, outsider):
         get_job_application_link(job_id=job.id, db=db, current_user=outsider)
 
     assert exc_info.value.status_code == 404
+
+
+def test_delete_job_removes_attached_job_descriptions(db, owner):
+    created = create_job(
+        JobCreateRequest(title="AI Engineer", status="active"),
+        db=db,
+        current_user=owner,
+    )
+    job_id = uuid.UUID(created.id)
+    job = db.get(Job, job_id)
+    assert job is not None
+
+    jd = JobDescription(
+        job_id=job_id,
+        title="AI Engineer",
+        jd_text="# Job Description",
+        created_by_user_id=owner.id,
+        is_active=True,
+    )
+    db.add(jd)
+    db.commit()
+    db.refresh(jd)
+
+    response = delete_job(job_id=job_id, db=db, current_user=owner)
+
+    assert response == {"deleted": True, "job_id": str(job_id)}
+    assert db.get(Job, job_id) is None
+    assert db.get(JobDescription, jd.id) is None
+
+
+def test_delete_job_removes_attached_resumes(db, owner):
+    created = create_job(
+        JobCreateRequest(title="ML Engineer", status="active"),
+        db=db,
+        current_user=owner,
+    )
+    job_id = uuid.UUID(created.id)
+
+    resume = ResumeDocument(
+        original_file_name="candidate.pdf",
+        storage_uri="s3://bucket/resumes/candidate.pdf",
+        upload_status=UploadStatus.PROCESSED,
+        job_id=job_id,
+        uploaded_by_user_id=owner.id,
+        retention_expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(resume)
+    db.commit()
+    db.refresh(resume)
+
+    response = delete_job(job_id=job_id, db=db, current_user=owner)
+
+    assert response == {"deleted": True, "job_id": str(job_id)}
+    assert db.get(Job, job_id) is None
+    assert db.get(ResumeDocument, resume.id) is None

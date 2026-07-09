@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -8,6 +8,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base
 from src.models.enums import RoleName, UserStatus
+from src.models.notification import UserNotification
+
+if TYPE_CHECKING:
+    from src.models.job import Job
+    from src.models.oauth_identity import OAuthIdentity
 
 
 _ENUM_VALUES = lambda enum_cls: [item.value for item in enum_cls]
@@ -31,6 +36,7 @@ class UserAccount(Base):
     role_assignments: Mapped[list["RoleAssignment"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     oauth_identities: Mapped[list["OAuthIdentity"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     jobs: Mapped[list["Job"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    notifications: Mapped[list["UserNotification"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class RoleAssignment(Base):

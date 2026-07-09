@@ -11,7 +11,7 @@ type Props = {
   value: string;
   onChange: (next: { html: string; text: string }) => void;
   placeholder?: string;
-  variableOptions?: OutreachVariableOption[];
+  variableOptions?: readonly OutreachVariableOption[];
   className?: string;
 };
 

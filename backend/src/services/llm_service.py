@@ -96,7 +96,6 @@ def _retry_backoff_seconds(attempt: int, exc: Optional[BaseException] = None) ->
 
 
 class ProviderType(str, Enum):
-    GROQ = "groq"
     SHOPAIKEY = "shopaikey"
     OLLAMA = "ollama"
 
@@ -172,147 +171,6 @@ class _BaseAdapter:
 
     def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         raise NotImplementedError
-
-
-class _GroqAdapter(_BaseAdapter):
-    def __init__(
-        self,
-        api_key: str,
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        timeout_seconds: int,
-        max_retries: int,
-    ):
-        super().__init__(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
-        )
-        if not api_key:
-            raise LLMConfigurationError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
-        try:
-            from groq import Groq
-        except Exception as exc:
-            raise LLMConfigurationError(
-                "groq package is not available. Install it in backend requirements."
-            ) from exc
-        self._client = Groq(api_key=api_key)
-
-    def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
-        last_error: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                completion = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                )
-                content = (completion.choices[0].message.content or "").strip()
-                usage = None
-                if getattr(completion, "usage", None) is not None:
-                    usage = {
-                        "prompt_tokens": getattr(completion.usage, "prompt_tokens", None),
-                        "completion_tokens": getattr(completion.usage, "completion_tokens", None),
-                        "total_tokens": getattr(completion.usage, "total_tokens", None),
-                    }
-                raw = completion.model_dump() if hasattr(completion, "model_dump") else None
-                _log_length_finish_reason(
-                    provider=ProviderType.GROQ.value,
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    usage=usage,
-                    raw=raw,
-                )
-                return LLMResponse(
-                    text=content,
-                    provider=ProviderType.GROQ.value,
-                    model=self.model,
-                    usage=usage,
-                    raw=raw,
-                )
-            except Exception as exc:
-                last_error = exc
-                if is_provider_limit_error(exc):
-                    if attempt < self.max_retries:
-                        time.sleep(_retry_backoff_seconds(attempt, exc))
-                        continue
-                    _raise_provider_limit_error(
-                        provider=ProviderType.GROQ.value,
-                        model=self.model,
-                        operation="chat request",
-                        exc=exc,
-                    )
-                if attempt < self.max_retries:
-                    time.sleep(_retry_backoff_seconds(attempt, exc))
-                    continue
-                break
-        raise LLMProviderError(f"Groq request failed: {last_error}") from last_error
-
-    def generate_with_images(
-        self, prompt: str, images: List[bytes], vision_model: str
-    ) -> LLMResponse:
-        import base64
-
-        content: List[Any] = [{"type": "text", "text": prompt}]
-        for img_bytes in images:
-            b64 = base64.b64encode(img_bytes).decode("utf-8")
-            content.append(
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-            )
-        messages = [{"role": "user", "content": content}]
-        last_error: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                completion = self._client.chat.completions.create(
-                    model=vision_model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=max(self.max_tokens, 2048),
-                )
-                text = (completion.choices[0].message.content or "").strip()
-                usage = None
-                if getattr(completion, "usage", None) is not None:
-                    usage = {
-                        "prompt_tokens": getattr(completion.usage, "prompt_tokens", None),
-                        "completion_tokens": getattr(completion.usage, "completion_tokens", None),
-                        "total_tokens": getattr(completion.usage, "total_tokens", None),
-                    }
-                raw = completion.model_dump() if hasattr(completion, "model_dump") else None
-                _log_length_finish_reason(
-                    provider=ProviderType.GROQ.value,
-                    model=vision_model,
-                    max_tokens=max(self.max_tokens, 2048),
-                    usage=usage,
-                    raw=raw,
-                )
-                return LLMResponse(
-                    text=text,
-                    provider=ProviderType.GROQ.value,
-                    model=vision_model,
-                    usage=usage,
-                    raw=raw,
-                )
-            except Exception as exc:
-                last_error = exc
-                if is_provider_limit_error(exc):
-                    if attempt < self.max_retries:
-                        time.sleep(_retry_backoff_seconds(attempt, exc))
-                        continue
-                    _raise_provider_limit_error(
-                        provider=ProviderType.GROQ.value,
-                        model=vision_model,
-                        operation="vision request",
-                        exc=exc,
-                    )
-                if attempt < self.max_retries:
-                    time.sleep(_retry_backoff_seconds(attempt, exc))
-                    continue
-                break
-        raise LLMProviderError(f"Groq vision request failed: {last_error}") from last_error
 
 
 class _ShopAIKeyAdapter(_BaseAdapter):
@@ -435,6 +293,9 @@ class _ShopAIKeyAdapter(_BaseAdapter):
                         operation="chat request",
                         exc=exc,
                     )
+                if attempt < self.max_retries:
+                    time.sleep(_retry_backoff_seconds(attempt, exc))
+                    continue
                 break
         raise LLMProviderError(f"ShopAIKey request failed: {last_error}") from last_error
 
@@ -538,7 +399,7 @@ class _OllamaAdapter(_BaseAdapter):
 
 
 class LLMProvider:
-    """Unified LLM provider wrapper for Groq and Ollama.
+    """Unified LLM provider wrapper for ShopAIKey and Ollama.
 
     Configuration is loaded from src.core.config.settings.
     """
@@ -553,7 +414,14 @@ class LLMProvider:
         max_retries: Optional[int] = None,
         allow_fallback: bool = True,
     ):
-        selected_provider = (provider or settings.LLM_PROVIDER or ProviderType.GROQ.value).lower()
+        selected_provider = (provider or settings.LLM_PROVIDER or ProviderType.SHOPAIKEY.value).lower()
+        if selected_provider not in {member.value for member in ProviderType}:
+            logger.warning(
+                "Unsupported LLM provider '%s'; defaulting to %s",
+                selected_provider,
+                ProviderType.SHOPAIKEY.value,
+            )
+            selected_provider = ProviderType.SHOPAIKEY.value
         self.provider = ProviderType(selected_provider)
 
         temperature = settings.LLM_TEMPERATURE if temperature is None else temperature
@@ -569,31 +437,9 @@ class LLMProvider:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.model_name = model_name
-        self._fallback_adapter: Optional[_BaseAdapter] = None
         self.allow_fallback = allow_fallback
 
-        if self.provider == ProviderType.GROQ:
-            selected_model = model_name or settings.GROQ_MODEL_NAME
-            self.model_name = selected_model
-            self._adapter = _GroqAdapter(
-                api_key=settings.GROQ_API_KEY,
-                model=selected_model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout_seconds=timeout_seconds,
-                max_retries=max_retries,
-            )
-            if settings.SHOPAIKEY_API_KEY:
-                self._fallback_adapter = _ShopAIKeyAdapter(
-                    api_key=settings.SHOPAIKEY_API_KEY,
-                    base_url=settings.SHOPAIKEY_BASE_URL,
-                    model=settings.SHOPAIKEY_MODEL_NAME,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout_seconds=timeout_seconds,
-                    max_retries=max_retries,
-                )
-        elif self.provider == ProviderType.SHOPAIKEY:
+        if self.provider == ProviderType.SHOPAIKEY:
             selected_model = model_name or settings.SHOPAIKEY_MODEL_NAME
             self.model_name = selected_model
             self._adapter = _ShopAIKeyAdapter(
@@ -621,22 +467,7 @@ class LLMProvider:
     def chat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         if not isinstance(messages, list) or not messages:
             raise ValueError("messages must be a non-empty list")
-        try:
-            return self._adapter.chat(messages)
-        except Exception as exc:
-            if (
-                self.provider != ProviderType.GROQ
-                or self._fallback_adapter is None
-                or not self.allow_fallback
-            ):
-                raise
-            logger.warning(
-                "Primary Groq request failed; falling back to ShopAIKey. primary_model=%s fallback_model=%s error=%s",
-                self.model_name,
-                self._fallback_adapter.model,
-                exc,
-            )
-            return self._fallback_adapter.chat(messages)
+        return self._adapter.chat(messages)
 
     async def achat(self, messages: List[Dict[str, str]]) -> LLMResponse:
         if not isinstance(messages, list) or not messages:
@@ -654,10 +485,7 @@ class LLMProvider:
         return self.chat(messages)
 
     def generate_with_images(self, prompt: str, images: List[bytes]) -> LLMResponse:
-        if self.provider != ProviderType.GROQ:
-            raise LLMProviderError("Vision is only supported for the Groq provider")
-        vision_model = settings.GROQ_VISION_MODEL_NAME
-        return self._adapter.generate_with_images(prompt, images, vision_model=vision_model)  # type: ignore[attr-defined]
+        raise LLMProviderError("Vision is not supported by the configured LLM provider")
 
     async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> LLMResponse:
         if not prompt or not prompt.strip():

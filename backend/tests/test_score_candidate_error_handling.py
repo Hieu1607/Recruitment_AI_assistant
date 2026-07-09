@@ -129,7 +129,7 @@ def test_score_candidates_marks_run_failed_and_logs_error_when_provider_quota_is
         "src.services.score_candidate._extract_locked_rubric",
         lambda **kwargs: (_ for _ in ()).throw(
             LLMProviderError(
-                "Groq request failed: Error code: 429 - {'error': {'message': 'Rate limit reached for model on tokens per day (TPD)', 'code': 'rate_limit_exceeded'}}"
+                "ShopAIKey request failed: Error code: 429 - {'error': {'message': 'Rate limit reached for model on tokens per day (TPD)', 'code': 'rate_limit_exceeded'}}"
             )
         ),
     )
@@ -162,11 +162,11 @@ def test_score_candidates_does_not_continue_when_semantic_scoring_hits_provider_
     monkeypatch.setenv("LANGGRAPH_TRACE_LOG_DIR", str(debug_dir))
 
     class QuotaLimitedLLM:
-        provider = "groq"
-        model_name = "llama-3.3-70b-versatile"
+        provider = "shopaikey"
+        model_name = "llama-3.1-8b"
 
         def generate(self, prompt):
-            raise LLMProviderLimitError("Groq chat request hit quota or rate limit")
+            raise LLMProviderLimitError("ShopAIKey chat request hit quota or rate limit")
 
         def clone_with_model(self, **kwargs):
             return self
@@ -274,8 +274,8 @@ def test_score_candidates_logs_semantic_retry_attempts(monkeypatch, db, owner, s
     monkeypatch.setenv("LANGGRAPH_TRACE_LOG_DIR", str(tmp_path))
 
     class RetryLLM:
-        provider = "groq"
-        model_name = "llama-3.1-8b-instant"
+        provider = "shopaikey"
+        model_name = "llama-3.1-8b"
 
         def __init__(self):
             self.calls = 0
@@ -286,8 +286,8 @@ def test_score_candidates_logs_semantic_retry_attempts(monkeypatch, db, owner, s
             class Response:
                 def __init__(self, text):
                     self.text = text
-                    self.provider = "groq"
-                    self.model = "llama-3.1-8b-instant"
+                    self.provider = "shopaikey"
+                    self.model = "llama-3.1-8b"
 
             if self.calls == 1:
                 return Response('{"scores":[{"candidateId":"oops" "criteria":[]}]}')

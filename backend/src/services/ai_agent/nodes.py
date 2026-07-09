@@ -12,6 +12,7 @@ Prompts used (from BuildPrompts):
 import json
 import logging
 import re
+import time
 import unicodedata
 from typing import Any, Dict, List, Optional
 
@@ -19,20 +20,43 @@ from langchain_core.messages import AIMessage
 
 from src.core.config import settings
 from src.prompts.build_prompts import build_prompts
+from src.services.ai_agent.chat_batching import (
+    AnswerMode,
+    build_chat_map_batches,
+    choose_answer_mode,
+    compact_map_result,
+    limit_compact_candidates,
+)
 from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 from src.services.llm_service import LLMProvider
+from src.services.token_budget import BudgetWindow, estimate_json_tokens, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
-_llm: LLMProvider | None = None
+_llm_cache: Dict[str, LLMProvider] = {}
 _AI_AGENT_LLM_MAX_TOKENS = 8192
+_CHAT_STAGE_MODEL_SETTINGS = {
+    "router": "CHAT_ROUTER_MODEL_NAME",
+    "dsl": "CHAT_DSL_MODEL_NAME",
+    "map": "CHAT_MAP_MODEL_NAME",
+    "reduce": "CHAT_REDUCE_MODEL_NAME",
+    "answer": "CHAT_ANSWER_MODEL_NAME",
+}
 
 
-def _get_llm() -> LLMProvider:
-    global _llm
-    if _llm is None:
-        _llm = LLMProvider(max_tokens=max(settings.LLM_MAX_TOKENS, _AI_AGENT_LLM_MAX_TOKENS))
-    return _llm
+def _get_llm(stage: str = "default") -> LLMProvider:
+    cached = _llm_cache.get(stage)
+    if cached is not None:
+        return cached
+
+    model_setting = _CHAT_STAGE_MODEL_SETTINGS.get(stage)
+    model_name = getattr(settings, model_setting, None) if model_setting else None
+    llm = LLMProvider(
+        model_name=model_name,
+        max_tokens=max(settings.LLM_MAX_TOKENS, _AI_AGENT_LLM_MAX_TOKENS),
+    )
+    _llm_cache[stage] = llm
+    return llm
 
 
 def _record_llm_trace(
@@ -66,6 +90,26 @@ def _record_llm_trace(
         payload=payload,
     )
 
+
+def _record_chat_trace_event(
+    *,
+    state: Dict[str, Any],
+    event_type: str,
+    payload: Dict[str, Any],
+) -> None:
+    trace_id = state.get("trace_id")
+    if not trace_id:
+        return
+    get_trace_logger().record_event(
+        trace_id=trace_id,
+        event_type=event_type,
+        payload=payload,
+    )
+
+
+def _duration_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 2)
+
 # All valid filterable/queryable fields on CandidateProfile (excludes id/full_name)
 _ALL_CANDIDATE_FIELDS: frozenset = frozenset({
     "phone", "email", "location_normalized", "contact", "current_job_title",
@@ -78,8 +122,19 @@ _ALWAYS_INCLUDE: frozenset = frozenset({"id", "full_name"})
 _ALWAYS_SEMANTIC_FIELDS: frozenset = frozenset({"summary_text"})
 
 _MAX_CANDIDATES_FOR_RAG = 10
-_SEMANTIC_ONLY_DSL_FIELDS: frozenset = frozenset(
-    {"contact", "current_job_title", "major", "cpa"}
+_DSL_SUPPORTED_FIELDS: frozenset = frozenset(
+    {
+        "full_name",
+        "phone",
+        "email",
+        "location_normalized",
+        "graduation_status",
+        "ever_studied_abroad",
+        "experience_years",
+    }
+)
+_LLM_ONLY_DSL_FIELDS: frozenset = frozenset(
+    {"contact", "current_job_title", "major", "cpa"} | (_ALL_CANDIDATE_FIELDS - (_DSL_SUPPORTED_FIELDS - {"full_name"}))
 )
 
 
@@ -107,6 +162,7 @@ def _default_router_output(question: str) -> Dict[str, Any]:
     return {
         "is_recruitment_related": True,
         "refusal_message": None,
+        "response_intent": "attribute_lookup",
         "relevant_fields": [],
         "dsl_question_query": None,
         "llm_question_query": question,
@@ -118,8 +174,63 @@ def _default_router_output(question: str) -> Dict[str, Any]:
 
 def _normalize_text_match(value: Any) -> str:
     text = str(value or "").strip().lower()
+    text = text.replace("đ", "d")
     decomposed = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _normalize_phone_match(value: Any) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _normalize_email_match(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_filter_values(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _tokenize_normalized_text(value: str) -> List[str]:
+    return [token for token in re.split(r"\W+", value) if token]
+
+
+def _match_full_name_value(candidate_value: Any, query_value: Any) -> bool:
+    normalized_candidate = _normalize_text_match(candidate_value)
+    normalized_query = _normalize_text_match(query_value)
+    if not normalized_candidate or not normalized_query:
+        return False
+    if " " in normalized_query:
+        return normalized_query in normalized_candidate
+    return normalized_query in _tokenize_normalized_text(normalized_candidate)
+
+
+def _match_phone_value(candidate_value: Any, query_value: Any) -> bool:
+    normalized_candidate = _normalize_phone_match(candidate_value)
+    normalized_query = _normalize_phone_match(query_value)
+    if not normalized_candidate or not normalized_query:
+        return False
+    return normalized_query in normalized_candidate
+
+
+def _match_email_value(candidate_value: Any, query_value: Any) -> bool:
+    normalized_candidate = _normalize_email_match(candidate_value)
+    normalized_query = _normalize_email_match(query_value)
+    if not normalized_candidate or not normalized_query:
+        return False
+    return normalized_query in normalized_candidate
+
+
+def _match_eq_value(field: str, candidate_value: Any, query_value: Any) -> bool:
+    if field == "full_name":
+        return _match_full_name_value(candidate_value, query_value)
+    if field == "phone":
+        return _match_phone_value(candidate_value, query_value)
+    if field == "email":
+        return _match_email_value(candidate_value, query_value)
+    return _normalize_text_match(candidate_value) == _normalize_text_match(query_value)
 
 
 def _fetch_candidates(
@@ -213,6 +324,56 @@ def _merge_semantic_fields(fields: List[str]) -> List[str]:
     return list(_ALWAYS_SEMANTIC_FIELDS | set(fields or []))
 
 
+def _inventory_answer_language(question: str) -> str:
+    normalized = (question or "").strip().lower()
+    if re.search(r"\b(which|what|who|show|list|count|candidate|candidates)\b", normalized):
+        return "en"
+    return "vi"
+
+
+def _render_inventory_answer(question: str, candidates: List[Dict[str, Any]]) -> str:
+    language = _inventory_answer_language(question)
+    names = [str(candidate.get("full_name") or "").strip() for candidate in candidates]
+    names = [name for name in names if name]
+    total = len(names)
+
+    if language == "en":
+        if total == 0:
+            return (
+                "There are currently 0 candidates in scope.\n\n"
+                "Would you like me to narrow the pool by skills, experience, or education?"
+            )
+        lines = [f"There are currently {total} candidates in scope:", ""]
+        lines.extend(f"- {name}" for name in names)
+        lines.extend(
+            [
+                "",
+                f"Total: {total} candidates.",
+                "",
+                "Would you like me to narrow the pool by skills, experience, or education?",
+            ]
+        )
+        return "\n".join(lines)
+
+    if total == 0:
+        return (
+            "Hiện có 0 ứng viên trong phạm vi hiện tại.\n\n"
+            "Bạn muốn mình lọc tiếp theo kỹ năng, kinh nghiệm hay học vấn?"
+        )
+
+    lines = [f"Hiện có {total} ứng viên trong phạm vi hiện tại:", ""]
+    lines.extend(f"- {name}" for name in names)
+    lines.extend(
+        [
+            "",
+            f"Tổng cộng: {total} ứng viên.",
+            "",
+            "Bạn muốn mình lọc tiếp theo kỹ năng, kinh nghiệm hay học vấn?",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
     """Apply DSL filters/must/should clauses to a candidate list."""
     results = list(candidates)
@@ -223,6 +384,7 @@ def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
         value = condition.get("value")
         if value is None:
             continue
+        values = _normalize_filter_values(value)
         filtered = []
         for c in results:
             fv = c.get(field)
@@ -230,7 +392,7 @@ def _apply_dsl(candidates: List[Dict], dsl: Dict) -> List[Dict]:
                 continue
             normalized_fv = _normalize_text_match(fv)
             normalized_value = _normalize_text_match(value)
-            if operator == "eq" and normalized_fv == normalized_value:
+            if operator == "eq" and any(_match_eq_value(field, fv, item) for item in values):
                 filtered.append(c)
             elif operator == "contains" and normalized_value in normalized_fv:
                 filtered.append(c)
@@ -290,17 +452,108 @@ def _match_candidates_by_name_in_question(
 
     matches: List[Dict[str, Any]] = []
     for candidate in candidates:
-        normalized_name = _normalize_text_match(candidate.get("full_name"))
+        full_name = candidate.get("full_name")
+        normalized_name = _normalize_text_match(full_name)
         if normalized_name and normalized_name in normalized_question:
             matches.append(candidate)
+            continue
+        candidate_tokens = _tokenize_normalized_text(normalized_name)
+        if any(token and re.search(rf"\b{re.escape(token)}\b", normalized_question) for token in candidate_tokens):
+            matches.append(candidate)
     return matches
+
+
+def _normalize_map_response(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"qualifiedCandidates": [], "batchQualifiedCount": 0}
+    qualified = payload.get("qualifiedCandidates") or payload.get("qualified_candidates") or []
+    if isinstance(qualified, dict):
+        qualified = [
+            {"id": candidate_id, "reason": reason}
+            for candidate_id, reason in qualified.items()
+        ]
+    if not isinstance(qualified, list):
+        qualified = []
+    return compact_map_result(
+        {
+            "qualifiedCandidates": qualified,
+            "batchQualifiedCount": int(payload.get("batchQualifiedCount") or len(qualified)),
+        }
+    )
+
+
+def _normalize_reduce_response(payload: Any, map_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        payload = {}
+    ranked = (
+        payload.get("rankedCandidates")
+        or payload.get("ranked_candidates")
+        or payload.get("qualifiedCandidates")
+        or []
+    )
+    if isinstance(ranked, dict):
+        ranked = [
+            {"id": candidate_id, "reason": reason}
+            for candidate_id, reason in ranked.items()
+        ]
+    if not isinstance(ranked, list):
+        ranked = []
+    if not ranked:
+        for result in map_results:
+            ranked.extend(result.get("qualifiedCandidates") or [])
+
+    normalized_candidates: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for candidate in ranked:
+        if not isinstance(candidate, dict) or not candidate.get("id"):
+            continue
+        candidate_id = str(candidate["id"])
+        if candidate_id in seen_ids:
+            continue
+        seen_ids.add(candidate_id)
+        normalized_candidates.append(
+            {
+                "id": candidate_id,
+                "name": candidate.get("name") or candidate.get("full_name"),
+                "score": candidate.get("score", 0),
+                "reason": candidate.get("reason") or "",
+            }
+        )
+
+    total = int(
+        payload.get("totalQualified")
+        or payload.get("total_qualified_candidates")
+        or len(normalized_candidates)
+    )
+    return {
+        "total_qualified_candidates": total,
+        "qualified_candidates": {
+            candidate["id"]: candidate.get("reason") or ""
+            for candidate in normalized_candidates
+        },
+        "ranked_candidates": normalized_candidates,
+    }
+
+
+def _reduce_single_map_batch(map_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not map_results:
+        return _normalize_reduce_response({}, map_results)
+    first = map_results[0] or {}
+    qualified_candidates = first.get("qualifiedCandidates") or []
+    return _normalize_reduce_response(
+        {
+            "rankedCandidates": qualified_candidates,
+            "totalQualified": first.get("batchQualifiedCount") or len(qualified_candidates),
+        },
+        map_results,
+    )
 
 
 def _sanitize_dsl_for_allowed_fields(
     dsl: Dict[str, Any],
     allowed_fields: List[str],
 ) -> Dict[str, Any]:
-    allowed = set(allowed_fields or [])
+    allowed = set(allowed_fields or []) & set(_DSL_SUPPORTED_FIELDS)
     sanitized_filters = {
         field: condition
         for field, condition in (dsl.get("filters") or {}).items()
@@ -416,14 +669,14 @@ def _override_router_output_for_semantic_field_matching(
 ) -> Dict[str, Any]:
     dsl_fields = list(router_output.get("dsl_relevant_fields") or [])
     semantic_dsl_fields = [
-        field for field in dsl_fields if field in _SEMANTIC_ONLY_DSL_FIELDS
+        field for field in dsl_fields if field in _LLM_ONLY_DSL_FIELDS
     ]
     if not semantic_dsl_fields:
         return router_output
 
     updated = dict(router_output)
     updated_dsl_fields = [
-        field for field in dsl_fields if field not in _SEMANTIC_ONLY_DSL_FIELDS
+        field for field in dsl_fields if field not in _LLM_ONLY_DSL_FIELDS
     ]
     llm_fields = list(router_output.get("llm_relevant_fields") or [])
     for field in semantic_dsl_fields:
@@ -434,7 +687,7 @@ def _override_router_output_for_semantic_field_matching(
     updated["relevant_fields"] = [
         field
         for field in (router_output.get("relevant_fields") or [])
-        if field not in _SEMANTIC_ONLY_DSL_FIELDS
+        if field not in _LLM_ONLY_DSL_FIELDS
     ]
     if llm_fields and not updated.get("llm_question_query"):
         updated["llm_question_query"] = question
@@ -443,12 +696,82 @@ def _override_router_output_for_semantic_field_matching(
 
     existing_reasoning = str(router_output.get("reasoning") or "").strip()
     suffix = (
-        "Fields such as current job title, major, CPA, and contact should use semantic LLM evidence because their values vary by language, formatting, and free-text conventions."
+        "Fields such as contact, current job title, major, CPA, and free-text profile fields should use semantic LLM evidence instead of DSL filtering."
     )
     updated["reasoning"] = (
         f"{existing_reasoning} semantic-field override: {suffix}"
         if existing_reasoning
         else f"semantic-field override: {suffix}"
+    )
+    return updated
+
+
+def _question_targets_school_entity(question: str) -> bool:
+    normalized_question = _normalize_text_match(question)
+    if not normalized_question:
+        return False
+
+    school_markers = (
+        "dai hoc",
+        "truong",
+        "university",
+        "college",
+        "hoc vien",
+        "institute of technology",
+    )
+    education_intent_markers = (
+        "dang hoc",
+        "hoc tai",
+        "tot nghiep",
+        "graduated from",
+        "study at",
+        "studied at",
+        "alumni",
+    )
+    return any(marker in normalized_question for marker in school_markers) and any(
+        marker in normalized_question for marker in education_intent_markers
+    )
+
+
+def _override_router_output_for_school_entity_queries(
+    *,
+    question: str,
+    router_output: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not _question_targets_school_entity(question):
+        return router_output
+
+    dsl_fields = list(router_output.get("dsl_relevant_fields") or [])
+    if "location_normalized" not in dsl_fields:
+        return router_output
+
+    updated = dict(router_output)
+    updated_dsl_fields = [field for field in dsl_fields if field != "location_normalized"]
+    llm_fields = list(router_output.get("llm_relevant_fields") or [])
+    for field in ("education_text", "summary_text"):
+        if field not in llm_fields:
+            llm_fields.append(field)
+
+    updated["dsl_relevant_fields"] = updated_dsl_fields
+    updated["llm_relevant_fields"] = llm_fields
+    updated["relevant_fields"] = [
+        field
+        for field in (router_output.get("relevant_fields") or [])
+        if field != "location_normalized"
+    ]
+    if llm_fields and not updated.get("llm_question_query"):
+        updated["llm_question_query"] = question
+    if not updated_dsl_fields:
+        updated["dsl_question_query"] = None
+
+    existing_reasoning = str(router_output.get("reasoning") or "").strip()
+    suffix = (
+        "School and university questions should use education evidence, not location_normalized."
+    )
+    updated["reasoning"] = (
+        f"{existing_reasoning} school-entity override: {suffix}"
+        if existing_reasoning
+        else f"school-entity override: {suffix}"
     )
     return updated
 
@@ -472,7 +795,7 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     prompt = build_prompts.build_router_prompt(question, job_context=job_context)
     try:
-        response = _get_llm().generate(prompt)
+        response = _get_llm("router").generate(prompt)
     except Exception as exc:
         _record_llm_trace(state=state, node_name="router", prompt=prompt, error=exc)
         raise
@@ -495,6 +818,10 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
         router_output=router_output,
     )
     router_output = _override_router_output_for_semantic_field_matching(
+        question=question,
+        router_output=router_output,
+    )
+    router_output = _override_router_output_for_school_entity_queries(
         question=question,
         router_output=router_output,
     )
@@ -537,7 +864,9 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
     router_output: Dict = state.get("router_output") or {}
     question: str = state.get("question") or ""
     dsl_question: str = router_output.get("dsl_question_query") or state.get("question") or ""
-    dsl_relevant_fields: List[str] = router_output.get("dsl_relevant_fields") or []
+    dsl_relevant_fields: List[str] = [
+        field for field in (router_output.get("dsl_relevant_fields") or []) if field in _DSL_SUPPORTED_FIELDS
+    ]
 
     logger.info("[dsl_node] question=%r | fields=%s", dsl_question, dsl_relevant_fields)
 
@@ -546,7 +875,7 @@ def dsl_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     prompt = build_prompts.build_dsl_query_prompt(dsl_question)
     try:
-        response = _get_llm().generate(prompt)
+        response = _get_llm("dsl").generate(prompt)
     except Exception as exc:
         _record_llm_trace(state=state, node_name="dsl", prompt=prompt, error=exc)
         raise
@@ -616,19 +945,128 @@ def llm_node(state: Dict[str, Any]) -> Dict[str, Any]:
     candidates = _resolve_candidates(state, llm_relevant_fields, candidate_ids)
     logger.info("[llm_node] fetched %d candidate(s) for LLM analysis", len(candidates))
 
-    prompt = build_prompts.build_llm_query_prompt(llm_question, candidates, job_context=job_context)
-    try:
-        response = _get_llm().generate(prompt)
-    except Exception as exc:
-        _record_llm_trace(state=state, node_name="llm", prompt=prompt, error=exc)
-        raise
-    _record_llm_trace(state=state, node_name="llm", prompt=prompt, response=response)
+    chat_window = BudgetWindow(
+        context_window=settings.CHAT_CONTEXT_WINDOW_TOKENS,
+        output_budget=settings.CHAT_OUTPUT_TOKEN_BUDGET,
+        reserve=settings.CHAT_CONTEXT_RESERVE_TOKENS,
+    )
+    static_prompt_tokens = estimate_tokens(llm_question) + estimate_json_tokens(job_context or {})
+    map_batches = build_chat_map_batches(
+        question=llm_question,
+        candidates=candidates,
+        job_context=job_context,
+        static_prompt_tokens=static_prompt_tokens,
+        window=chat_window,
+        max_candidates_per_batch=settings.CHAT_MAX_CANDIDATES_PER_MAP_BATCH,
+    )
+    _record_chat_trace_event(
+        state=state,
+        event_type="chat_map_plan_created",
+        payload={
+            "candidateCount": len(candidates),
+            "mapBatchCount": len(map_batches),
+            "plannerSettings": {
+                "staticPromptTokens": static_prompt_tokens,
+                "inputBudgetTokens": chat_window.input_budget,
+                "outputBudgetTokens": chat_window.output_budget,
+                "contextWindowTokens": chat_window.context_window,
+                "reserveTokens": chat_window.reserve,
+                "maxCandidatesPerMapBatch": settings.CHAT_MAX_CANDIDATES_PER_MAP_BATCH,
+            },
+            "batchSizes": [len(batch.candidates) for batch in map_batches],
+        },
+    )
 
-    try:
-        llm_result = _parse_json(response.text)
-    except Exception:
-        logger.warning("[llm_node] failed to parse LLM JSON response; raw=%r", response.text[:300])
-        llm_result = {"total_qualified_candidates": 0, "qualified_candidates": {}}
+    map_results: List[Dict[str, Any]] = []
+    for batch_index, map_batch in enumerate(map_batches):
+        map_started_at = time.perf_counter()
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_map_batch_started",
+            payload={
+                "batchIndex": batch_index,
+                "candidateCount": len(map_batch.candidates),
+                "estimatedInputTokens": map_batch.estimated_input_tokens,
+                "estimatedOutputTokens": map_batch.estimated_output_tokens,
+            },
+        )
+        prompt = build_prompts.build_chat_semantic_map_prompt(
+            llm_question,
+            map_batch.candidates,
+            job_context=job_context,
+        )
+        try:
+            response = _get_llm("map").generate(prompt)
+        except Exception as exc:
+            _record_llm_trace(state=state, node_name="llm_map", prompt=prompt, error=exc)
+            raise
+        _record_llm_trace(state=state, node_name="llm_map", prompt=prompt, response=response)
+
+        try:
+            map_result = _normalize_map_response(_parse_json(response.text))
+        except Exception:
+            logger.warning("[llm_node] failed to parse map JSON response; raw=%r", response.text[:300])
+            map_result = {"qualifiedCandidates": [], "batchQualifiedCount": 0}
+        map_results.append(map_result)
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_map_batch_completed",
+            payload={
+                "batchIndex": batch_index,
+                "durationMs": _duration_ms(map_started_at),
+                "qualifiedCandidateCount": len(map_result.get("qualifiedCandidates") or []),
+            },
+        )
+
+    reduce_started_at = time.perf_counter()
+    if len(map_results) <= 1:
+        llm_result = _reduce_single_map_batch(map_results)
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_reduce_skipped",
+            payload={
+                "reason": "single_map_batch",
+                "mapResultCount": len(map_results),
+            },
+        )
+    else:
+        reduce_prompt = build_prompts.build_chat_reduce_prompt(
+            llm_question,
+            map_results,
+            job_context=job_context,
+        )
+        try:
+            reduce_response = _get_llm("reduce").generate(reduce_prompt)
+        except Exception as exc:
+            _record_llm_trace(state=state, node_name="llm_reduce", prompt=reduce_prompt, error=exc)
+            raise
+        _record_llm_trace(state=state, node_name="llm_reduce", prompt=reduce_prompt, response=reduce_response)
+
+        try:
+            llm_result = _normalize_reduce_response(_parse_json(reduce_response.text), map_results)
+        except Exception:
+            logger.warning("[llm_node] failed to parse reduce JSON response; raw=%r", reduce_response.text[:300])
+            llm_result = _normalize_reduce_response({}, map_results)
+
+    ranked_candidates = llm_result.get("ranked_candidates") or []
+    answer_mode = choose_answer_mode(
+        candidates=ranked_candidates,
+        detailed_threshold=settings.CHAT_MAX_DETAILED_FINAL_CANDIDATES,
+        compact_threshold=settings.CHAT_MAX_COMPACT_FINAL_CANDIDATES,
+        estimated_full_tokens=estimate_json_tokens(ranked_candidates),
+        final_input_budget=chat_window.input_budget,
+    )
+    llm_result["answer_mode"] = answer_mode.value
+    _record_chat_trace_event(
+        state=state,
+        event_type="chat_reduce_completed",
+        payload={
+            "durationMs": _duration_ms(reduce_started_at),
+            "mapResultCount": len(map_results),
+            "qualifiedCandidateCount": len(llm_result.get("qualified_candidates") or {}),
+            "answerMode": answer_mode.value,
+        },
+    )
 
     total = llm_result.get("total_qualified_candidates") or 0
     qualified_ids = list((llm_result.get("qualified_candidates") or {}).keys())
@@ -651,6 +1089,7 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
       3. Empty → ask the LLM to explain naturally that no candidates matched
     """
     router_output: Dict = state.get("router_output") or {}
+    response_intent: str = str(router_output.get("response_intent") or "attribute_lookup")
     question: str = state.get("question") or ""
     job_context: Optional[Dict[str, Any]] = state.get("current_job")
     dsl_candidates: Optional[List[Dict]] = state.get("dsl_candidates")
@@ -666,7 +1105,10 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # --- Determine final candidate IDs ---
     final_ids: Optional[List[str]] = None
 
-    if named_comparison_request and dsl_candidates is not None:
+    if response_intent == "inventory_list":
+        final_ids = None
+        logger.info("[answer_node] source=inventory_scope | using all candidates in current scope")
+    elif named_comparison_request and dsl_candidates is not None:
         final_ids = [str(c["id"]) for c in dsl_candidates if c.get("id")]
         logger.info(
             "[answer_node] source=named_comparison_dsl | %d candidate(s)",
@@ -694,6 +1136,8 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         (router_output.get("dsl_relevant_fields") or [])
         + _merge_semantic_fields(router_output.get("llm_relevant_fields") or router_output.get("relevant_fields") or [])
     ))
+    if response_intent == "inventory_list":
+        all_relevant_fields = ["current_job_title", "summary_text"]
     logger.info("[answer_node] fetching fields=%s for ids=%s", all_relevant_fields,
                 f"{len(final_ids)} IDs" if final_ids is not None else "all")
 
@@ -704,20 +1148,74 @@ def answer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if not candidates:
         logger.info("[answer_node] result: no candidates after DB fetch; asking LLM for natural no-match answer")
 
+    try:
+        answer_mode = AnswerMode((llm_result or {}).get("answer_mode") or AnswerMode.DETAILED.value)
+    except ValueError:
+        answer_mode = AnswerMode.DETAILED
+
     # --- If too many candidates, trim to id + full_name only ---
-    if len(candidates) > _MAX_CANDIDATES_FOR_RAG:
+    use_compact_answer = (
+        response_intent != "inventory_list"
+        and (answer_mode == AnswerMode.COMPACT_ID_NAME or len(candidates) > _MAX_CANDIDATES_FOR_RAG)
+    )
+    total_qualified = int((llm_result or {}).get("total_qualified_candidates") or len(candidates))
+    if use_compact_answer:
         logger.info(
-            "[answer_node] %d candidates exceed limit (%d), trimming to id+full_name only",
+            "[answer_node] compact answer mode selected for %d candidate(s); trimming to id+full_name only",
             len(candidates),
-            _MAX_CANDIDATES_FOR_RAG,
         )
-        candidates = [{"id": c.get("id"), "full_name": c.get("full_name")} for c in candidates]
+        max_compact = settings.CHAT_MAX_COMPACT_FINAL_CANDIDATES
+        compact_candidates = limit_compact_candidates(candidates, max_compact)
+        omitted_count = max(0, total_qualified - len(compact_candidates))
+        candidates = compact_candidates
+    else:
+        omitted_count = 0
 
     # --- RAG: ask LLM to answer using the retrieved candidate data ---
     logger.info("[answer_node] calling LLM with %d candidate(s)", len(candidates))
-    prompt = build_prompts.build_answer_prompt(question, candidates, job_context=job_context)
+    if response_intent == "inventory_list":
+        answer = _render_inventory_answer(question, candidates)
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_answer_prompt_built",
+            payload={
+                "answerMode": "inventory_list",
+                "candidateCount": len(candidates),
+                "totalQualifiedCandidates": len(candidates),
+                "omittedCandidateCount": 0,
+                "estimatedPromptTokens": 0,
+                "renderedDeterministically": True,
+            },
+        )
+        logger.info("[answer_node] rendered deterministic inventory answer (first 200 chars): %r", answer[:200])
+        return {
+            "messages": [AIMessage(content=answer)],
+            "answer": answer,
+        }
+    elif use_compact_answer:
+        prompt = build_prompts.build_compact_answer_prompt(
+            question,
+            candidates,
+            total_count=total_qualified,
+            omitted_count=omitted_count,
+            job_context=job_context,
+        )
+    else:
+        prompt = build_prompts.build_answer_prompt(question, candidates, job_context=job_context)
+    if response_intent != "inventory_list":
+        _record_chat_trace_event(
+            state=state,
+            event_type="chat_answer_prompt_built",
+            payload={
+                "answerMode": answer_mode.value,
+                "candidateCount": len(candidates),
+                "totalQualifiedCandidates": total_qualified,
+                "omittedCandidateCount": omitted_count,
+                "estimatedPromptTokens": estimate_tokens(prompt),
+            },
+        )
     try:
-        response = _get_llm().generate(prompt)
+        response = _get_llm("answer").generate(prompt)
     except Exception as exc:
         _record_llm_trace(state=state, node_name="answer", prompt=prompt, error=exc)
         raise

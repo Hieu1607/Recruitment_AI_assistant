@@ -21,6 +21,7 @@ from src.models.candidate_profile import CandidateProfile
 from src.models.session import SessionLocal
 from src.services.ai_agent.graph import get_graph
 from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
+from src.services.resume_service import _normalize_location_name
 
 router = APIRouter()
 
@@ -83,7 +84,7 @@ def _load_candidates(db, limit: int) -> List[Dict[str, Any]]:
             "full_name": r.full_name,
             "phone": r.phone,
             "email": r.email,
-            "location_normalized": r.location_normalized,
+            "location_normalized": _normalize_location_name(r.location_normalized),
             "contact": r.contact,
             "current_job_title": r.current_job_title,
             "graduation_status": r.graduation_status,

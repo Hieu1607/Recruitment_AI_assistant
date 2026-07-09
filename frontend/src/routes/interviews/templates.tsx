@@ -15,8 +15,8 @@ import { useSelectedJobId } from "@/lib/auth";
 import { routes } from "@/routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calendar, Plus } from "lucide-react";
-import { useState } from "react";
-import { Link, NavLink, useNavigate } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 function formatDate(value: string) {
@@ -27,7 +27,9 @@ export default function InterviewTemplatesRoute() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const selectedJobId = useSelectedJobId();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [createOpen, setCreateOpen] = useState(false);
+  const shouldAutoOpenCreate = searchParams.get("create") === "1";
 
   const { data, isLoading } = useQuery({
     queryKey: ["interview-templates", selectedJobId],
@@ -41,10 +43,25 @@ export default function InterviewTemplatesRoute() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["interview-templates", selectedJobId] });
       toast.success("Interview template created");
-      setCreateOpen(false);
+      handleCreateOpenChange(false);
     },
     onError: (error: Error) => toast.error(error.message || "Failed to create template"),
   });
+
+  useEffect(() => {
+    if (selectedJobId && shouldAutoOpenCreate) {
+      setCreateOpen(true);
+    }
+  }, [selectedJobId, shouldAutoOpenCreate]);
+
+  function handleCreateOpenChange(nextOpen: boolean) {
+    setCreateOpen(nextOpen);
+    if (!nextOpen && shouldAutoOpenCreate) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("create");
+      setSearchParams(nextParams, { replace: true });
+    }
+  }
 
   const columns: ColumnDef<InterviewTemplateResponse>[] = [
     {
@@ -87,7 +104,7 @@ export default function InterviewTemplatesRoute() {
             </p>
           </div>
           <Button
-            onClick={() => setCreateOpen(true)}
+            onClick={() => handleCreateOpenChange(true)}
             disabled={!selectedJobId}
             icon={<Plus size={15} strokeWidth={2} />}
           >
@@ -142,7 +159,7 @@ export default function InterviewTemplatesRoute() {
         )}
       </div>
 
-      <Modal open={createOpen} onOpenChange={setCreateOpen}>
+      <Modal open={createOpen} onOpenChange={handleCreateOpenChange}>
         <ModalContent size="large">
           <ModalHeader>
             <ModalTitle>Create Interview Template</ModalTitle>

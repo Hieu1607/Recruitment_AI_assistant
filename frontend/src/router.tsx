@@ -1,4 +1,5 @@
 import { api } from "@/api";
+import { PublicThemeBoundary } from "@/components/PublicThemeBoundary";
 import { AppShell } from "@/components/layout/AppShell";
 import { useAuthStore } from "@/lib/auth";
 import { routePatterns } from "@/routes";
@@ -35,12 +36,29 @@ function lazy<T extends () => Promise<{ default: React.ComponentType }>>(loader:
   return { lazy: async () => ({ Component: (await loader()).default }) };
 }
 
+function lazyPublic<T extends () => Promise<{ default: React.ComponentType }>>(loader: T) {
+  return {
+    lazy: async () => {
+      const { default: Component } = await loader();
+      return {
+        Component: function PublicLightRoute() {
+          return (
+            <PublicThemeBoundary>
+              <Component />
+            </PublicThemeBoundary>
+          );
+        },
+      };
+    },
+  };
+}
+
 export const router = createBrowserRouter([
   // Public routes (no shell)
   {
     path: routePatterns.landing,
     loader: redirectIfAuth,
-    ...lazy(() => import("@/routes/landing")),
+    ...lazyPublic(() => import("@/routes/landing")),
   },
   {
     path: routePatterns.login,
@@ -53,11 +71,11 @@ export const router = createBrowserRouter([
   },
   {
     path: routePatterns.apply,
-    ...lazy(() => import("@/routes/apply")),
+    ...lazyPublic(() => import("@/routes/apply")),
   },
   {
     path: routePatterns.publicInterview,
-    ...lazy(() => import("@/routes/public-interview")),
+    ...lazyPublic(() => import("@/routes/public-interview")),
   },
   // Authenticated routes (wrapped in AppShell)
   {
@@ -80,6 +98,7 @@ export const router = createBrowserRouter([
       { path: routePatterns.shortlists, ...lazy(() => import("@/routes/shortlists/list")) },
       { path: routePatterns.shortlistCollection, ...lazy(() => import("@/routes/shortlists/collection")) },
       { path: routePatterns.outreach, ...lazy(() => import("@/routes/outreach")) },
+      { path: routePatterns.outreachTemplates, ...lazy(() => import("@/routes/outreach-templates")) },
       { path: routePatterns.interviews, ...lazy(() => import("@/routes/interviews")) },
       { path: routePatterns.interviewTemplates, ...lazy(() => import("@/routes/interviews/templates")) },
       { path: routePatterns.interviewTemplateDetail, ...lazy(() => import("@/routes/interviews/template-detail")) },

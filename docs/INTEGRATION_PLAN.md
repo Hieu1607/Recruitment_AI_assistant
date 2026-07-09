@@ -31,9 +31,9 @@ auth wiring.
   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/recruitment_db
   BACKEND_CORS_ORIGINS=["http://localhost:5173"]
   SECRET_KEY=change-me-in-production
-  GROQ_API_KEY=<your-key>
-  GROQ_MODEL_NAME=llama-3.3-70b-versatile
-  LLM_PROVIDER=groq
+  SHOPAIKEY_API_KEY=<your-key>
+  SHOPAIKEY_MODEL_NAME=llama-3.1-8b
+  LLM_PROVIDER=shopaikey
   ```
 
 - [x] **1.2** Create `frontend/.env` (copy from `.env.example`):
@@ -185,7 +185,7 @@ auth wiring.
 ### 6c — Scoring
 
 - [x] Navigate to Scoring, select a JD and candidate set
-- [x] Run scoring → `POST /api/v1/score/` → results appear (endpoint reachable; full LLM run requires GROQ_API_KEY)
+- [x] Run scoring → `POST /api/v1/score/` → results appear (endpoint reachable; full LLM run requires SHOPAIKEY_API_KEY)
 - [x] Results page shows ranked candidates with scores
 
 **Checkpoint ✓:** Scoring returns a `MatchRun` with results; frontend renders them.
@@ -193,7 +193,7 @@ auth wiring.
 ### 6d — Chat
 
 - [x] Open Chat, send a message → `POST /api/v1/chat/`
-- [x] Response appears in the bubble, session ID is stored (requires GROQ_API_KEY for actual LLM response)
+- [x] Response appears in the bubble, session ID is stored (requires SHOPAIKEY_API_KEY for actual LLM response)
 - [x] Reload page, re-open session → `GET /api/v1/chat/{session_id}` restores history
 
 **Checkpoint ✓:** Chat sends, receives, and restores history from the backend.
@@ -201,7 +201,7 @@ auth wiring.
 ### 6e — Shortlists
 
 - [x] Create a shortlist collection → `POST /api/v1/shortlist/collections/` (201 Created, renders in UI after fixing list response shape to `{items, total}`)
-- [x] Add a candidate to it → `POST /api/v1/shortlist/collections/{id}/items` (endpoint verified; requires parsed candidate_profile — blocked by missing GROQ_API_KEY)
+- [x] Add a candidate to it → `POST /api/v1/shortlist/collections/{id}/items` (endpoint verified; requires parsed candidate_profile — blocked by missing SHOPAIKEY_API_KEY)
 - [x] Collection detail page shows the candidate
 
 **Checkpoint ✓:** Shortlist collection CRUD works end-to-end.
@@ -209,14 +209,14 @@ auth wiring.
 ### 6f — Outreach
 
 - [x] Select a candidate, generate an outreach message
-- [x] Message saved → `POST /api/v1/outreach/` (endpoint verified: GET returns {total,items}; generation requires GROQ_API_KEY + parsed candidate)
+- [x] Message saved → `POST /api/v1/outreach/` (endpoint verified: GET returns {total,items}; generation requires SHOPAIKEY_API_KEY + parsed candidate)
 - [x] Message appears in the outreach list
 
 **Checkpoint ✓:** Outreach message creation and listing works.
 
 ### 6g — Interview Questions
 
-- [x] Open Interview Questions list, create a set → `POST /api/v1/interview-questions/` (endpoint verified: GET returns {total,items}; generation requires GROQ_API_KEY + parsed candidate)
+- [x] Open Interview Questions list, create a set → `POST /api/v1/interview-questions/` (endpoint verified: GET returns {total,items}; generation requires SHOPAIKEY_API_KEY + parsed candidate)
 - [x] Open set detail, add/reorder/delete questions → `PATCH`
 - [x] Save changes persists to backend
 

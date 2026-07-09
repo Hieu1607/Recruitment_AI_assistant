@@ -80,6 +80,37 @@ def test_normalize_rubric_rejects_invalid_section_and_blank_requirement():
     assert rubric["sectionWeights"] == {"skills": 1.0}
 
 
+def test_normalize_rubric_defaults_section_weights_by_active_criterion_count():
+    rubric = _normalize_rubric(
+        {
+            "criteria": [
+                {
+                    "key": "skills.python",
+                    "section": "skills",
+                    "requirementText": "Python",
+                    "type": "semantic",
+                },
+                {
+                    "key": "skills.git",
+                    "section": "skills",
+                    "requirementText": "Git workflow",
+                    "type": "semantic",
+                },
+                {
+                    "key": "education.degree",
+                    "section": "education",
+                    "requirementText": "Computer science degree",
+                    "type": "semantic",
+                },
+            ]
+        },
+        section_weights=None,
+    )
+
+    assert rubric["sectionWeights"] == {"skills": 0.6667, "education": 0.3333}
+    assert [criterion["weight"] for criterion in rubric["criteria"]] == [0.3333, 0.3333, 0.3333]
+
+
 def test_profile_to_candidate_dict_prefers_profile_name_and_includes_resume_filename():
     resume = ResumeDocument(original_file_name="mai_nguyen_cv.pdf", storage_uri="s3://bucket/cv.pdf")
     profile = CandidateProfile(full_name="Mai Nguyen", resume_document=resume)
@@ -255,6 +286,39 @@ def test_normalize_rubric_drops_invented_graduation_status_when_jd_has_no_degree
     assert rubric == {"criteria": [], "sectionWeights": {}}
 
 
+def test_normalize_rubric_merges_or_graduation_status_requirements_into_one_criterion():
+    rubric = _normalize_rubric(
+        {
+            "criteria": [
+                {
+                    "key": "graduation_status_it_related",
+                    "section": "education",
+                    "requirementText": "Graduated or final year student in IT, Computer Science, AI, Data Science or related fields.",
+                    "type": "must_have",
+                    "measurable": {"field": "graduation_status", "operator": "==", "value": "graduated"},
+                },
+                {
+                    "key": "graduation_status_it_related_final_year",
+                    "section": "education",
+                    "requirementText": "Graduated or final year student in IT, Computer Science, AI, Data Science or related fields.",
+                    "type": "must_have",
+                    "measurable": {"field": "graduation_status", "operator": "==", "value": "final_year"},
+                },
+            ]
+        },
+        section_weights={"education": 100},
+        source_text="Tốt nghiệp hoặc đang học năm cuối ngành CNTT, Khoa học Máy tính, AI, Khoa học Dữ liệu hoặc các ngành liên quan.",
+    )
+
+    assert len(rubric["criteria"]) == 1
+    assert rubric["criteria"][0]["measurable"] == {
+        "field": "graduation_status",
+        "operator": "==",
+        "value": ["final_year", "graduated"],
+    }
+    assert rubric["criteria"][0]["weight"] == 1.0
+
+
 def test_build_candidate_score_treats_experience_threshold_as_pass_fail_without_bonus():
     rubric = _normalize_rubric(
         {
@@ -304,6 +368,38 @@ def test_build_candidate_score_treats_experience_threshold_as_pass_fail_without_
     assert candidate_four["totalScore"] == 0.0
     assert candidate_five["componentScores"][0]["evaluationMode"] == "measurable"
     assert "Matched" in candidate_five["componentScores"][0]["evidenceSummary"]
+
+
+def test_build_candidate_score_matches_graduation_status_string_equality():
+    rubric = _normalize_rubric(
+        {
+            "criteria": [
+                {
+                    "key": "graduation_status",
+                    "section": "education",
+                    "requirementText": "Final year student",
+                    "type": "must_have",
+                    "measurable": {"field": "graduation_status", "operator": "==", "value": "final_year"},
+                }
+            ]
+        },
+        section_weights={"education": 100},
+        source_text="Final year student",
+    )
+
+    scored = _build_candidate_score(
+        candidate={
+            "id": "cand-final-year",
+            "graduation_status": "final_year",
+        },
+        rubric=rubric,
+        semantic_result={},
+        score_threshold=Decimal("50"),
+    )
+
+    assert scored["totalScore"] == 100.0
+    assert scored["componentScores"][0]["score"] == 100.0
+    assert "Matched requirement for graduation_status" in scored["componentScores"][0]["evidenceSummary"]
 
 
 def test_normalize_rubric_downgrades_unsupported_language_thresholds_to_semantic():
@@ -391,8 +487,7 @@ def test_build_candidate_score_marks_semantic_components_and_builds_score_aligne
     assert scored["resumeFileName"] == "linh_pham.pdf"
     assert scored["candidateDisplayName"] == "Linh Pham"
     assert scored["rationale"] == (
-        "Overall score 85.0/100. Strong matches: Deep Python expertise - "
-        "Candidate led Python backend services in production."
+        "Strong matches: Deep Python expertise - Candidate led Python backend services in production."
     )
 
 
@@ -428,6 +523,81 @@ def test_parse_semantic_scores_scales_binary_and_fractional_llm_scores_to_percen
     assert criteria["skills.api"]["score"] == 85.0
 
 
+def test_parse_semantic_scores_prefers_score_percent_when_present():
+    parsed = _parse_semantic_scores(
+        """
+        {
+          "scores": [
+            {
+              "candidateId": "cand-1",
+              "criteria": [
+                {
+                  "criterionKey": "skills.python",
+                  "scorePercent": 92,
+                  "score": 12,
+                  "evidenceSummary": "Clear Python evidence."
+                }
+              ]
+            }
+          ]
+        }
+        """
+    )
+
+    criteria = parsed["cand-1"]["criteria"]
+    assert criteria["skills.python"]["score"] == 92.0
+
+
+def test_build_candidate_score_includes_section_and_score_percent_in_components():
+    rubric = _normalize_rubric(
+        {
+            "criteria": [
+                {
+                    "key": "skills.python_depth",
+                    "section": "skills",
+                    "requirementText": "Deep Python expertise",
+                    "type": "semantic",
+                },
+                {
+                    "key": "experience_years",
+                    "section": "experience",
+                    "requirementText": "5+ years experience",
+                    "type": "must_have",
+                    "measurable": {"field": "experience_years", "operator": ">=", "value": 5},
+                },
+            ]
+        },
+        section_weights={"skills": 60, "experience": 40},
+        source_text="Need deep Python expertise and 5+ years experience.",
+    )
+
+    scored = _build_candidate_score(
+        candidate={
+            "id": "cand-1",
+            "experience_years": 6,
+        },
+        rubric=rubric,
+        semantic_result={
+            "criteria": {
+                "skills.python_depth": {
+                    "scorePercent": 85,
+                    "evidenceSummary": "Candidate led Python backend services in production.",
+                }
+            }
+        },
+        score_threshold=Decimal("50"),
+    )
+
+    semantic_component = scored["componentScores"][0]
+    measurable_component = scored["componentScores"][1]
+    assert semantic_component["section"] == "skills"
+    assert semantic_component["scorePercent"] == 85.0
+    assert semantic_component["score"] == 85.0
+    assert measurable_component["section"] == "experience"
+    assert measurable_component["scorePercent"] == 100.0
+    assert measurable_component["score"] == 100.0
+
+
 def test_parse_json_object_repairs_trailing_commas():
     parsed = _parse_json_object(
         """
@@ -445,9 +615,9 @@ def test_parse_json_object_repairs_trailing_commas():
     assert parsed["scores"][0]["candidateId"] == "cand-1"
 
 
-def test_generate_json_with_retries_falls_back_from_llama_to_gpt_oss():
+def test_generate_json_with_retries_retries_on_same_shopaikey_provider():
     class FakeLLM:
-        def __init__(self, *, provider="groq", model_name="llama-3.1-8b-instant", responses=None):
+        def __init__(self, *, provider="shopaikey", model_name="llama-3.1-8b", responses=None):
             self.provider = provider
             self.model_name = model_name
             self._responses = list(responses or [])
@@ -475,7 +645,7 @@ def test_generate_json_with_retries_falls_back_from_llama_to_gpt_oss():
     llm = FakeLLM(
         responses=[
             '{"scores":[{"candidateId":"cand-1" "rationale":"bad"}]}',
-            '{"scores":[{"candidateId":"cand-1" "rationale":"still bad"}]}',
+            '{"scores":[{"candidateId":"cand-1","rationale":"ok","criteria":[]}]}',
         ]
     )
 
@@ -487,13 +657,15 @@ def test_generate_json_with_retries_falls_back_from_llama_to_gpt_oss():
     )
 
     assert parsed["scores"][0]["candidateId"] == "cand-1"
-    assert llm.calls[0][1] == "llama-3.1-8b-instant"
+    assert len(llm.calls) == 2
+    assert all(call[0] == "shopaikey" for call in llm.calls)
+    assert llm.calls[0][1] == "llama-3.1-8b"
 
 
 def test_generate_semantic_scores_with_retries_returns_empty_mapping_after_invalid_json():
     class FakeLLM:
-        provider = "groq"
-        model_name = "mixtral-8x7b"
+        provider = "shopaikey"
+        model_name = "llama-3.1-8b"
 
         def __init__(self):
             self.calls = []

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.api.v1.endpoints.jobs import (  # noqa: E402
     ChatRequest,
     ChatSessionUpdateRequest,
+    _load_job_candidates,
     chat_about_job,
     delete_job_chat_session,
     get_job_setup_status,
@@ -220,6 +221,36 @@ def test_chat_about_job_answers_total_count_in_vietnamese_for_vietnamese_questio
     )
 
     assert response.answer == "Có 1 ứng viên trong job này."
+
+
+def test_load_job_candidates_normalizes_legacy_hanoi_locations(db, owner):
+    job = Job(owner_user_id=owner.id, title="AI Engineer", status="active")
+    db.add(job)
+    db.flush()
+
+    resume = ResumeDocument(
+        original_file_name="candidate.pdf",
+        storage_uri="s3://bucket/resumes/candidate.pdf",
+        upload_status=UploadStatus.PROCESSED,
+        job_id=job.id,
+        uploaded_by_user_id=owner.id,
+        retention_expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(resume)
+    db.flush()
+
+    profile = CandidateProfile(
+        resume_document_id=resume.id,
+        full_name="Candidate Hanoi",
+        location_normalized="Hanoi",
+        profile_status=ProfileStatus.REVIEWED,
+    )
+    db.add(profile)
+    db.commit()
+
+    candidates = _load_job_candidates(db, job.id, 10)
+
+    assert candidates[0]["location_normalized"] == "Hà Nội"
 
 
 def test_chat_about_job_rebuilds_history_from_saved_turns(

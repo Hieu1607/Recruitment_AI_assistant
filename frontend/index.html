@@ -11,6 +11,12 @@
       // Sets data-theme on <html> before first paint to avoid flash-of-wrong-theme.
       (function () {
         try {
+          var pathname = window.location && window.location.pathname ? window.location.pathname : "/";
+          var forceLight = pathname === "/" || pathname.indexOf("/apply/") === 0 || /^\/interviews\/[^/]+$/.test(pathname);
+          if (forceLight) {
+            document.documentElement.setAttribute("data-theme", "light");
+            return;
+          }
           var saved = localStorage.getItem("easyhr.theme");
           var theme = saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
           var applied = theme === "system"

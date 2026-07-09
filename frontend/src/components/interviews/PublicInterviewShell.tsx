@@ -11,6 +11,11 @@ type InterviewQuestion = {
   maxDurationSec: number | null;
 };
 
+type BilingualGuidanceItem = {
+  vi: string;
+  en: string;
+};
+
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 type SpeechRecognitionLike = {
@@ -71,6 +76,14 @@ function buildProviderSessionId() {
   return `browser-${Date.now()}`;
 }
 
+function appendTranscript(base: string, addition: string) {
+  const nextAddition = addition.trimStart();
+  if (!base) return nextAddition;
+  if (!nextAddition) return base;
+  const separator = /\s$/.test(base) ? "" : " ";
+  return `${base}${separator}${nextAddition}`;
+}
+
 function formatAttempts(invitation: Pick<PublicInterviewInvitationPayload, "attempt_count" | "max_attempts"> | null) {
   if (!invitation) return null;
   return `${invitation.attempt_count}/${invitation.max_attempts}`;
@@ -109,6 +122,66 @@ function describeAvailability(snapshot: PublicInterviewStatusResponse | null) {
   }
 }
 
+const preInterviewGuidance: BilingualGuidanceItem[] = [
+  {
+    vi: "Bạn sẽ được hỏi đúng theo bộ câu hỏi đã được cấu hình cho vị trí này.",
+    en: "The interviewer will ask only the questions configured for this role.",
+  },
+  {
+    vi: "Bạn có thể trả lời bằng giọng nói nếu trình duyệt hỗ trợ, hoặc nhập câu trả lời vào ô dự phòng.",
+    en: "You can answer by voice if your browser supports speech recognition, or type into the fallback box.",
+  },
+  {
+    vi: "Buổi phỏng vấn chỉ có thể được thực hiện trong giới hạn lời mời do nhà tuyển dụng thiết lập.",
+    en: "The interview can be attempted only within the invitation limits set by the recruiter.",
+  },
+];
+
+const questionGuidance: BilingualGuidanceItem[] = [
+  {
+    vi: "Bạn có thể trả lời bằng giọng nói hoặc nhập trực tiếp vào ô bên dưới.",
+    en: "You can answer by voice or type directly into the box below.",
+  },
+  {
+    vi: "Âm thanh hướng dẫn sẽ tự phát khi câu hỏi được tải xong.",
+    en: "The prompt audio plays automatically when the question loads.",
+  },
+  {
+    vi: "Hãy trả lời xong câu hiện tại rồi mới chuyển sang câu tiếp theo.",
+    en: "Finish answering the current question before moving to the next one.",
+  },
+];
+
+const completionGuidance: BilingualGuidanceItem[] = [
+  {
+    vi: "Câu trả lời của bạn đã được gửi đến nhà tuyển dụng để xem xét.",
+    en: "Your responses have been submitted. The recruiter can now review the transcript and structured summary.",
+  },
+  {
+    vi: "Bạn có thể đóng trang này sau khi xác nhận buổi phỏng vấn đã hoàn tất.",
+    en: "You can close this page after confirming the interview is complete.",
+  },
+];
+
+function BilingualGuidanceList({
+  items,
+  className,
+}: {
+  items: BilingualGuidanceItem[];
+  className?: string;
+}) {
+  return (
+    <ul className={cn("space-y-3 text-sm leading-relaxed text-fg-muted", className)}>
+      {items.map((item) => (
+        <li key={item.en} className="rounded-[var(--radius-md)] border border-[rgba(74,124,89,0.12)] bg-bg-elevated/70 px-4 py-3">
+          <p className="text-fg">{item.vi}</p>
+          <p className="mt-1">{item.en}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function PublicInterviewShell({ token }: { token: string }) {
   const [started, setStarted] = useState<PublicInterviewStartResponse | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -120,6 +193,7 @@ export function PublicInterviewShell({ token }: { token: string }) {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  const listeningBaseDraftRef = useRef("");
   const publicInterviewStatus = useQuery({
     queryKey: ["public-interview", token],
     queryFn: () => api.interviewPublic.getStatus(token),
@@ -297,15 +371,16 @@ export function PublicInterviewShell({ token }: { token: string }) {
 
     setErrorMessage(null);
     const recognition = new Recognition();
+    listeningBaseDraftRef.current = answerDraft;
     recognition.lang = started.template.language_code || "en-US";
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = (event) => {
       let transcript = "";
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      for (let index = 0; index < event.results.length; index += 1) {
         transcript += event.results[index][0].transcript;
       }
-      setAnswerDraft(transcript.trim());
+      setAnswerDraft(appendTranscript(listeningBaseDraftRef.current, transcript));
     };
     recognition.onerror = (event) => {
       setErrorMessage(`Microphone transcription error: ${event.error}`);
@@ -387,12 +462,11 @@ export function PublicInterviewShell({ token }: { token: string }) {
             ) : availabilitySummary ? (
               <p className="mt-4 max-w-2xl text-sm leading-relaxed text-fg-muted">{availabilitySummary.body}</p>
             ) : (
-              <ul className="mt-4 space-y-2 text-sm leading-relaxed text-fg-muted">
-                <li>The interviewer will ask only the questions configured for this role.</li>
-                <li>You can answer by voice if your browser supports speech recognition, or type into the fallback box.</li>
-                <li>The interview can be attempted only within the invitation limits set by the recruiter.</li>
-              </ul>
+              <p className="mt-4 max-w-2xl text-sm leading-relaxed text-fg-muted">
+                Please review the instructions below before starting the interview.
+              </p>
             )}
+            <BilingualGuidanceList items={preInterviewGuidance} className="mt-4 max-w-3xl" />
             {errorMessage && (
               <p className="mt-4 rounded-[var(--radius-md)] border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
                 {errorMessage}
@@ -418,9 +492,7 @@ export function PublicInterviewShell({ token }: { token: string }) {
         ) : isCompleted ? (
           <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg p-6">
             <h2 className="font-display text-2xl font-medium text-fg">Interview completed</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-fg-muted">
-              Your responses have been submitted. The recruiter can now review the transcript and structured summary.
-            </p>
+            <BilingualGuidanceList items={completionGuidance} className="mt-4 max-w-3xl" />
           </section>
         ) : currentQuestion ? (
           <section className="grid gap-6 lg:grid-cols-[1.3fr_0.9fr]">
@@ -442,6 +514,7 @@ export function PublicInterviewShell({ token }: { token: string }) {
                   <Volume2 size={15} strokeWidth={1.75} />
                   Agent prompt is spoken when the question loads.
                 </div>
+                <BilingualGuidanceList items={questionGuidance} className="mt-4" />
                 <label className="mt-4 block space-y-2">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">Answer transcript</span>
                   <textarea

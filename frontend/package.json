@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0",
     "test:localization": "node tests/localization-audit.mjs",
+    "test:markdown-renderer": "esbuild tests/markdown-renderer-ordered-list.tsx --bundle --platform=node --format=cjs --outfile=tmp/markdown-renderer-ordered-list.cjs && node tmp/markdown-renderer-ordered-list.cjs",
     "typecheck": "tsc -b",
     "test:e2e": "playwright test"
   },
