@@ -31,6 +31,7 @@ from src.services.candidate_evaluation_service import (  # noqa: E402
     evaluate_processing_batch,
 )
 from src.services.score_candidate import evaluate_candidate_profiles_raw  # noqa: E402
+from src.services.resume_batch_service import mark_processing_batch_failed  # noqa: E402
 
 
 def _candidates(count: int) -> list[dict]:
@@ -351,3 +352,43 @@ def test_evaluate_processing_batch_skips_completed_snapshot(db, monkeypatch):
     assert result.skipped == 1
     assert str(completed_profile.id) not in engine_inputs
     assert completed.rationale_summary == "Already completed"
+
+
+def test_mark_processing_batch_failed_closes_running_evaluations(db):
+    batch, jd, profiles = _processing_batch_context(db, processed_count=2)
+    signature = current_signature_for_jd(jd)
+    evaluations = [
+        CandidateEvaluation(
+            job_id=batch.job_id,
+            job_description_id=jd.id,
+            candidate_profile_id=profile.id,
+            scoring_signature=signature,
+            rubric_payload={},
+            raw_component_scores=[],
+            rationale_summary="",
+            status=CandidateEvaluationStatus.RUNNING,
+        )
+        for profile in profiles
+    ]
+    db.add_all(evaluations)
+    db.commit()
+
+    mark_processing_batch_failed(
+        db,
+        batch.id,
+        error_message="provider unavailable",
+    )
+
+    db.refresh(batch)
+    for evaluation in evaluations:
+        db.refresh(evaluation)
+    assert batch.status == ResumeProcessingBatchStatus.FAILED
+    assert batch.completed_at is not None
+    assert all(
+        evaluation.status == CandidateEvaluationStatus.FAILED
+        for evaluation in evaluations
+    )
+    assert all(
+        evaluation.error_message == "provider unavailable"
+        for evaluation in evaluations
+    )

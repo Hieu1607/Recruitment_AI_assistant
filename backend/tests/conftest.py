@@ -124,6 +124,9 @@ if "worker.tasks" not in sys.modules:
     tasks_stub.evaluate_candidate = types.SimpleNamespace(
         delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-evaluation-task-id")
     )
+    tasks_stub.evaluate_resume_batch = types.SimpleNamespace(
+        delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-batch-evaluation-task-id")
+    )
     tasks_stub.send_interview_invitation_email = types.SimpleNamespace(
         delay=lambda *args, **kwargs: types.SimpleNamespace(id="test-interview-email-task-id")
     )

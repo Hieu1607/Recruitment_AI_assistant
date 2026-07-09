@@ -6,9 +6,15 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from src.models.enums import ResumeProcessingBatchStatus, UploadStatus
+from src.models.candidate_profile import CandidateProfile
+from src.models.enums import (
+    CandidateEvaluationStatus,
+    ResumeProcessingBatchStatus,
+    UploadStatus,
+)
 from src.models.resume_document import ResumeDocument
 from src.models.resume_processing_batch import ResumeProcessingBatch
+from src.models.scoring_evaluation import CandidateEvaluation
 
 
 @dataclass(frozen=True)
@@ -152,3 +158,46 @@ def list_recoverable_evaluation_batches(
         if batch.evaluation_dispatch_attempted_at is None
         or _as_utc(batch.evaluation_dispatch_attempted_at) <= stale_before
     ]
+
+
+def mark_processing_batch_failed(
+    db: Session,
+    processing_batch_id: uuid.UUID,
+    *,
+    error_message: str,
+) -> None:
+    batch = (
+        db.query(ResumeProcessingBatch)
+        .filter(ResumeProcessingBatch.id == processing_batch_id)
+        .with_for_update()
+        .one()
+    )
+    profile_ids = [
+        profile_id
+        for (profile_id,) in (
+            db.query(CandidateProfile.id)
+            .join(ResumeDocument, ResumeDocument.id == CandidateProfile.resume_document_id)
+            .filter(ResumeDocument.processing_batch_id == batch.id)
+            .all()
+        )
+    ]
+    if profile_ids:
+        evaluations = (
+            db.query(CandidateEvaluation)
+            .filter(
+                CandidateEvaluation.candidate_profile_id.in_(profile_ids),
+                CandidateEvaluation.status.in_(
+                    [
+                        CandidateEvaluationStatus.PENDING,
+                        CandidateEvaluationStatus.RUNNING,
+                    ]
+                ),
+            )
+            .all()
+        )
+        for evaluation in evaluations:
+            evaluation.status = CandidateEvaluationStatus.FAILED
+            evaluation.error_message = error_message
+    batch.status = ResumeProcessingBatchStatus.FAILED
+    batch.completed_at = datetime.now(timezone.utc)
+    db.commit()
