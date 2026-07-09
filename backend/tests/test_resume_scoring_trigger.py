@@ -166,6 +166,16 @@ def test_process_resume_creates_pending_evaluation_before_worker_runs(monkeypatc
             ),
             raising=False,
         )
+        current_tasks_module = importlib.import_module("worker.tasks")
+        monkeypatch.setattr(
+            current_tasks_module,
+            "evaluate_candidate",
+            types.SimpleNamespace(
+                delay=lambda profile_id: queued.append(profile_id)
+                or types.SimpleNamespace(id="eval-task-id")
+            ),
+            raising=False,
+        )
         monkeypatch.setattr("src.models.session.SessionLocal", lambda: Session(engine))
 
         result = worker_tasks.process_resume.run(resume_document_id)
@@ -217,11 +227,10 @@ def test_process_resume_reconciles_batch_without_queueing_single_candidate(monke
         "src.services.candidate_evaluation_service.queue_candidate_evaluation_for_current_jd",
         lambda **kwargs: legacy_queued.append(kwargs) or True,
     )
-    monkeypatch.setattr(
-        worker_tasks,
+    monkeypatch.setitem(
+        worker_tasks.process_resume.run.__globals__,
         "_dispatch_evaluation_batch",
         lambda batch_id: dispatched.append(batch_id) or True,
-        raising=False,
     )
 
     result = worker_tasks.process_resume.run(
