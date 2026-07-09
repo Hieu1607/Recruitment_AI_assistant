@@ -911,40 +911,13 @@ def _build_candidate_score(
     }
 
 
-def evaluate_candidate_profile_raw(
+def _raw_evaluation_payload(
     *,
     candidate: Dict[str, Any],
-    job_description_text: str,
-    section_weights: Optional[Dict[str, float]] = None,
+    rubric: Dict[str, Any],
+    semantic_result: Dict[str, Any],
     debug_logger: Optional[ScoringDebugLogger] = None,
 ) -> Dict[str, Any]:
-    llm = _scoring_llm_provider()
-    rubric = _extract_locked_rubric(
-        llm=llm,
-        job_description_text=job_description_text,
-        section_weights=section_weights,
-        debug_logger=debug_logger,
-    )
-    if not rubric or not rubric.get("criteria"):
-        return {
-            "rubricPayload": {"criteria": [], "sectionWeights": {}},
-            "rawComponentScores": [],
-            "rationaleSummary": _build_rationale_summary(0.0, []),
-        }
-
-    semantic_criteria = [criterion for criterion in rubric.get("criteria", []) if not criterion.get("measurable")]
-    semantic_result: Dict[str, Any] = {}
-    if semantic_criteria:
-        semantic_scores = _generate_semantic_scores_with_retries(
-            llm=llm,
-            prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
-                candidates=[candidate],
-                rubric={"criteria": semantic_criteria},
-            ),
-            debug_logger=debug_logger,
-        )
-        semantic_result = semantic_scores.get(str(candidate.get("id") or ""), {})
-
     raw_score = _build_candidate_score(
         candidate=candidate,
         rubric=rubric,
@@ -966,6 +939,97 @@ def evaluate_candidate_profile_raw(
         "rawComponentScores": raw_component_scores,
         "rationaleSummary": str(raw_score.get("rationale") or "").strip(),
     }
+
+
+def evaluate_candidate_profiles_raw(
+    *,
+    candidates: List[Dict[str, Any]],
+    job_description_text: str,
+    section_weights: Optional[Dict[str, float]] = None,
+    debug_logger: Optional[ScoringDebugLogger] = None,
+) -> Dict[str, Dict[str, Any]]:
+    if not candidates:
+        return {}
+
+    llm = _scoring_llm_provider()
+    rubric = _extract_locked_rubric(
+        llm=llm,
+        job_description_text=job_description_text,
+        section_weights=section_weights,
+        debug_logger=debug_logger,
+    )
+    if not rubric or not rubric.get("criteria"):
+        return {
+            str(candidate.get("id") or ""): {
+                "rubricPayload": {"criteria": [], "sectionWeights": {}},
+                "rawComponentScores": [],
+                "rationaleSummary": _build_rationale_summary(0.0, []),
+            }
+            for candidate in candidates
+        }
+
+    semantic_criteria = [
+        criterion
+        for criterion in rubric.get("criteria", [])
+        if criterion.get("measurable") is None
+    ]
+    scoring_window = BudgetWindow(
+        context_window=settings.SCORING_CONTEXT_WINDOW_TOKENS,
+        output_budget=settings.SCORING_OUTPUT_TOKEN_BUDGET,
+        reserve=settings.SCORING_CONTEXT_RESERVE_TOKENS,
+    )
+    static_prompt_tokens = estimate_tokens(job_description_text) + estimate_json_tokens(
+        {
+            "rubric": rubric,
+            "sectionWeights": section_weights or {},
+        }
+    )
+    batch_plan = build_scoring_batch_plan(
+        candidates=candidates,
+        semantic_criteria=semantic_criteria,
+        static_prompt_tokens=static_prompt_tokens,
+        window=scoring_window,
+        max_candidates_per_batch=settings.SCORING_MAX_CANDIDATES_PER_BATCH,
+        max_criteria_per_call=settings.SCORING_MAX_SEMANTIC_CRITERIA_PER_CALL,
+    )
+    semantic_by_candidate: Dict[str, Dict[str, Any]] = {}
+    for candidate_batch in batch_plan.candidate_batches:
+        for criterion_batch in batch_plan.criterion_batches:
+            semantic_update = _generate_semantic_scores_with_retries(
+                llm=llm,
+                prompt=build_prompts.build_locked_rubric_semantic_scoring_prompt(
+                    candidates=candidate_batch.candidates,
+                    rubric={"criteria": criterion_batch},
+                ),
+                debug_logger=debug_logger,
+            )
+            _merge_semantic_scores(semantic_by_candidate, semantic_update)
+
+    return {
+        str(candidate.get("id") or ""): _raw_evaluation_payload(
+            candidate=candidate,
+            rubric=rubric,
+            semantic_result=semantic_by_candidate.get(str(candidate.get("id") or ""), {}),
+            debug_logger=debug_logger,
+        )
+        for candidate in candidates
+    }
+
+
+def evaluate_candidate_profile_raw(
+    *,
+    candidate: Dict[str, Any],
+    job_description_text: str,
+    section_weights: Optional[Dict[str, float]] = None,
+    debug_logger: Optional[ScoringDebugLogger] = None,
+) -> Dict[str, Any]:
+    candidate_id = str(candidate.get("id") or "")
+    return evaluate_candidate_profiles_raw(
+        candidates=[candidate],
+        job_description_text=job_description_text,
+        section_weights=section_weights,
+        debug_logger=debug_logger,
+    )[candidate_id]
 
 
 def _coerce_passed_threshold(score_data: Dict[str, Any], score_threshold: Decimal) -> Dict[str, Any]:
