@@ -47,6 +47,7 @@ export interface ResumeBatchParseItem {
 }
 
 export interface ResumeBatchParseResponse {
+  processing_batch_id?: string | null;
   total_files: number;
   queued_files: number;
   items: ResumeBatchParseItem[];

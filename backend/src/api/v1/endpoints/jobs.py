@@ -20,6 +20,7 @@ from src.models.job_matching import JobDescription, MatchResult, MatchRun
 from src.models.query_shortlist import QuerySession, QueryTurn
 from src.models.resume_document import ResumeDocument
 from src.models.user_account import UserAccount
+from src.core.config import settings
 from src.services.ai_agent.graph import get_graph
 from src.services.candidate_evaluation_service import (
     current_signature_for_jd,
@@ -45,6 +46,7 @@ from src.services.job_scope import (
 )
 from src.services.object_storage import build_object_key, get_object_storage
 from src.services.public_job_service import generate_public_apply_token
+from src.services.resume_batch_service import create_processing_batch
 from src.services.ai_agent.langgraph_trace import format_exception_payload, get_trace_logger
 from src.services.resume_service import (
     _normalize_location_name,
@@ -969,6 +971,11 @@ async def upload_job_resumes(
     get_current_user_owned_job(db, current_user.id, job_id)
     object_storage = get_object_storage()
     items: list[dict[str, Any]] = []
+    processing_batch = (
+        create_processing_batch(db=db, job_id=job_id, total_count=len(files))
+        if settings.BATCH_RESUME_PIPELINE_ENABLED
+        else None
+    )
     for file in files:
         if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(
@@ -989,8 +996,16 @@ async def upload_job_resumes(
             original_file_name=original_name,
             job_id=job_id,
             uploaded_by_user_id=current_user.id,
+            processing_batch_id=processing_batch.id if processing_batch is not None else None,
         )
-        task = process_resume.delay(str(resume.id))
+        task = (
+            process_resume.delay(
+                str(resume.id),
+                processing_batch_id=str(processing_batch.id),
+            )
+            if processing_batch is not None
+            else process_resume.delay(str(resume.id))
+        )
         items.append(
             {
                 "file_name": original_name,
@@ -1000,6 +1015,9 @@ async def upload_job_resumes(
             }
         )
     return {
+        "processing_batch_id": (
+            str(processing_batch.id) if processing_batch is not None else None
+        ),
         "total_files": len(items),
         "queued_files": len(items),
         "items": items,

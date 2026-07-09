@@ -118,6 +118,13 @@ class Settings(BaseSettings):
         os.getenv("SHOPAIKEY_MODEL_NAME", "llama-3.1-8b"),
     )
     RESUME_PARSE_MAX_TOKENS: int = int(os.getenv("RESUME_PARSE_MAX_TOKENS", "4096"))
+    BATCH_RESUME_PIPELINE_ENABLED: bool = os.getenv(
+        "BATCH_RESUME_PIPELINE_ENABLED",
+        "true",
+    ).lower() in {"1", "true", "yes", "on"}
+    RESUME_BATCH_DISPATCH_STALE_SECONDS: int = int(
+        os.getenv("RESUME_BATCH_DISPATCH_STALE_SECONDS", "15")
+    )
     SCORING_CONTEXT_WINDOW_TOKENS: int = int(os.getenv("SCORING_CONTEXT_WINDOW_TOKENS", "8192"))
     SCORING_OUTPUT_TOKEN_BUDGET: int = int(os.getenv("SCORING_OUTPUT_TOKEN_BUDGET", "4096"))
     SCORING_CONTEXT_RESERVE_TOKENS: int = int(os.getenv("SCORING_CONTEXT_RESERVE_TOKENS", "768"))
