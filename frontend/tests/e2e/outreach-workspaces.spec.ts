@@ -61,7 +61,31 @@ const template = {
   updated_at: "2026-07-08T08:00:00Z",
 };
 
-async function mockOutreachShell(page: Page) {
+const outreachMessage = {
+  id: "message-outreach-1",
+  candidate_profile_id: candidate.id,
+  candidate_full_name: candidate.full_name,
+  created_by_user_id: recruiter.id,
+  content_source: "template",
+  subject: "Warm intro subject",
+  body_text: "Hi Taylor Outreach, let's discuss Outreach Job.",
+  body_html: "<p>Hi Taylor Outreach, let's discuss Outreach Job.</p>",
+  template_id: template.id,
+  render_variables: { candidate_name: candidate.full_name, job_title: job.title },
+  sent_status: "not_sent",
+  sent_at: null,
+  created_at: "2026-07-08T08:00:00Z",
+};
+
+async function mockOutreachShell(
+  page: Page,
+  options: {
+    messages?: typeof outreachMessage[];
+    onBulkSend?: (messageIds: string[]) => void;
+  } = {},
+) {
+  const messages = options.messages ?? [];
+
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -91,7 +115,27 @@ async function mockOutreachShell(page: Page) {
     }
 
     if (path === "/outreach/" && method === "GET") {
-      await json({ items: [], total: 0 });
+      const sentStatus = url.searchParams.get("sent_status");
+      const filteredMessages = sentStatus
+        ? messages.filter((message) => message.sent_status === sentStatus)
+        : messages;
+      await json({ items: filteredMessages, total: filteredMessages.length });
+      return;
+    }
+
+    if (path === "/outreach/bulk-send" && method === "POST") {
+      const payload = route.request().postDataJSON() as { message_ids: string[] };
+      options.onBulkSend?.(payload.message_ids);
+      await json({
+        queued_count: payload.message_ids.length,
+        skipped_count: 0,
+        failed_count: 0,
+        results: payload.message_ids.map((messageId) => ({
+          message_id: messageId,
+          status: "queued",
+          reason: null,
+        })),
+      }, 202);
       return;
     }
 
@@ -148,4 +192,26 @@ test("outreach templates workspace exposes dedicated AI draft controls", async (
   await expect(newTemplateButton).toBeVisible();
   await newTemplateButton.click();
   await expect(page.getByText("Generate once")).toBeVisible();
+});
+
+test("outreach not-sent folder can select and bulk send existing drafts", async ({ page, baseURL }) => {
+  let requestedMessageIds: string[] = [];
+  await mockOutreachShell(page, {
+    messages: [outreachMessage],
+    onBulkSend: (messageIds) => {
+      requestedMessageIds = messageIds;
+    },
+  });
+  await authenticatePage(page, setup);
+
+  await page.goto(`${baseURL}/outreach?folder=not_sent`);
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.getByLabel(`Select outreach message for ${candidate.full_name}`).check();
+  await page.getByRole("button", { name: "Send 1", exact: true }).click();
+
+  await expect(page.getByText("Send 1 outreach messages?")).toBeVisible();
+  await page.getByRole("button", { name: "Send 1 messages", exact: true }).click();
+
+  await expect.poll(() => requestedMessageIds).toEqual([outreachMessage.id]);
+  await expect(page.getByText("1 queued, 0 skipped, 0 failed")).toBeVisible();
 });

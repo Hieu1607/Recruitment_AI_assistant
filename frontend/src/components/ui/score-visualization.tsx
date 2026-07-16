@@ -19,7 +19,9 @@ export interface ScoreSegment {
 
 export interface RadarDataPoint {
   subject: string;
+  detail?: string;
   value: number;
+  comparisonValue?: number | null;
   fullMark?: number;
 }
 
@@ -236,12 +238,22 @@ export interface ScoreRadarProps {
   data: RadarDataPoint[];
   size?: number;
   className?: string;
+  primaryLabel?: string;
+  comparisonLabel?: string;
 }
 
-export function ScoreRadar({ data, size = 400, className }: ScoreRadarProps) {
+export function ScoreRadar({
+  data,
+  size = 400,
+  className,
+  primaryLabel = "Candidate",
+  comparisonLabel = "Job average",
+}: ScoreRadarProps) {
   const tick = createRadarAxisTick(size);
-  const labelGutter = Math.max(RADAR_LABEL_MIN_GUTTER, Math.round(size * 0.2));
-  const outerRadius = Math.max(72, Math.round(size * 0.22));
+  const compactLabels = data.every((point) => /^C\d+$/.test(point.subject));
+  const labelGutter = compactLabels ? 34 : Math.max(RADAR_LABEL_MIN_GUTTER, Math.round(size * 0.2));
+  const outerRadius = compactLabels ? Math.round(size * 0.34) : Math.max(72, Math.round(size * 0.22));
+  const hasComparison = data.some((point) => typeof point.comparisonValue === "number");
 
   return (
     <div className={cn("mx-auto w-full", className)} style={{ maxWidth: size }}>
@@ -258,19 +270,30 @@ export function ScoreRadar({ data, size = 400, className }: ScoreRadarProps) {
           }}
           outerRadius={outerRadius}
         >
-          <PolarGrid stroke="var(--hairline)" />
+          <PolarGrid stroke="var(--hairline-strong)" strokeWidth={1.25} />
           <PolarAngleAxis
             dataKey="subject"
             tick={tick}
           />
           <Radar
-            name="Score"
+            name={primaryLabel}
             dataKey="value"
             stroke="var(--accent)"
             strokeWidth={2}
             fill="var(--accent)"
             fillOpacity={0.18}
           />
+          {hasComparison && (
+            <Radar
+              name={comparisonLabel}
+              dataKey="comparisonValue"
+              stroke="var(--warning)"
+              strokeWidth={2}
+              strokeDasharray="5 4"
+              fill="var(--warning)"
+              fillOpacity={0.06}
+            />
+          )}
           <RechartsTooltip
             contentStyle={{
               background: "var(--bg-elevated)",
@@ -280,10 +303,24 @@ export function ScoreRadar({ data, size = 400, className }: ScoreRadarProps) {
               fontFamily: "var(--font-sans)",
               color: "var(--fg)",
             }}
+            labelFormatter={(label) => data.find((point) => point.subject === label)?.detail ?? label}
+            formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
             cursor={false}
           />
         </RadarChart>
       </ResponsiveContainer>
+      <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs text-fg-muted">
+        <span className="inline-flex items-center gap-2">
+          <span className="h-0.5 w-6 bg-accent" />
+          {primaryLabel}
+        </span>
+        {hasComparison && (
+          <span className="inline-flex items-center gap-2">
+            <span className="h-0.5 w-6 border-t-2 border-dashed border-warning" />
+            {comparisonLabel}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

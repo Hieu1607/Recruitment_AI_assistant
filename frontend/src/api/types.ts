@@ -653,6 +653,23 @@ export interface OutreachListResponse {
   items: OutreachResponse[];
 }
 
+export interface OutreachBulkSendRequest {
+  message_ids: string[];
+}
+
+export interface OutreachBulkSendResult {
+  message_id: string;
+  status: "queued" | "skipped" | "failed";
+  reason: string | null;
+}
+
+export interface OutreachBulkSendResponse {
+  queued_count: number;
+  skipped_count: number;
+  failed_count: number;
+  results: OutreachBulkSendResult[];
+}
+
 export interface OutreachCreateRequest {
   candidate_profile_id: string;         // UUID
   created_by_user_id: string;           // UUID

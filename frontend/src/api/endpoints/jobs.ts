@@ -19,6 +19,11 @@ import type {
   ScoreResponse,
 } from "../types";
 
+// Job chat may fan out across hundreds of candidate profiles before reducing
+// the results. Keep this scoped to chat so ordinary API calls retain the
+// client's shorter default timeout.
+const JOB_CHAT_TIMEOUT_MS = 180_000;
+
 export const jobsApi = {
   async list(): Promise<JobListResponse> {
     const { data } = await client.get<JobListResponse>("/jobs/");
@@ -163,7 +168,9 @@ export const jobsApi = {
 
   chat: {
     async send(jobId: string, body: { message: string; session_id?: string; candidate_limit?: number }): Promise<ChatResponse> {
-      const { data } = await client.post<ChatResponse>(`/jobs/${jobId}/chat`, body);
+      const { data } = await client.post<ChatResponse>(`/jobs/${jobId}/chat`, body, {
+        timeout: JOB_CHAT_TIMEOUT_MS,
+      });
       return data;
     },
 

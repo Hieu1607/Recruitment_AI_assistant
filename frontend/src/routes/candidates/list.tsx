@@ -1,4 +1,4 @@
-import { api, type ResumeResponse, type UploadStatus } from "@/api";
+import { api, type CandidateEvaluationResponse, type ResumeResponse, type UploadStatus } from "@/api";
 import { UploadModal } from "@/components/candidates/UploadModal";
 import {
     Badge,
@@ -160,9 +160,9 @@ export default function CandidatesListRoute() {
   const view = (params.get("view") as "table" | "grid") ?? "table";
   const statusFilter = (params.get("status") ?? "") as UploadStatus | "";
   const page = Math.max(1, parseInt(params.get("page") ?? "1", 10));
-  const pageSize = [50, 100, 200].includes(parseInt(params.get("pageSize") ?? "50", 10))
-    ? parseInt(params.get("pageSize") ?? "50", 10)
-    : 50;
+  const pageSize = [10, 20, 50, 100, 200].includes(parseInt(params.get("pageSize") ?? "10", 10))
+    ? parseInt(params.get("pageSize") ?? "10", 10)
+    : 10;
   const sortLabel = params.get("sort") ?? "Newest first";
   const searchQuery = params.get("q") ?? "";
 
@@ -228,6 +228,16 @@ export default function CandidatesListRoute() {
     },
   });
 
+  const { data: evaluations } = useQuery({
+    queryKey: ["jobs", selectedJobId, "evaluations"],
+    queryFn: () => api.jobs.evaluations.list(selectedJobId!),
+    enabled: !!selectedJobId,
+    refetchInterval: (query) => {
+      const evaluationData = query.state.data;
+      return evaluationData && (evaluationData.pending_count > 0 || evaluationData.running_count > 0) ? 3000 : false;
+    },
+  });
+
   const { data: collectionsData, isLoading: isCollectionsLoading } = useQuery({
     queryKey: ["collections"],
     queryFn: () => api.shortlist.collections.list({ limit: 100 }),
@@ -236,6 +246,12 @@ export default function CandidatesListRoute() {
   });
 
   const allItems: ResumeResponse[] = useMemo(() => data?.items ?? [], [data?.items]);
+  const evaluationByCandidateId = useMemo(
+    () => new Map<string, CandidateEvaluationResponse>(
+      (evaluations?.items ?? []).map((evaluation) => [evaluation.candidate_profile_id, evaluation]),
+    ),
+    [evaluations?.items],
+  );
   const collections = useMemo(() => collectionsData?.items ?? [], [collectionsData?.items]);
   const serverTotal: number = data?.total ?? 0;
 
@@ -266,7 +282,6 @@ export default function CandidatesListRoute() {
     });
   }, [filteredItems, sortOption]);
 
-  const displayTotal = searchQuery.trim() ? filteredItems.length : serverTotal;
   const selectedResumeIdSet = useMemo(
     () => new Set(selectedIds.map(String)),
     [selectedIds],
@@ -520,21 +535,28 @@ export default function CandidatesListRoute() {
         ),
       },
       {
-        key: "retention_expires_at",
-        header: "Expires",
+        key: "score",
+        header: "Score",
         width: 120,
-        render: (row) => (
-          <span
-            className="text-sm text-fg-muted tabular-nums"
-            title={
-              row.retention_expires_at
-                ? new Date(row.retention_expires_at).toUTCString()
-                : ""
-            }
-          >
-            {relativeTime(row.retention_expires_at)}
-          </span>
-        ),
+        render: (row) => {
+          const evaluation = row.candidate_profile_id
+            ? evaluationByCandidateId.get(row.candidate_profile_id)
+            : undefined;
+          const hasScore = evaluation?.status === "completed" || evaluation?.status === "outdated";
+
+          return hasScore ? (
+            <div className="flex items-center gap-2">
+              <span className="font-display text-xl font-medium tabular-nums text-fg">
+                {evaluation.totalScore.toFixed(1)}
+              </span>
+              {evaluation.status === "outdated" && (
+                <Badge variant="warning" size="sm">Outdated</Badge>
+              )}
+            </div>
+          ) : (
+            <span className="text-sm text-fg-muted">Not scored</span>
+          );
+        },
       },
       {
         key: "actions",
@@ -568,7 +590,7 @@ export default function CandidatesListRoute() {
         ),
       },
     ],
-    [openEdit],
+    [evaluationByCandidateId, openEdit],
   );
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -825,10 +847,10 @@ export default function CandidatesListRoute() {
       )}
 
       {/* Pagination */}
-      {!isLoading && displayTotal > 0 && (
+      {!isLoading && serverTotal > 0 && (
         <div className="mt-4 hairline-t pt-3">
           <Pagination
-            total={displayTotal}
+            total={serverTotal}
             page={page}
             pageSize={pageSize}
             onPageChange={(p) =>

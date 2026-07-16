@@ -3,6 +3,8 @@ import type {
   OutreachAssetUploadResponse,
   OutreachResponse,
   OutreachListResponse,
+  OutreachBulkSendRequest,
+  OutreachBulkSendResponse,
   OutreachCreateRequest,
   OutreachTemplateCreateRequest,
   OutreachTemplateListResponse,
@@ -111,6 +113,14 @@ export const outreachApi = {
   async send(messageId: string): Promise<OutreachResponse> {
     const { data } = await client.post<OutreachResponse>(
       `/outreach/${messageId}/send`,
+    );
+    return data;
+  },
+
+  async bulkSend(body: OutreachBulkSendRequest): Promise<OutreachBulkSendResponse> {
+    const { data } = await client.post<OutreachBulkSendResponse>(
+      "/outreach/bulk-send",
+      body,
     );
     return data;
   },

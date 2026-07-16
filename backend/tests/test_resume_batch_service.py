@@ -16,6 +16,7 @@ from src.models.resume_processing_batch import ResumeProcessingBatch  # noqa: E4
 from src.models.user_account import UserAccount  # noqa: E402
 from src.services.resume_batch_service import (  # noqa: E402
     claim_evaluation_dispatch,
+    list_recoverable_evaluation_batches,
     reconcile_batch_after_parse,
 )
 
@@ -156,17 +157,45 @@ def test_claim_dispatch_allows_stale_recovery(db):
         db,
         batch.id,
         stale_after_seconds=15,
+        evaluation_stale_after_seconds=1800,
         now=now,
     )
     assert not claim_evaluation_dispatch(
         db,
         batch.id,
         stale_after_seconds=15,
+        evaluation_stale_after_seconds=1800,
         now=now + timedelta(seconds=14),
     )
     assert claim_evaluation_dispatch(
         db,
         batch.id,
         stale_after_seconds=15,
+        evaluation_stale_after_seconds=1800,
         now=now + timedelta(seconds=16),
     )
+
+
+def test_recovery_requeues_stale_evaluating_batch(db):
+    batch = _create_batch(db, [UploadStatus.PROCESSED])
+    reconcile_batch_after_parse(db, batch.id)
+    now = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
+    batch.status = ResumeProcessingBatchStatus.EVALUATING
+    batch.updated_at = now - timedelta(seconds=1801)
+    db.commit()
+
+    assert list_recoverable_evaluation_batches(
+        db,
+        stale_after_seconds=15,
+        evaluation_stale_after_seconds=1800,
+        now=now,
+    ) == [batch.id]
+    assert claim_evaluation_dispatch(
+        db,
+        batch.id,
+        stale_after_seconds=15,
+        evaluation_stale_after_seconds=1800,
+        now=now,
+    )
+    db.refresh(batch)
+    assert batch.status == ResumeProcessingBatchStatus.EVALUATION_PENDING

@@ -9,6 +9,22 @@ from pathlib import Path
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 
 
+def pytest_configure(config):
+    """Hide known application deprecations without masking test warnings."""
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore:Pydantic V1 style `@validator` validators are deprecated.*:DeprecationWarning",
+    )
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore:Support for class-based `config` is deprecated.*:DeprecationWarning",
+    )
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore:datetime\\.datetime\\.utcnow\\(\\) is deprecated.*:DeprecationWarning",
+    )
+
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))

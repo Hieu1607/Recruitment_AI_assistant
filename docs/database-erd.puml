@@ -1,0 +1,210 @@
+@startuml
+' Recruitment AI Assistant — ERD overview
+' Paste into draw.io: Arrange > Insert > Advanced > PlantUML
+
+hide methods
+hide stereotypes
+top to bottom direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+
+class user_accounts #E8F1FF {
+  * id : UUID
+  --
+  email : varchar(320)
+  display_name : varchar(255)
+  password_hash : varchar(255)?
+  status : varchar(9)
+  created_at : datetime
+}
+
+class jobs #E8F8F1 {
+  * id : UUID
+  --
+  owner_user_id : UUID <<FK>>
+  title : varchar(255)
+  status : varchar(50)
+  public_apply_token : varchar(64)
+  public_apply_enabled : boolean
+  candidate_message : text?
+  public_apply_created_at : datetime
+  public_apply_disabled_at : datetime?
+  created_at : datetime
+  updated_at : datetime
+  archived_at : datetime?
+}
+
+class job_descriptions #E8F8F1 {
+  * id : UUID
+  --
+  job_id : UUID <<FK>>
+  title : varchar(255)
+  jd_text : text
+  hidden_text : text
+  created_by_user_id : UUID
+  created_at : datetime
+  is_active : boolean
+}
+
+class resume_documents #FFF3E0 {
+  * id : UUID
+  --
+  job_id : UUID <<FK>>
+  original_file_name : varchar(255)
+  storage_uri : varchar(1024)
+  upload_status : varchar(10)
+  duplicate_group_key : varchar(255)?
+  uploaded_by_user_id : UUID
+  uploaded_at : datetime
+  processed_at : datetime?
+  retention_expires_at : datetime
+  processing_batch_id : UUID <<FK>>?
+}
+
+class candidate_profiles #FFF3E0 {
+  * id : UUID
+  --
+  resume_document_id : UUID <<FK>>
+  full_name : varchar(255)
+  submitted_full_name : varchar(255)?
+  phone : varchar(50)?
+  email : varchar(320)?
+  submitted_email : varchar(320)?
+  location_normalized : varchar(255)?
+  contact : varchar(255)?
+  current_job_title : varchar(255)?
+  ever_studied_abroad : boolean
+  graduation_status : varchar(50)
+  major : varchar(255)?
+  cpa : text?
+  education_text : text?
+  experience_text : text?
+  experience_years : numeric(5,2)?
+  skills_text : text?
+  languages_text : text?
+  projects_text : text?
+  summary_text : text?
+  achievements_text : text?
+  publications_text : text?
+  certifications_text : text?
+  references_text : text?
+  other_text : text?
+  structured_profile : jsonb?
+  profile_status : varchar(8)
+  created_at : datetime
+  updated_at : datetime
+}
+
+class candidate_evaluations #FCE4EC {
+  * id : UUID
+  --
+  job_id : UUID <<FK>>
+  job_description_id : UUID <<FK>>
+  candidate_profile_id : UUID <<FK>>
+  scoring_signature : varchar(128)
+  rubric_payload : jsonb
+  raw_component_scores : jsonb
+  rationale_summary : text
+  status : varchar(9)
+  error_message : text?
+  source_match_run_id : UUID <<FK>>?
+  created_at : datetime
+  updated_at : datetime
+  scored_at : datetime?
+}
+
+class outreach_messages #F3E5F5 {
+  * id : UUID
+  --
+  candidate_profile_id : UUID <<FK>>
+  created_by_user_id : UUID
+  content_source : varchar(8)
+  subject : varchar(255)
+  body_text : text
+  body_html : text
+  template_id : UUID <<FK>>?
+  render_variables : json?
+  sent_status : varchar(8)
+  sent_at : datetime?
+  created_at : datetime
+}
+
+class interview_templates #E0F7FA {
+  * id : UUID
+  --
+  job_id : UUID <<FK>>
+  name : varchar(255)
+  language_code : varchar(16)
+  status : varchar(50)
+  intro_script : text?
+  closing_script : text?
+  question_payload : jsonb
+  report_rubric : jsonb
+  version : integer
+  created_at : datetime
+  updated_at : datetime
+}
+
+class interview_invitations #E0F7FA {
+  * id : UUID
+  --
+  job_id : UUID <<FK>>
+  candidate_profile_id : UUID <<FK>>
+  interview_template_id : UUID <<FK>>
+  public_token : varchar(64)
+  status : varchar(50)
+  expires_at : datetime?
+  max_attempts : integer
+  attempt_count : integer
+  sent_by_user_id : UUID <<FK>>?
+  sent_at : datetime?
+  opened_at : datetime?
+  completed_at : datetime?
+  cancelled_at : datetime?
+  created_at : datetime
+  updated_at : datetime
+}
+
+class interview_sessions #E0F7FA {
+  * id : UUID
+  --
+  interview_invitation_id : UUID <<FK>>
+  status : varchar(50)
+  provider : varchar(100)?
+  provider_session_id : varchar(255)?
+  started_at : datetime?
+  completed_at : datetime?
+  failed_at : datetime?
+  device_metadata : jsonb?
+  browser_metadata : jsonb?
+  connection_metadata : jsonb?
+  created_at : datetime
+  updated_at : datetime
+}
+
+user_accounts ||--o{ jobs : owns
+jobs ||--o{ job_descriptions : has
+jobs ||--o{ resume_documents : receives
+resume_documents ||--|| candidate_profiles : extracts to
+
+jobs ||--o{ candidate_evaluations : scores for
+job_descriptions ||--o{ candidate_evaluations : uses
+candidate_profiles ||--o{ candidate_evaluations : evaluates
+candidate_profiles ||--o{ outreach_messages : contacts
+
+jobs ||--o{ interview_templates : configures
+jobs ||--o{ interview_invitations : invites for
+candidate_profiles ||--o{ interview_invitations : invited candidate
+interview_templates ||--o{ interview_invitations : uses
+interview_invitations ||--o| interview_sessions : creates
+
+' Layout guides (invisible): preserve the three-column business flow.
+' They affect placement only; they do not represent database relationships.
+user_accounts -[hidden]down-> jobs
+resume_documents -[hidden]right-> job_descriptions
+job_descriptions -[hidden]right-> interview_templates
+candidate_profiles -[hidden]right-> candidate_evaluations
+candidate_evaluations -[hidden]right-> interview_invitations
+outreach_messages -[hidden]right-> interview_sessions
+@enduml

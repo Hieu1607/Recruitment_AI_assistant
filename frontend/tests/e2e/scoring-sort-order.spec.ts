@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { authenticatePage, seedWorkspace, API_BASE_URL } from "./helpers";
+import { authenticatePage, seedWorkspace } from "./helpers";
 
 test("scoring dashboard lets recruiters switch between natural and score sorting", async ({ page, request, baseURL }) => {
   const setup = await seedWorkspace(request, "Scoring Sort", [
@@ -90,6 +90,7 @@ test("scoring dashboard lets recruiters switch between natural and score sorting
 
   await expect(page.getByRole("heading", { name: "Scoring dashboard" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Sort candidates" })).toHaveValue("natural");
+  await expect(page.getByRole("combobox", { name: "Rows per page" })).toHaveValue("10");
 
   const candidateNames = page.locator('[data-testid="scoring-candidate-name"]');
   await expect(candidateNames).toHaveText(["Alpha Candidate", "Beta Candidate", "Gamma Candidate"]);
