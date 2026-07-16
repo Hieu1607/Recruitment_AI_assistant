@@ -98,6 +98,7 @@ def claim_evaluation_dispatch(
     processing_batch_id: uuid.UUID,
     *,
     stale_after_seconds: int,
+    evaluation_stale_after_seconds: int,
     now: datetime | None = None,
 ) -> bool:
     current_time = _as_utc(now or datetime.now(timezone.utc))
@@ -107,7 +108,21 @@ def claim_evaluation_dispatch(
         .with_for_update()
         .one()
     )
-    if _status_value(batch.status) != ResumeProcessingBatchStatus.EVALUATION_PENDING.value:
+    status = _status_value(batch.status)
+    if status == ResumeProcessingBatchStatus.EVALUATING.value:
+        evaluation_stale_before = current_time - timedelta(
+            seconds=max(1, evaluation_stale_after_seconds)
+        )
+        if _as_utc(batch.updated_at) > evaluation_stale_before:
+            db.rollback()
+            return False
+        # The worker may have been restarted after it set the batch to
+        # EVALUATING.  Make the task dispatchable again rather than leaving
+        # every candidate in RUNNING indefinitely.
+        batch.status = ResumeProcessingBatchStatus.EVALUATION_PENDING
+        batch.evaluation_task_id = None
+        batch.evaluation_dispatch_attempted_at = None
+    elif status != ResumeProcessingBatchStatus.EVALUATION_PENDING.value:
         db.rollback()
         return False
 
@@ -143,20 +158,37 @@ def list_recoverable_evaluation_batches(
     db: Session,
     *,
     stale_after_seconds: int,
+    evaluation_stale_after_seconds: int,
     now: datetime | None = None,
 ) -> list[uuid.UUID]:
     current_time = _as_utc(now or datetime.now(timezone.utc))
     stale_before = current_time - timedelta(seconds=max(1, stale_after_seconds))
-    batches = (
-        db.query(ResumeProcessingBatch)
-        .filter(ResumeProcessingBatch.status == ResumeProcessingBatchStatus.EVALUATION_PENDING)
-        .all()
+    evaluation_stale_before = current_time - timedelta(
+        seconds=max(1, evaluation_stale_after_seconds)
+    )
+    batches = db.query(ResumeProcessingBatch).filter(
+        ResumeProcessingBatch.status.in_(
+            [
+                ResumeProcessingBatchStatus.EVALUATION_PENDING,
+                ResumeProcessingBatchStatus.EVALUATING,
+            ]
+        )
     )
     return [
         batch.id
         for batch in batches
-        if batch.evaluation_dispatch_attempted_at is None
-        or _as_utc(batch.evaluation_dispatch_attempted_at) <= stale_before
+        if (
+            _status_value(batch.status)
+            == ResumeProcessingBatchStatus.EVALUATION_PENDING.value
+            and (
+                batch.evaluation_dispatch_attempted_at is None
+                or _as_utc(batch.evaluation_dispatch_attempted_at) <= stale_before
+            )
+        )
+        or (
+            _status_value(batch.status) == ResumeProcessingBatchStatus.EVALUATING.value
+            and _as_utc(batch.updated_at) <= evaluation_stale_before
+        )
     ]
 
 

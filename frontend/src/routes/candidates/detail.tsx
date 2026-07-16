@@ -11,6 +11,8 @@ import type {
 } from "@/api";
 import { api } from "@/api";
 import { InvitationSendDialog } from "@/components/interviews/InvitationSendDialog";
+import { getSectionAverage } from "@/components/scoring-utils";
+import { CriteriaRadar } from "@/components/scoring-visuals";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge, Button, EmptyState, Skeleton } from "@/components/ui";
 import { useSelectedJobId } from "@/lib/auth";
@@ -51,7 +53,7 @@ function dateDisplayValue(value: string | null) {
 
 function statusVariant(status: string): "neutral" | "warning" | "success" | "danger" {
   if (status === "processed" || status === "completed" || status === "sent") return "success";
-  if (status === "processing" || status === "pending") return "warning";
+  if (status === "processing" || status === "pending" || status === "outdated") return "warning";
   if (status === "failed" || status === "cancelled") return "danger";
   return "neutral";
 }
@@ -318,9 +320,15 @@ function TabButton({
 function OverviewTab({
   resume,
   profile,
+  evaluation,
+  jobEvaluations,
+  evaluationLoading,
 }: {
   resume: ResumeResponse;
   profile: CandidateProfileResponse | undefined;
+  evaluation: CandidateEvaluationResponse | undefined;
+  jobEvaluations: CandidateEvaluationResponse[];
+  evaluationLoading: boolean;
 }) {
   const emptyValue = resumeStatusMessage(resume.upload_status) ?? "No infomation";
   const displayName = profile?.full_name || profile?.submitted_full_name;
@@ -328,17 +336,17 @@ function OverviewTab({
   const sectionFields = [
     { title: "Name", kind: "plain" as const, content: displayName },
     { title: "Current Role", kind: "plain" as const, content: profile?.current_job_title },
-    { title: "Summary", kind: "summary" as const, content: profile?.summary_text, structured: profile?.structured_profile?.summary },
-    { title: "Skills", kind: "structured" as const, content: profile?.skills_text, structured: profile?.structured_profile?.skills },
-    { title: "Experience", kind: "structured" as const, content: profile?.experience_text, structured: profile?.structured_profile?.experience },
-    { title: "Education", kind: "structured" as const, content: profile?.education_text, structured: profile?.structured_profile?.education },
-    { title: "Projects", kind: "structured" as const, content: profile?.projects_text, structured: profile?.structured_profile?.projects },
-    { title: "Languages", kind: "structured" as const, content: profile?.languages_text, structured: profile?.structured_profile?.languages },
-    { title: "Achievements", kind: "structured" as const, content: profile?.achievements_text, structured: profile?.structured_profile?.achievements },
-    { title: "Publications", kind: "structured" as const, content: profile?.publications_text, structured: profile?.structured_profile?.publications },
-    { title: "Certifications", kind: "structured" as const, content: profile?.certifications_text, structured: profile?.structured_profile?.certifications },
+    { title: "Summary", scoringSection: "summary", kind: "summary" as const, content: profile?.summary_text, structured: profile?.structured_profile?.summary },
+    { title: "Skills", scoringSection: "skills", kind: "structured" as const, content: profile?.skills_text, structured: profile?.structured_profile?.skills },
+    { title: "Experience", scoringSection: "experience", kind: "structured" as const, content: profile?.experience_text, structured: profile?.structured_profile?.experience },
+    { title: "Education", scoringSection: "education", kind: "structured" as const, content: profile?.education_text, structured: profile?.structured_profile?.education },
+    { title: "Projects", scoringSection: "projects", kind: "structured" as const, content: profile?.projects_text, structured: profile?.structured_profile?.projects },
+    { title: "Languages", scoringSection: "languages", kind: "structured" as const, content: profile?.languages_text, structured: profile?.structured_profile?.languages },
+    { title: "Achievements", scoringSection: "achievements", kind: "structured" as const, content: profile?.achievements_text, structured: profile?.structured_profile?.achievements },
+    { title: "Publications", scoringSection: "publications", kind: "structured" as const, content: profile?.publications_text, structured: profile?.structured_profile?.publications },
+    { title: "Certifications", scoringSection: "certifications", kind: "structured" as const, content: profile?.certifications_text, structured: profile?.structured_profile?.certifications },
     { title: "References", kind: "structured" as const, content: profile?.references_text, structured: profile?.structured_profile?.references },
-    { title: "Other", kind: "structured" as const, content: profile?.other_text, structured: profile?.structured_profile?.other },
+    { title: "Other", scoringSection: "other", kind: "structured" as const, content: profile?.other_text, structured: profile?.structured_profile?.other },
   ];
 
   const resumeInfoRows = [
@@ -367,12 +375,24 @@ function OverviewTab({
           />
         )}
 
-        {sectionFields.map((section) => (
-          <section
-            key={section.title}
-            className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5"
-          >
-            <h2 className="font-display text-xl font-medium text-fg">{section.title}</h2>
+        {sectionFields.map((section) => {
+          const sectionScore = section.scoringSection && evaluation
+            ? getSectionAverage(evaluation.componentScores, section.scoringSection)
+            : null;
+
+          return (
+            <section
+              key={section.title}
+              className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5"
+            >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <h2 className="font-display text-xl font-medium text-fg">{section.title}</h2>
+              {sectionScore !== null && (
+                <span className="rounded-full border border-[color:var(--hairline-strong)] bg-bg px-3 py-1 font-mono text-sm font-medium tabular-nums text-fg">
+                  {sectionScore.toFixed(1)}%
+                </span>
+              )}
+            </div>
             {section.kind === "plain" && (
               <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">
                 {displayValue(section.content, emptyValue)}
@@ -384,25 +404,54 @@ function OverviewTab({
             {section.kind === "structured" && (
               <StructuredSectionBlock section={section.structured} fallbackText={section.content} emptyValue={emptyValue} />
             )}
-          </section>
-        ))}
+            </section>
+          );
+        })}
       </div>
 
-      <aside className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
-        <h2 className="font-display text-xl font-medium text-fg">Resume Info</h2>
-        <div className="mt-4 space-y-3 text-sm">
-          {resumeInfoRows.map((row) => (
-            <div key={row.label} className="flex items-center justify-between gap-3">
-              <span className="text-fg-muted">{row.label}</span>
-              {row.badge ? (
-                <Badge variant={statusVariant(String(row.value ?? ""))}>{displayValue(row.value)}</Badge>
-              ) : (
-                <span className="text-right text-fg">{displayValue(row.value, emptyValue)}</span>
-              )}
+      <div className="space-y-5">
+        <aside className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+          <h2 className="font-display text-xl font-medium text-fg">Resume Info</h2>
+          <div className="mt-4 space-y-3 text-sm">
+            {resumeInfoRows.map((row) => (
+              <div key={row.label} className="flex items-center justify-between gap-3">
+                <span className="text-fg-muted">{row.label}</span>
+                {row.badge ? (
+                  <Badge variant={statusVariant(String(row.value ?? ""))}>{displayValue(row.value)}</Badge>
+                ) : (
+                  <span className="text-right text-fg">{displayValue(row.value, emptyValue)}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        <aside className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-display text-xl font-medium text-fg">Scoring profile</h2>
+              <p className="mt-1 text-sm text-fg-muted">Candidate versus the current job average.</p>
             </div>
-          ))}
-        </div>
-      </aside>
+            {evaluation && (
+              <div className="text-right">
+                <p className="font-display text-2xl font-medium tabular-nums text-fg">{evaluation.totalScore.toFixed(1)}</p>
+                <Badge variant={statusVariant(evaluation.status)} size="sm">{evaluation.status}</Badge>
+              </div>
+            )}
+          </div>
+          <div className="mt-4">
+            {evaluationLoading ? (
+              <Skeleton className="h-72 w-full rounded-[var(--radius-md)]" />
+            ) : evaluation && evaluation.componentScores.length > 0 ? (
+              <CriteriaRadar evaluation={evaluation} jobEvaluations={jobEvaluations} size={320} />
+            ) : (
+              <p className="text-sm leading-6 text-fg-muted">
+                Scoring will appear after this candidate is evaluated against the current job description.
+              </p>
+            )}
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
@@ -646,6 +695,16 @@ export default function CandidateDetailRoute() {
     },
   });
 
+  const { data: jobEvaluations } = useQuery({
+    queryKey: ["jobs", selectedJobId, "evaluations"],
+    queryFn: () => api.jobs.evaluations.list(selectedJobId!),
+    enabled: !!selectedJobId && !!profile?.id,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && (data.pending_count > 0 || data.running_count > 0) ? 3000 : false;
+    },
+  });
+
   const invitations = useMemo(
     () => (invitationData?.items ?? []).filter((item) => item.candidate_profile_id === profile?.id),
     [invitationData?.items, profile?.id],
@@ -732,7 +791,15 @@ export default function CandidateDetailRoute() {
         </div>
 
         <div>
-          {activeTab === "overview" && <OverviewTab resume={resume} profile={profile} />}
+          {activeTab === "overview" && (
+            <OverviewTab
+              resume={resume}
+              profile={profile}
+              evaluation={evaluation}
+              jobEvaluations={jobEvaluations?.items ?? []}
+              evaluationLoading={evaluationLoading}
+            />
+          )}
           {activeTab === "resume" && <ResumeTab resume={resume} />}
           {activeTab === "evaluation" && (
             <EvaluationTab evaluation={evaluation} loading={evaluationLoading} />

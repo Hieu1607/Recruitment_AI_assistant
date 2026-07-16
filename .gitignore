@@ -63,4 +63,5 @@ logs/
 
 #DATN
 EasyHR_DATN_LaTeX_Report/
+.agent
 .agents/

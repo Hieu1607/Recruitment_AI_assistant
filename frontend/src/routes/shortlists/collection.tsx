@@ -862,7 +862,6 @@ export default function ShortlistCollectionRoute() {
             page={page}
             pageSize={PAGE_SIZE}
             onPageChange={setPage}
-            onPageSizeChange={() => {}}
           />
         </div>
       )}

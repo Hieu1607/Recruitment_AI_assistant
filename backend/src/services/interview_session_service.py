@@ -33,7 +33,10 @@ from src.services.tts_service import synthesize_speech
 from src.services.voice_provider import UnsupportedVoiceProviderError, VoiceProvider, get_voice_provider
 
 
-STARTABLE_INVITATION_STATUSES = {"pending", "in_progress"}
+# A delivered invitation remains usable until it expires, is cancelled, completed,
+# or its attempt limit is reached.  The email worker transitions a successful
+# delivery from "pending" to "sent".
+STARTABLE_INVITATION_STATUSES = {"pending", "sent", "in_progress"}
 logger = logging.getLogger(__name__)
 
 

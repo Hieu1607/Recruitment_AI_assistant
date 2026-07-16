@@ -161,6 +161,22 @@ def test_list_job_resumes_includes_candidate_and_uploader_display_names():
         assert response.items[0].candidate_profile_id == str(candidate.id)
         assert response.items[0].candidate_display_name == "Nguyen Van A"
         assert response.items[0].uploader_display_name == "Recruiter One"
+
+        db.add(
+            ResumeDocument(
+                original_file_name="second_cv.pdf",
+                storage_uri="s3://bucket/resumes/second_cv.pdf",
+                upload_status=UploadStatus.PROCESSED,
+                job_id=job.id,
+                uploaded_by_user_id=uploader.id,
+                retention_expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+        db.commit()
+
+        paginated_response = list_job_resumes(job.id, None, 1, 0, db, owner)
+        assert len(paginated_response.items) == 1
+        assert paginated_response.total == 2
     finally:
         db.close()
 

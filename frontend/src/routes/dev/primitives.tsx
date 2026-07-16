@@ -253,7 +253,10 @@ export default function PrimitivesShowcase() {
                 page={page}
                 pageSize={pageSize}
                 onPageChange={setPage}
-                onPageSizeChange={setPageSize}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
               />
             </div>
           </div>
@@ -351,7 +354,10 @@ export default function PrimitivesShowcase() {
               page={page}
               pageSize={pageSize}
               onPageChange={setPage}
-              onPageSizeChange={setPageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
             />
           </div>
         </Section>

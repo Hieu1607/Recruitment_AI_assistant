@@ -4,6 +4,7 @@ Route map
 ---------
   POST   /outreach/              create a message
   GET    /outreach/              list (filter by user / candidate / sent_status)
+  POST   /outreach/bulk-send     queue up to 50 owned messages
   GET    /outreach/{id}         get single message
   PATCH  /outreach/{id}         update subject, body, or sent_status
   DELETE /outreach/{id}         delete
@@ -14,7 +15,7 @@ import json
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
@@ -173,6 +174,23 @@ class OutreachResponse(BaseModel):
 class OutreachListResponse(BaseModel):
     total: int
     items: List[OutreachResponse]
+
+
+class OutreachBulkSendRequest(BaseModel):
+    message_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=50)
+
+
+class OutreachBulkSendResult(BaseModel):
+    message_id: str
+    status: Literal["queued", "skipped", "failed"]
+    reason: Optional[str] = None
+
+
+class OutreachBulkSendResponse(BaseModel):
+    queued_count: int
+    skipped_count: int
+    failed_count: int
+    results: list[OutreachBulkSendResult]
 
 
 def _validate_default_variables(value: Optional[dict]) -> Optional[dict[str, str]]:
@@ -487,6 +505,89 @@ def update_template(template_id: uuid.UUID, body: OutreachTemplateUpdateRequest)
         return _ser_template(template)
     finally:
         db.close()
+
+
+@router.post("/bulk-send", response_model=OutreachBulkSendResponse, status_code=status.HTTP_202_ACCEPTED)
+def bulk_send_messages(
+    body: OutreachBulkSendRequest,
+    db=Depends(get_db),
+    current_user: UserAccount = Depends(get_current_user),
+):
+    if _get_gmail_capable_identity(db, current_user.id) is None:
+        raise HTTPException(status_code=409, detail="gmail_not_connected")
+
+    worker_package = sys.modules.get("worker")
+    tasks_module = getattr(worker_package, "tasks", None) if worker_package is not None else None
+    if tasks_module is None:
+        tasks_module = importlib.import_module("worker.tasks")
+
+    requested_ids = list(dict.fromkeys(body.message_ids))
+    owned_messages = (
+        db.execute(
+            select(OutreachMessage).where(
+                OutreachMessage.id.in_(requested_ids),
+                OutreachMessage.created_by_user_id == current_user.id,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    messages_by_id = {message.id: message for message in owned_messages}
+    results: list[OutreachBulkSendResult] = []
+
+    for message_id in requested_ids:
+        message = messages_by_id.get(message_id)
+        if message is None:
+            results.append(
+                OutreachBulkSendResult(
+                    message_id=str(message_id),
+                    status="skipped",
+                    reason="Message was not found.",
+                )
+            )
+            continue
+        if message.sent_status == SentStatus.SENT:
+            results.append(
+                OutreachBulkSendResult(
+                    message_id=str(message_id),
+                    status="skipped",
+                    reason="Message has already been sent.",
+                )
+            )
+            continue
+        if not message.candidate_profile or not message.candidate_profile.email:
+            message.sent_status = SentStatus.FAILED
+            results.append(
+                OutreachBulkSendResult(
+                    message_id=str(message_id),
+                    status="failed",
+                    reason="Candidate has no email address.",
+                )
+            )
+            continue
+
+        try:
+            if message.sent_status == SentStatus.FAILED:
+                message.sent_status = SentStatus.NOT_SENT
+            tasks_module.send_outreach_email.delay(str(message.id))
+            results.append(OutreachBulkSendResult(message_id=str(message_id), status="queued"))
+        except Exception:
+            message.sent_status = SentStatus.FAILED
+            results.append(
+                OutreachBulkSendResult(
+                    message_id=str(message_id),
+                    status="failed",
+                    reason="Email could not be queued.",
+                )
+            )
+
+    db.commit()
+    return OutreachBulkSendResponse(
+        queued_count=sum(result.status == "queued" for result in results),
+        skipped_count=sum(result.status == "skipped" for result in results),
+        failed_count=sum(result.status == "failed" for result in results),
+        results=results,
+    )
 
 
 @router.get("/{message_id}", response_model=OutreachResponse)

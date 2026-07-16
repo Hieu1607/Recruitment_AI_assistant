@@ -921,6 +921,9 @@ def list_job_resumes(
     current_user: UserAccount = Depends(get_current_user),
 ):
     get_current_user_owned_job(db, current_user.id, job_id)
+    count_query = select(func.count(ResumeDocument.id)).where(
+        ResumeDocument.job_id == job_id,
+    )
     query = select(
         ResumeDocument,
         CandidateProfile.id,
@@ -936,7 +939,9 @@ def list_job_resumes(
         ResumeDocument.job_id == job_id,
     )
     if upload_status is not None:
+        count_query = count_query.where(ResumeDocument.upload_status == upload_status)
         query = query.where(ResumeDocument.upload_status == upload_status)
+    total = db.scalar(count_query) or 0
     rows = (
         db.execute(
             query.order_by(ResumeDocument.uploaded_at.desc())
@@ -957,7 +962,7 @@ def list_job_resumes(
             )
             for resume, candidate_profile_id, candidate_display_name, uploader_display_name in rows
         ],
-        total=len(rows),
+        total=total,
     )
 
 

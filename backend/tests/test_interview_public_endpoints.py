@@ -239,22 +239,45 @@ def test_public_interview_start_events_and_complete_flow(
     assert session_record.completed_at is not None
 
 
+@pytest.mark.parametrize("status", ["pending", "sent"])
 def test_public_interview_status_returns_ready_invitation_snapshot(
     api_client: TestClient,
+    db_session: Session,
     interview_invitation: InterviewInvitation,
+    status: str,
 ):
+    interview_invitation.status = status
+    db_session.commit()
+
     response = api_client.get(f"/api/v1/public/interview/{interview_invitation.public_token}")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["invitation"]["public_token"] == interview_invitation.public_token
-    assert payload["invitation"]["status"] == "pending"
+    assert payload["invitation"]["status"] == status
     assert payload["template"]["name"] == "Voice Screen"
     assert payload["availability"] == {
         "can_start": True,
         "reason": "ready",
         "detail": None,
     }
+
+
+def test_public_interview_start_accepts_sent_invitation(
+    api_client: TestClient,
+    db_session: Session,
+    interview_invitation: InterviewInvitation,
+):
+    interview_invitation.status = "sent"
+    db_session.commit()
+
+    response = api_client.post(
+        f"/api/v1/public/interview/{interview_invitation.public_token}/start",
+        json={"provider": "fake"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["invitation"]["status"] == "in_progress"
 
 
 @pytest.mark.parametrize(

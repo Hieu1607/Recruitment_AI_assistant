@@ -24,6 +24,7 @@ def _dispatch_evaluation_batch(processing_batch_id: uuid.UUID) -> bool:
             db,
             processing_batch_id,
             stale_after_seconds=settings.RESUME_BATCH_DISPATCH_STALE_SECONDS,
+            evaluation_stale_after_seconds=settings.RESUME_BATCH_EVALUATION_STALE_SECONDS,
         )
     if not claimed:
         return False
@@ -168,6 +169,7 @@ def recover_pending_resume_batches():
         batch_ids = list_recoverable_evaluation_batches(
             db,
             stale_after_seconds=settings.RESUME_BATCH_DISPATCH_STALE_SECONDS,
+            evaluation_stale_after_seconds=settings.RESUME_BATCH_EVALUATION_STALE_SECONDS,
         )
     dispatched = sum(1 for batch_id in batch_ids if _dispatch_evaluation_batch(batch_id))
     return {"dispatched": dispatched}

@@ -1,31 +1,34 @@
 import {
   api,
-  type CandidateEvaluationComponentScore,
   type CandidateEvaluationResponse,
 } from "@/api";
-import { Avatar, Badge, Button, EmptyState, Skeleton } from "@/components/ui";
+import {
+  SECTION_LABELS,
+  completedEvaluations,
+  formatCriterionLabel,
+} from "@/components/scoring-utils";
+import { CriteriaRadar } from "@/components/scoring-visuals";
+import { Avatar, Badge, Button, EmptyState, Pagination, Skeleton } from "@/components/ui";
 import { useSelectedJobId } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { toast } from "sonner";
 
 const DEFAULT_THRESHOLD = 50;
+const DEFAULT_PAGE_SIZE = 10;
 const SECTION_ORDER = ["skills", "experience", "education", "projects", "summary", "languages", "achievements", "certifications", "publications", "other"];
 type SortOrder = "natural" | "score_desc" | "score_asc";
-const SECTION_LABELS: Record<string, string> = {
-  skills: "Skills",
-  experience: "Experience",
-  education: "Education",
-  projects: "Projects",
-  summary: "Summary",
-  languages: "Languages",
-  achievements: "Achievements",
-  certifications: "Certifications",
-  publications: "Publications",
-  other: "Other",
-};
 
 function normalizeSectionWeights(sectionWeights: Record<string, number>) {
   const cleaned = Object.entries(sectionWeights).reduce<Record<string, number>>((acc, [key, value]) => {
@@ -114,15 +117,6 @@ function scoreVariant(status: CandidateEvaluationResponse["status"]) {
   return "neutral";
 }
 
-function formatCriterionLabel(component: CandidateEvaluationComponentScore) {
-  if (component.requirementText?.trim()) return component.requirementText.trim();
-  return component.criterionKey
-    .split(".")
-    .join(" ")
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function candidateDisplayLabel(evaluation: CandidateEvaluationResponse) {
   return (
     evaluation.candidateDisplayName?.trim()
@@ -140,6 +134,8 @@ export default function ScoringSetupRoute() {
   const [prefsDirty, setPrefsDirty] = useState(false);
   const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>("natural");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
   const { data: evaluations, isLoading } = useQuery({
     queryKey: ["jobs", selectedJobId, "evaluations"],
@@ -150,6 +146,11 @@ export default function ScoringSetupRoute() {
       return data && (data.pending_count > 0 || data.running_count > 0) ? 3000 : false;
     },
   });
+
+  useEffect(() => {
+    setPage(1);
+    setExpandedCandidateId(null);
+  }, [selectedJobId]);
 
   useEffect(() => {
     if (!evaluations || prefsDirty) return;
@@ -225,13 +226,28 @@ export default function ScoringSetupRoute() {
       .map(({ item }) => item);
   }, [previewItems, sortOrder]);
 
+  const totalPages = Math.max(1, Math.ceil(displayedItems.length / pageSize));
+  const paginatedItems = useMemo(
+    () => displayedItems.slice((page - 1) * pageSize, page * pageSize),
+    [displayedItems, page, pageSize],
+  );
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+      setExpandedCandidateId(null);
+    }
+  }, [page, totalPages]);
+
   const scoreSummary = useMemo(() => {
     const scored = previewItems.filter((item) => item.status === "completed" || item.status === "outdated");
     const average = scored.length > 0
       ? Number((scored.reduce((sum, item) => sum + item.totalScore, 0) / scored.length).toFixed(2))
       : 0;
     const highest = scored.length > 0 ? Math.max(...scored.map((item) => item.totalScore)) : 0;
-    return { average, highest };
+    const passed = scored.filter((item) => item.passedThreshold).length;
+    const passRate = scored.length > 0 ? (passed / scored.length) * 100 : 0;
+    return { average, highest, passRate };
   }, [previewItems]);
 
   if (!selectedJobId) {
@@ -314,12 +330,15 @@ export default function ScoringSetupRoute() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <SummaryCard label="Candidates" value={String(evaluations.total_candidates)} />
         <SummaryCard label="Completed" value={String(evaluations.completed_count)} />
         <SummaryCard label="Average score" value={scoreSummary.average.toFixed(1)} />
         <SummaryCard label="Highest score" value={scoreSummary.highest.toFixed(1)} />
+        <SummaryCard label="Pass rate" value={`${scoreSummary.passRate.toFixed(0)}%`} />
       </div>
+
+      <ScoringInsights items={previewItems} />
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
         <section className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
@@ -388,7 +407,11 @@ export default function ScoringSetupRoute() {
               <select
                 aria-label="Sort candidates"
                 value={sortOrder}
-                onChange={(event) => setSortOrder(event.target.value as SortOrder)}
+                onChange={(event) => {
+                  setSortOrder(event.target.value as SortOrder);
+                  setPage(1);
+                  setExpandedCandidateId(null);
+                }}
                 className="rounded-[var(--radius-md)] border border-[color:var(--hairline-strong)] bg-bg px-3 py-2 text-sm text-fg"
               >
                 <option value="natural">Natural</option>
@@ -405,7 +428,7 @@ export default function ScoringSetupRoute() {
           </div>
 
           <div className="divide-y divide-[color:var(--hairline)]">
-            {displayedItems.map((item) => {
+            {paginatedItems.map((item) => {
               const isExpanded = expandedCandidateId === item.candidate_profile_id;
               return (
                 <div key={item.id}>
@@ -513,6 +536,12 @@ export default function ScoringSetupRoute() {
                               <dd className="font-mono text-fg">{item.componentScores.length}</dd>
                             </div>
                           </dl>
+                          <div className="mt-5 border-t border-[color:var(--hairline)] pt-5">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-fg-muted">Criteria radar</p>
+                            <div className="mt-3">
+                              <CriteriaRadar evaluation={item} jobEvaluations={previewItems} size={300} />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -521,9 +550,122 @@ export default function ScoringSetupRoute() {
               );
             })}
           </div>
+          <div className="border-t border-[color:var(--hairline)] px-4">
+            <Pagination
+              total={displayedItems.length}
+              page={page}
+              pageSize={pageSize}
+              onPageChange={(nextPage) => {
+                setPage(nextPage);
+                setExpandedCandidateId(null);
+              }}
+              onPageSizeChange={(nextPageSize) => {
+                setPageSize(nextPageSize);
+                setPage(1);
+                setExpandedCandidateId(null);
+              }}
+            />
+          </div>
         </section>
       </div>
     </div>
+  );
+}
+
+function ScoringInsights({ items }: { items: CandidateEvaluationResponse[] }) {
+  const scored = completedEvaluations(items);
+  const distribution = [
+    { range: "0–49", candidates: scored.filter((item) => item.totalScore < 50).length },
+    { range: "50–69", candidates: scored.filter((item) => item.totalScore >= 50 && item.totalScore < 70).length },
+    { range: "70–79", candidates: scored.filter((item) => item.totalScore >= 70 && item.totalScore < 80).length },
+    { range: "80–100", candidates: scored.filter((item) => item.totalScore >= 80).length },
+  ];
+  const criteria = new Map<string, { label: string; total: number; count: number }>();
+  scored.forEach((item) => {
+    item.componentScores.forEach((component) => {
+      const current = criteria.get(component.criterionKey) ?? {
+        label: formatCriterionLabel(component),
+        total: 0,
+        count: 0,
+      };
+      current.total += component.scorePercent;
+      current.count += 1;
+      criteria.set(component.criterionKey, current);
+    });
+  });
+  const criteriaAverages = [...criteria.entries()].map(([key, value]) => ({
+    key,
+    label: value.label,
+    score: Number((value.total / value.count).toFixed(1)),
+  }));
+
+  if (scored.length === 0) {
+    return (
+      <EmptyState
+        heading="Scoring insights unavailable"
+        body="Charts will appear after at least one candidate has a completed evaluation."
+      />
+    );
+  }
+
+  const tooltipStyle = {
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--hairline-strong)",
+    borderRadius: "var(--radius-sm)",
+    color: "var(--fg)",
+    fontSize: 12,
+  };
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="font-display text-xl font-medium text-fg">Scoring insights</h2>
+        <p className="mt-1 text-sm text-fg-muted">A job-level view of candidate score distribution and criteria strength.</p>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+        <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+          <h3 className="text-sm font-medium text-fg">Score distribution</h3>
+          <p className="mt-1 text-xs text-fg-muted">Completed candidates by score range</p>
+          <div className="mt-4 h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={distribution} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
+                <CartesianGrid vertical={false} stroke="var(--hairline)" />
+                <XAxis dataKey="range" tick={{ fill: "var(--fg-muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fill: "var(--fg-muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <RechartsTooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--hairline)" }} />
+                <Bar dataKey="candidates" name="Candidates" fill="var(--accent)" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="rounded-[var(--radius-lg)] border border-[color:var(--hairline)] bg-bg-elevated p-5">
+          <h3 className="text-sm font-medium text-fg">Average by criteria</h3>
+          <p className="mt-1 text-xs text-fg-muted">Average percentage across completed candidates</p>
+          <div className="mt-4 max-h-[360px] overflow-y-auto">
+            <div style={{ height: Math.max(240, criteriaAverages.length * 44) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={criteriaAverages} layout="vertical" margin={{ top: 4, right: 28, bottom: 4, left: 8 }}>
+                  <CartesianGrid horizontal={false} stroke="var(--hairline)" />
+                  <XAxis type="number" domain={[0, 100]} tick={{ fill: "var(--fg-muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    type="category"
+                    dataKey="label"
+                    width={150}
+                    tick={{ fill: "var(--fg-muted)", fontSize: 11 }}
+                    tickFormatter={(value: string) => value.length > 24 ? `${value.slice(0, 21)}…` : value}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <RechartsTooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--hairline)" }} formatter={(value) => [`${Number(value).toFixed(1)}%`, "Average"]} />
+                  <Bar dataKey="score" name="Average" fill="var(--success)" radius={[0, 6, 6, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -156,22 +156,20 @@ function FolderSidebar({
 function MessageListItem({
   message,
   isSelected,
+  selectionMode,
+  isChecked,
   onClick,
+  onToggle,
 }: {
   message: OutreachResponse;
   isSelected: boolean;
+  selectionMode: boolean;
+  isChecked: boolean;
   onClick: () => void;
+  onToggle: () => void;
 }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "h-[72px] w-full flex flex-col justify-center px-3 py-4 border-b border-[color:var(--hairline)] text-left transition-colors duration-[120ms]",
-        isSelected
-          ? "bg-[color:var(--hairline-strong)] relative before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-accent before:rounded-r"
-          : "hover:bg-[color:var(--hairline)]"
-      )}
-    >
+  const content = (
+    <>
       <div className="flex justify-between items-center w-full mb-0.5">
         <span className="text-sm font-sans font-semibold text-fg truncate">
           {message.candidate_full_name ?? "Unknown"}
@@ -191,6 +189,44 @@ function MessageListItem({
           {relativeTime(message.created_at)}
         </span>
       </div>
+    </>
+  );
+
+  if (selectionMode) {
+    return (
+      <label
+        className={cn(
+          "h-[72px] w-full flex items-center gap-3 px-3 py-4 border-b border-[color:var(--hairline)] text-left transition-colors duration-[120ms] cursor-pointer",
+          isChecked
+            ? "bg-[color:var(--hairline-strong)] relative before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-accent before:rounded-r"
+            : "hover:bg-[color:var(--hairline)]"
+        )}
+      >
+        <input
+          type="checkbox"
+          checked={isChecked}
+          onChange={onToggle}
+          aria-label={`Select outreach message for ${message.candidate_full_name ?? "candidate"}`}
+          className="h-4 w-4 shrink-0 accent-[color:var(--accent)]"
+        />
+        <div className="min-w-0 flex-1">
+          {content}
+        </div>
+      </label>
+    );
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "h-[72px] w-full flex flex-col justify-center px-3 py-4 border-b border-[color:var(--hairline)] text-left transition-colors duration-[120ms]",
+        isSelected
+          ? "bg-[color:var(--hairline-strong)] relative before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-accent before:rounded-r"
+          : "hover:bg-[color:var(--hairline)]"
+      )}
+    >
+      {content}
     </button>
   );
 }
@@ -202,6 +238,7 @@ function MessageList({
   onSelect,
   folderLabel,
   total,
+  bulkAction,
 }: {
   messages: OutreachResponse[];
   isLoading: boolean;
@@ -209,41 +246,160 @@ function MessageList({
   onSelect: (id: string) => void;
   folderLabel: string;
   total: number;
+  bulkAction: "send" | "retry" | null;
 }) {
+  const qc = useQueryClient();
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const allVisibleSelected = messages.length > 0 && messages.every((message) => selectedIds.has(message.id));
+
+  useEffect(() => {
+    const visibleIds = new Set(messages.map((message) => message.id));
+    setSelectedIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    if (!bulkAction || messages.length === 0) {
+      setSelectionMode(false);
+      setConfirmOpen(false);
+    }
+  }, [bulkAction, messages]);
+
+  const bulkSendMutation = useMutation({
+    mutationFn: () => api.outreach.bulkSend({ message_ids: Array.from(selectedIds) }),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["outreach"] });
+      qc.invalidateQueries({ queryKey: ["outreach-count"] });
+      qc.invalidateQueries({ queryKey: ["outreach-message"] });
+      setConfirmOpen(false);
+      setSelectionMode(false);
+      setSelectedIds(new Set());
+      const summary = `${result.queued_count} queued, ${result.skipped_count} skipped, ${result.failed_count} failed`;
+      result.failed_count > 0 ? toast.error(summary) : toast.success(summary);
+    },
+    onError: (err: unknown) => {
+      if (parseAxiosError(err).status === 409) {
+        toast.error("Connect Gmail before sending outreach messages.");
+      } else {
+        toast.error("Could not queue the selected messages. Please try again.");
+      }
+    },
+  });
+
+  function toggleSelection(messageId: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) next.delete(messageId); else next.add(messageId);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(messages.map((message) => message.id)));
+  }
+
+  function leaveSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  const actionLabel = bulkAction === "retry" ? "Retry" : "Send";
+
   return (
-    <div className="w-[320px] shrink-0 border-r border-[color:var(--hairline)] flex flex-col bg-bg">
-      <div className="px-3 py-3 border-b border-[color:var(--hairline)] flex items-center gap-2">
-        <span className="text-[13px] font-sans font-semibold text-fg">{folderLabel}</span>
-        <span className="text-[12px] font-sans text-fg-muted tabular-nums">{total}</span>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
-          <>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-[72px] w-full border-b border-[color:var(--hairline)] rounded-none" />
-            ))}
-          </>
-        ) : messages.length === 0 ? (
-          <div className="h-full flex items-center justify-center">
-            <EmptyState
-              icon={<Inbox size={24} strokeWidth={1.25} />}
-              heading="No messages here yet"
-              body="Messages you compose will appear in this folder. Start with + New message."
-              className="py-0"
-            />
+    <>
+      <div className="w-[320px] shrink-0 border-r border-[color:var(--hairline)] flex flex-col bg-bg">
+        <div className="px-3 py-2.5 border-b border-[color:var(--hairline)] flex items-center gap-2 min-h-12">
+          <span className="text-[13px] font-sans font-semibold text-fg">{folderLabel}</span>
+          <span className="text-[12px] font-sans text-fg-muted tabular-nums">{total}</span>
+          {bulkAction && messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={() => selectionMode ? leaveSelectionMode() : setSelectionMode(true)}
+            >
+              {selectionMode ? "Cancel" : "Select"}
+            </Button>
+          )}
+        </div>
+        {selectionMode && (
+          <div className="flex items-center gap-2 border-b border-[color:var(--hairline)] bg-bg-elevated px-3 py-2">
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-xs text-fg-muted">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleAllVisible}
+                aria-label="Select all visible outreach messages"
+                className="h-4 w-4 shrink-0 accent-[color:var(--accent)]"
+              />
+              <span className="truncate">{selectedIds.size} selected</span>
+            </label>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={selectedIds.size === 0}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {actionLabel} {selectedIds.size || ""}
+            </Button>
           </div>
-        ) : (
-          messages.map((m) => (
-            <MessageListItem
-              key={m.id}
-              message={m}
-              isSelected={m.id === selectedId}
-              onClick={() => onSelect(m.id)}
-            />
-          ))
         )}
+        <div className="flex-1 overflow-y-auto">
+          {isLoading ? (
+            <>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-[72px] w-full border-b border-[color:var(--hairline)] rounded-none" />
+              ))}
+            </>
+          ) : messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center">
+              <EmptyState
+                icon={<Inbox size={24} strokeWidth={1.25} />}
+                heading="No messages here yet"
+                body="Messages you compose will appear in this folder. Start with + New message."
+                className="py-0"
+              />
+            </div>
+          ) : (
+            messages.map((m) => (
+              <MessageListItem
+                key={m.id}
+                message={m}
+                isSelected={m.id === selectedId}
+                selectionMode={selectionMode}
+                isChecked={selectedIds.has(m.id)}
+                onClick={() => onSelect(m.id)}
+                onToggle={() => toggleSelection(m.id)}
+              />
+            ))
+          )}
+        </div>
       </div>
-    </div>
+
+      <Modal open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <ModalContent>
+          <ModalHeader>
+            <ModalTitle>{actionLabel} {selectedIds.size} outreach messages?</ModalTitle>
+            <ModalDescription>
+              Each message will be queued separately. Messages that are no longer eligible will be skipped; candidates without email will be reported as failed.
+            </ModalDescription>
+          </ModalHeader>
+          <ModalFooter>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              loading={bulkSendMutation.isPending}
+              disabled={selectedIds.size === 0}
+              onClick={() => bulkSendMutation.mutate()}
+            >
+              {actionLabel} {selectedIds.size} messages
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+    </>
   );
 }
 
@@ -960,12 +1116,14 @@ export default function OutreachRoute() {
           onNewMessage={() => setComposeOpen(true)}
         />
         <MessageList
+          key={folder}
           messages={messages}
           isLoading={isLoading}
           selectedId={messageId}
           onSelect={(id) => setMessage(id)}
           folderLabel={folderDef.label}
           total={listData?.total ?? 0}
+          bulkAction={folder === "not_sent" ? "send" : folder === "failed" ? "retry" : null}
         />
         <MessageDetailPanel messageId={messageId} onClose={() => setMessage(undefined)} />
         {composeOpen && <ComposeModal candidates={candidates} onClose={() => setComposeOpen(false)} />}

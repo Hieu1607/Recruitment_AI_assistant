@@ -200,6 +200,128 @@ def test_send_outreach_queues_task_for_owner_with_gmail_capability(
     assert queued == [str(message.id)]
 
 
+def test_bulk_send_requires_current_user(api_client, seeded_outreach_message):
+    message = seeded_outreach_message["message"]
+    response = api_client.post(
+        "/api/v1/outreach/bulk-send",
+        json={"message_ids": [str(message.id)]},
+    )
+
+    assert response.status_code in {401, 403}
+
+
+def test_bulk_send_returns_gmail_not_connected_without_capability(
+    authed_api_client,
+    seeded_outreach_message,
+):
+    message = seeded_outreach_message["message"]
+    response = authed_api_client.post(
+        "/api/v1/outreach/bulk-send",
+        json={"message_ids": [str(message.id)]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "gmail_not_connected"
+
+
+def test_bulk_send_queues_eligible_messages_and_skips_sent_messages(
+    authed_api_client,
+    db_session,
+    seeded_outreach_message,
+    monkeypatch,
+):
+    import worker.tasks as tasks_module
+
+    user = seeded_outreach_message["user"]
+    message = seeded_outreach_message["message"]
+    sent_message = OutreachMessage(
+        candidate_profile_id=message.candidate_profile_id,
+        created_by_user_id=user.id,
+        content_source=ContentSource.AI_DRAFT,
+        subject="Already sent",
+        body_text="Already sent",
+        body_html="<p>Already sent</p>",
+        sent_status=SentStatus.SENT,
+        sent_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all(
+        [
+            sent_message,
+            OAuthIdentity(
+                user_id=user.id,
+                provider="google",
+                provider_subject="google-subject-bulk",
+                email=user.email,
+                refresh_token_encrypted="encrypted-refresh",
+                scope="openid email profile https://www.googleapis.com/auth/gmail.send",
+            ),
+        ]
+    )
+    db_session.commit()
+    db_session.refresh(sent_message)
+
+    queued = []
+
+    class FakeTask:
+        @staticmethod
+        def delay(message_id):
+            queued.append(message_id)
+
+    monkeypatch.setattr(tasks_module, "send_outreach_email", FakeTask, raising=False)
+
+    response = authed_api_client.post(
+        "/api/v1/outreach/bulk-send",
+        json={"message_ids": [str(message.id), str(sent_message.id)]},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["queued_count"] == 1
+    assert response.json()["skipped_count"] == 1
+    assert response.json()["failed_count"] == 0
+    assert queued == [str(message.id)]
+
+
+def test_bulk_send_retries_failed_message_as_not_sent(
+    authed_api_client,
+    db_session,
+    seeded_outreach_message,
+    monkeypatch,
+):
+    import worker.tasks as tasks_module
+
+    user = seeded_outreach_message["user"]
+    message = seeded_outreach_message["message"]
+    message.sent_status = SentStatus.FAILED
+    db_session.add(
+        OAuthIdentity(
+            user_id=user.id,
+            provider="google",
+            provider_subject="google-subject-retry",
+            email=user.email,
+            refresh_token_encrypted="encrypted-refresh",
+            scope="openid email profile https://www.googleapis.com/auth/gmail.send",
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        tasks_module,
+        "send_outreach_email",
+        type("FakeTask", (), {"delay": staticmethod(lambda _message_id: None)}),
+        raising=False,
+    )
+
+    response = authed_api_client.post(
+        "/api/v1/outreach/bulk-send",
+        json={"message_ids": [str(message.id)]},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["queued_count"] == 1
+    db_session.refresh(message)
+    assert message.sent_status == SentStatus.NOT_SENT
+
+
 def test_build_raw_message_includes_html_alternative():
     raw = gmail_service.build_raw_message(
         sender="owner@example.com",
